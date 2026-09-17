@@ -1,4 +1,4 @@
-import type { ProductSearchState, RegionOption } from './types';
+import type { ProductSearchState, RegionOption, SeckillState } from './types';
 
 /** 商品数据接口根地址。 */
 export const API_BASE_URL = 'https://aiopro.fvo2o.com/api/h5app/wxapp';
@@ -58,4 +58,14 @@ export const INITIAL_SEARCH_STATE: ProductSearchState = {
   isLoading: false,
   errorMessage: '',
   updatedAt: '',
+};
+
+/** 秒杀专区初始状态。 */
+export const INITIAL_SECKILL_STATE: SeckillState = {
+  products: [],
+  activities: [],
+  total: 0,
+  page: 1,
+  isLoading: false,
+  errorMessage: '',
 };

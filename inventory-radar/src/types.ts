@@ -55,6 +55,7 @@ export interface ProductSummary {
   promotion_start_time?: string | number;
   promotion_end_time?: string | number;
   seckill_start_time?: string | number;
+  seckill_collection_id?: string;
   store?: string | number;
   item_total_store?: string | number;
   sales?: string | number;
@@ -84,6 +85,34 @@ export interface ProductDetail extends ProductSummary {
     tagName?: string;
     tagDesc?: string;
   }>;
+}
+
+/** 秒杀活动场次。 */
+export interface SeckillActivity {
+  id: string;
+  name: string;
+  status: 'ongoing' | 'waiting' | string;
+  startTime: number;
+  endTime: number;
+  regionId: string;
+}
+
+/** 秒杀商品聚合接口响应。 */
+export interface SeckillProductsResponse {
+  regionId: string;
+  activities: SeckillActivity[];
+  list: ProductSummary[];
+  total: number;
+}
+
+/** 秒杀专区查询状态。 */
+export interface SeckillState {
+  products: ProductSummary[];
+  activities: SeckillActivity[];
+  total: number;
+  page: number;
+  isLoading: boolean;
+  errorMessage: string;
 }
 
 /** 列表接口响应。 */

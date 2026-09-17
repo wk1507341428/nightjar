@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Alert, Button, Form, Input, InputNumber, Modal, Progress, Select } from 'antd';
+import { getWarehouseShortName } from './constants';
 import { createPublishTask, fetchPublishTask, retryPublishTask } from './xianyuApi';
 import type { ProductDetail, ProductSku, ProductSummary, PublishTask, PublishTaskStatus } from './types';
 
@@ -15,6 +16,9 @@ const PUBLISH_REGION_OPTIONS = [
   { value: '6', label: '湖北省鄂州市 / 华容区' },
   { value: '7', label: '重庆市 / 沙坪坝区' },
 ];
+
+/** 闲鱼发布默认行政区，用户可在表单中手动修改。 */
+const DEFAULT_PUBLISH_REGION_ID = '3';
 
 /** 发布表单字段。 */
 interface PublishFormValues {
@@ -147,11 +151,9 @@ function getTaskLabel(status: PublishTaskStatus): string {
 /** 商品发布确认与进度面板。 */
 export function PublishProductModal({
   product,
-  regionId,
   onClose,
 }: {
   product: ProductDetail;
-  regionId: string;
   onClose: () => void;
 }) {
   // Ant Design 发布表单实例。
@@ -180,11 +182,16 @@ export function PublishProductModal({
   const inStockVariantText = getInStockVariantText(inStockVariantLabels);
   // 当前商品是否属于鞋靴类。
   const isFootwear = isFootwearProduct(product);
+  // 商品实际发货仓库地区。
+  const shippingRegionID = product?.regionauth_id ?? product?.distributor_info?.regionauth_id;
+  // 商品实际发货城市简称。
+  const shippingRegionName = getWarehouseShortName(shippingRegionID);
   // 发布描述默认内容行。
   const defaultDescriptionLines = [
     `全新 ${product?.item_name ?? ''}`,
     `货号：${product?.item_no ?? '—'}`,
     inStockVariantText,
+    `发货地区：${shippingRegionName}`,
     '奥莱正品，支持验货。库存实时变化，下单前请先确认。',
   ].filter(Boolean);
   // 发布描述默认内容。
@@ -296,7 +303,7 @@ export function PublishProductModal({
             description: defaultDescription,
             price: defaultPrice,
             originalPrice: defaultOriginalPrice,
-            publishRegionId: regionId,
+            publishRegionId: DEFAULT_PUBLISH_REGION_ID,
           }}
           onFinish={handleSubmitPublish}
         >

@@ -1,4 +1,4 @@
-import { API_BASE_URL, COMPANY_ID, PRODUCT_PAGE_SIZE } from './constants';
+import { API_BASE_URL, COMPANY_ID, PRODUCT_PAGE_SIZE, SIDEJOB_API_BASE_URL } from './constants';
 import type {
   BrandOption,
   ProductDetail,
@@ -6,6 +6,7 @@ import type {
   ProductSearchResponse,
   ProductSummary,
   SearchMode,
+  SeckillProductsResponse,
 } from './types';
 
 /** 商品查询参数。 */
@@ -208,18 +209,27 @@ function interleaveProductLists(productLists: ProductSummary[][]): ProductSummar
 
 /** 按地区和输入内容加载品牌候选项，仅请求后端一页数据。 */
 export async function fetchBrandOptions(regionId: string, brandQuery = ''): Promise<BrandOption[]> {
-  // 品牌门店请求地址。
-  const requestUrl = new URL(`${API_BASE_URL}/distributor/list`);
   // 清理后的品牌搜索词。
   const normalizedBrandQuery = brandQuery.trim();
+  // 是否使用小程序的专用品牌搜索接口。
+  const useSearchDistributor = Boolean(normalizedBrandQuery) && regionId !== 'all';
+  // 品牌门店请求地址。
+  const requestUrl = new URL(
+    `${API_BASE_URL}${useSearchDistributor ? '/search/distributor/list' : '/distributor/list'}`,
+  );
 
   requestUrl.searchParams.set('company_id', COMPANY_ID);
   if (regionId !== 'all') {
     requestUrl.searchParams.set('regionauth_id', regionId);
   }
-  requestUrl.searchParams.set('page', '1');
-  requestUrl.searchParams.set('pageSize', '20');
-  if (normalizedBrandQuery) {
+  if (useSearchDistributor) {
+    requestUrl.searchParams.set('input', normalizedBrandQuery);
+    requestUrl.searchParams.set('size', '10');
+  } else {
+    requestUrl.searchParams.set('page', '1');
+    requestUrl.searchParams.set('pageSize', '20');
+  }
+  if (normalizedBrandQuery && !useSearchDistributor) {
     requestUrl.searchParams.set('name', normalizedBrandQuery);
   }
 
@@ -227,13 +237,23 @@ export async function fetchBrandOptions(regionId: string, brandQuery = ''): Prom
   const response = await requestJson<{
     data?: {
       list?: Array<{ distributor_id?: string; name?: string; shop_code?: string; regionauth_id?: string }>;
-    };
+    } | Array<{ distributor_id?: string; name?: string; shop_code?: string; regionauth_id?: string }>;
   }>(requestUrl);
+  // 小程序专用搜索接口直接返回数组，初始列表接口返回分页对象。
+  const responseData = response?.data;
+  const rawDistributors = Array.isArray(responseData)
+    ? responseData
+    : responseData?.list ?? [];
   // 后端会返回少量模糊候选，前端仅保留名称真正命中的结果。
-  const distributors = (response?.data?.list ?? []).filter((distributor) => (
-    !normalizedBrandQuery
-    || distributor?.name?.toLocaleUpperCase().includes(normalizedBrandQuery.toLocaleUpperCase())
-  ));
+  const distributors = rawDistributors.filter((distributor) => {
+    if (normalizedBrandQuery && !distributor?.name?.toLocaleUpperCase().includes(normalizedBrandQuery.toLocaleUpperCase())) {
+      return false;
+    }
+    if (regionId !== 'all' && String(distributor?.regionauth_id ?? '') !== regionId) {
+      return false;
+    }
+    return true;
+  });
   // 按品牌名称聚合后的门店集合。
   const groupedBrands = new Map<string, BrandOption>();
 
@@ -294,4 +314,20 @@ export async function fetchProductDetail(
   }
 
   return productDetail;
+}
+
+/** 从 SideJob 服务获取指定地区的秒杀商品。 */
+export async function fetchSeckillProducts(
+  regionId: string,
+  page = 1,
+  pageSize = PRODUCT_PAGE_SIZE,
+): Promise<SeckillProductsResponse> {
+  // 秒杀专区请求地址。
+  const requestUrl = new URL(`${SIDEJOB_API_BASE_URL}/catalog/seckill`, window.location.origin);
+
+  requestUrl.searchParams.set('regionId', regionId);
+  requestUrl.searchParams.set('page', String(page));
+  requestUrl.searchParams.set('pageSize', String(pageSize));
+
+  return requestJson<SeckillProductsResponse>(requestUrl);
 }

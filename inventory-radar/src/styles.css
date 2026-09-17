@@ -103,6 +103,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .recent-strip > div { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
 .recent-strip button { flex: 0 0 auto; padding: 7px 12px; border: 0; border-radius: 999px; color: var(--blue); background: #f0f2f7; font-size: 12px; }
 
+.seckill-page-intro { position: relative; width: min(1280px, calc(100% - 48px)); min-height: 190px; margin: 26px auto -16px; padding: 42px 46px 28px; overflow: hidden; border-radius: 24px 24px 0 0; color: #fff; background: #152536; }
+.seckill-page-intro::after { position: absolute; right: -72px; bottom: -140px; width: 450px; height: 450px; border: 1px solid rgba(255,255,255,.13); border-radius: 50%; box-shadow: 0 0 0 34px rgba(255,0,70,.08), 0 0 0 86px rgba(255,0,70,.04); content: ""; }
+.seckill-page-intro > * { position: relative; z-index: 1; }
+.seckill-page-intro button { position: absolute; top: 22px; right: 26px; padding: 7px 11px; border: 1px solid rgba(255,255,255,.22); border-radius: 999px; color: rgba(255,255,255,.86); background: rgba(255,255,255,.07); font-size: 11px; font-weight: 800; }
+.seckill-page-intro span { display: block; color: #ff94b3; font-size: 10px; font-weight: 900; letter-spacing: .17em; }
+.seckill-page-intro strong { display: block; margin-top: 9px; font-size: clamp(38px, 5vw, 64px); letter-spacing: -.07em; }
+.seckill-page-intro p { margin: 6px 0 0; color: rgba(255,255,255,.64); font-size: 13px; }
+
 .catalog-section { padding: 48px 0 90px; }
 .catalog-loading-indicator { position: sticky; z-index: 6; top: 88px; display: flex; width: max-content; margin: -8px auto 18px; padding: 9px 14px; align-items: center; gap: 9px; border: 1px solid rgba(255,0,70,.14); border-radius: 999px; color: var(--slate); background: rgba(255,255,255,.94); box-shadow: 0 10px 28px rgba(51,81,125,.13); backdrop-filter: blur(10px); font-size: 12px; font-weight: 700; }
 .catalog-heading { display: flex; align-items: end; justify-content: space-between; gap: 30px; margin-bottom: 28px; }
@@ -118,6 +126,25 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .sort-select .ant-select-selection-item, .brand-select .ant-select-selection-item { line-height: 38px !important; font-size: 12px; font-weight: 700; }
 .refresh-button { display: flex; align-items: center; gap: 7px; padding: 0 13px; color: var(--forest); font-size: 12px; font-weight: 800; }
 .refresh-button svg { width: 15px; }
+
+.seckill-shelf-heading { position: relative; display: flex; min-height: 156px; margin-bottom: 16px; padding: 27px 30px; align-items: end; justify-content: space-between; gap: 28px; overflow: hidden; border-radius: 18px; color: #fff; background: #19293a; box-shadow: 0 18px 42px rgba(26, 41, 58, .18); }
+.seckill-shelf-heading::before { position: absolute; inset: 0; background: radial-gradient(circle at 84% 10%, rgba(255,0,70,.72), transparent 27%), repeating-linear-gradient(-45deg, transparent 0 12px, rgba(255,255,255,.025) 12px 13px); content: ""; }
+.seckill-shelf-heading > * { position: relative; z-index: 1; }
+.seckill-shelf-heading__eyebrow { display: block; color: #ff9ab6; font-size: 10px; font-weight: 900; letter-spacing: .16em; }
+.seckill-shelf-heading h2 { margin: 8px 0 6px; color: #fff; font-size: clamp(31px, 4vw, 48px); letter-spacing: -.06em; }
+.seckill-shelf-heading p { margin: 0; color: rgba(255,255,255,.66); font-size: 13px; }
+.seckill-shelf-heading__meta { display: grid; min-width: 170px; gap: 5px; text-align: right; }
+.seckill-shelf-heading__meta strong { color: #ffdb68; font-size: 18px; }
+.seckill-shelf-heading__meta > span { color: rgba(255,255,255,.72); font-size: 11px; }
+.refresh-button--light { justify-self: end; min-height: 32px; margin-top: 5px; border-color: rgba(255,255,255,.25); color: #fff; background: rgba(255,255,255,.1); box-shadow: none; }
+.refresh-button--light:hover:not(:disabled) { border-color: rgba(255,255,255,.7); background: rgba(255,255,255,.18); }
+.seckill-activity-strip { display: flex; gap: 8px; margin-bottom: 24px; padding: 2px 0; overflow-x: auto; scrollbar-width: none; }
+.seckill-activity-strip::-webkit-scrollbar { display: none; }
+.seckill-activity-chip { display: inline-flex; max-width: 310px; padding: 9px 12px; align-items: center; gap: 7px; overflow: hidden; flex: 0 0 auto; border: 1px solid rgba(47,72,88,.1); border-radius: 999px; color: var(--blue); background: #fff; font-size: 11px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.seckill-activity-chip i { padding: 3px 5px; border-radius: 4px; color: #fff; background: var(--blue); font-size: 8px; font-style: normal; letter-spacing: .08em; }
+.seckill-activity-chip--active { border-color: rgba(255,0,70,.24); color: #a40034; background: #fff3f6; }
+.seckill-activity-chip--active i { background: var(--primary); }
+.empty-state--seckill { border-color: rgba(255,0,70,.2); background: linear-gradient(115deg, rgba(255,0,70,.05), rgba(98,81,152,.05)); }
 
 .product-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
 .product-card { display: flex; min-width: 0; overflow: hidden; flex-direction: column; border: 1px solid rgba(51,81,125,.08); border-radius: 18px; background: var(--paper); box-shadow: 0 6px 20px rgba(47,72,88,.07); content-visibility: auto; contain-intrinsic-size: 0 450px; transition: transform 200ms ease, box-shadow 200ms ease; }
@@ -280,9 +307,16 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .promo-actions { align-items: flex-start; flex-direction: column; gap: 14px; }
   .promo-features { gap: 10px; font-size: 10px; }
   .recent-strip { margin-top: 14px; }
+  .seckill-page-intro { width: min(100% - 28px, 1280px); min-height: 174px; margin-top: 16px; padding: 38px 24px 25px; }
+  .seckill-page-intro strong { font-size: 40px; }
   .catalog-section { padding: 42px 0 65px; }
   .catalog-heading { display: grid; align-items: start; gap: 18px; }
   .catalog-heading h2 { font-size: 30px; }
+  .seckill-shelf-heading { min-height: 0; padding: 24px 20px; align-items: start; flex-direction: column; gap: 17px; }
+  .seckill-shelf-heading h2 { font-size: 32px; }
+  .seckill-shelf-heading__meta { min-width: 0; text-align: left; }
+  .refresh-button--light { justify-self: start; }
+  .seckill-activity-strip { margin-bottom: 18px; }
   .catalog-controls { display: grid; grid-template-columns: 1fr 1.4fr; width: 100%; }
   .brand-select { grid-column: 1 / -1; width: 100%; }
   .stock-toggle { justify-content: center; }

@@ -1,8 +1,0 @@
-{
-  "component": true,
-  "usingComponents": {
-    "comp": "./comp",
-    "custom-wrapper": "./custom-wrapper",
-    "mp-html": "./components/sp-html/mp-weixin/index"
-  }
-}

@@ -1,8 +1,0 @@
-.sp-cashier .payment-item {
-  height: 90rpx;
-  line-height: 90rpx;
-}
-.sp-cashier .sp-checkbox-new {
-  flex-direction: row-reverse;
-  justify-content: space-between;
-}

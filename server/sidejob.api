@@ -10,6 +10,22 @@ type HealthResponse {
 	Status string `json:"status"`
 }
 
+type SeckillActivity {
+	Id        string `json:"id"`
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	StartTime int64  `json:"startTime"`
+	EndTime   int64  `json:"endTime"`
+	RegionId  string `json:"regionId"`
+}
+
+type SeckillProductsResponse {
+	RegionId   string             `json:"regionId"`
+	Activities []SeckillActivity `json:"activities"`
+	List       []map[string]any  `json:"list"`
+	Total      int64              `json:"total"`
+}
+
 type ConnectionResponse {
 	Platform       string `json:"platform"`
 	Status         string `json:"status"`
@@ -60,6 +76,9 @@ type PublishTaskListResponse {
 service sidejob-api {
 	@handler health
 	get /healthz returns (HealthResponse)
+
+	@handler listSeckillProducts
+	get /catalog/seckill returns (SeckillProductsResponse)
 
 	@handler saveXianyuSession
 	post /xianyu/session (SaveXianyuSessionRequest) returns (ConnectionResponse)

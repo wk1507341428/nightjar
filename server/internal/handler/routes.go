@@ -17,6 +17,11 @@ func RegisterHandlers(server *rest.Server, serviceContext *svc.ServiceContext) {
 			Handler: healthHandler(),
 		},
 		{
+			Method:  http.MethodGet,
+			Path:    "/api/catalog/seckill",
+			Handler: listSeckillProductsHandler(serviceContext),
+		},
+		{
 			Method:  http.MethodPost,
 			Path:    "/api/xianyu/session",
 			Handler: saveXianyuSessionHandler(serviceContext),

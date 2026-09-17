@@ -14,6 +14,12 @@ Xianyu:
   SessionKeyPath: ""
   RequestTimeout: 30
 
+Catalog:
+  APIBase: https://aiopro.fvo2o.com/api/h5app/wxapp
+  CompanyID: "1"
+  AuthorizerAppID: wx8fa740aa841dafb4
+  RequestTimeout: 15
+
 Web:
   AllowedOrigins:
     - http://127.0.0.1:5173

@@ -8,6 +8,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"sidejob-server/internal/catalog"
 	"sidejob-server/internal/config"
 	"sidejob-server/internal/publish"
 	"sidejob-server/internal/repository"
@@ -23,6 +24,7 @@ type ServiceContext struct {
 	SessionRepository *repository.SessionRepository
 	XianyuService     *xianyu.Service
 	PublishService    *publish.Service
+	CatalogService    *catalog.Service
 	runtimeCancel     context.CancelFunc
 }
 
@@ -53,6 +55,7 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 		return nil, fmt.Errorf("initialize session cipher: %w", err)
 	}
 	xianyuService := xianyu.NewService(serviceConfig.Xianyu, sessionRepository, sessionCipher)
+	catalogService := catalog.NewService(serviceConfig.Catalog)
 
 	runtimeContext, runtimeCancel := context.WithCancel(context.Background())
 	publishService := publish.NewService(runtimeContext, publishRepository, xianyuService)
@@ -64,6 +67,7 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 		SessionRepository: sessionRepository,
 		XianyuService:     xianyuService,
 		PublishService:    publishService,
+		CatalogService:    catalogService,
 		runtimeCancel:     runtimeCancel,
 	}, nil
 }
