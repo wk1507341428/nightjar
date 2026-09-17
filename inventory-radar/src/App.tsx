@@ -5,8 +5,11 @@ import { INITIAL_SEARCH_STATE, INITIAL_SECKILL_STATE, PRODUCT_PAGE_SIZE, REGION_
 import { loadRecentSearches, saveRecentSearch } from './storage';
 import { PublishProductModal } from './PublishProductModal';
 import { ProductDetailDrawer } from './ProductDetailDrawer';
+import { MarketplacePage } from './MarketplacePage';
 import { XianyuConnectionControl } from './XianyuConnectionControl';
+import { fetchMarketplaceListings, syncMarketplaceListings } from './xianyuApi';
 import type {
+  MarketplaceListing,
   ProductDetail,
   BrandOption,
   ProductSearchState,
@@ -31,7 +34,7 @@ const TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
 });
 
 /** 首页快捷分类。 */
-const QUICK_CATEGORIES = ['全部', '秒杀专区', '运动鞋', '跑步鞋', '休闲鞋', '童鞋', '男装', '女装', '箱包'];
+const QUICK_CATEGORIES = ['全部', '秒杀专区', '渠道上架', '运动鞋', '跑步鞋', '休闲鞋', '童鞋', '男装', '女装', '箱包'];
 
 /** 品牌远程搜索最少输入字符数。 */
 const BRAND_SEARCH_MIN_LENGTH = 2;
@@ -43,7 +46,7 @@ const BRAND_SEARCH_DEBOUNCE_MS = 600;
 type SortMode = 'default' | 'priceAsc' | 'priceDesc' | 'discount';
 
 /** 商品列表展示模式。 */
-type CatalogMode = 'standard' | 'seckill';
+type CatalogMode = 'standard' | 'seckill' | 'marketplace';
 
 /** 将接口分单位价格格式化为人民币。 */
 function formatPrice(price?: string | number): string {
@@ -158,6 +161,16 @@ function isSeckillPageRoute(): boolean {
   return window.location.hash === '#/seckill';
 }
 
+/** 判断当前地址是否为独立渠道上架页。 */
+function isMarketplacePageRoute(): boolean {
+  return window.location.hash === '#/marketplace';
+}
+
+/** 标准化跨系统货号。 */
+function normalizeMarketplaceItemNo(itemNo?: string): string {
+  return itemNo?.trim().toUpperCase() ?? '';
+}
+
 /** 搜索图标。 */
 function SearchIcon() {
   return (
@@ -250,9 +263,11 @@ function CopyItemNoButton({ itemNo, compact = false }: { itemNo?: string; compac
 /** 商品卡片。 */
 function ProductCard({
   product,
+  marketplacePlatforms,
   onOpen,
 }: {
   product: ProductSummary;
+  marketplacePlatforms: string[];
   onOpen: (product: ProductSummary) => void;
 }) {
   // 商品库存数量。
@@ -308,7 +323,7 @@ function ProductCard({
           {hasLimitedSale ? <span className="product-card__seckill">限时秒杀{promotionEndLabel ? ` · ${promotionEndLabel}` : ''}</span> : null}
         </div>
         <div className="product-card__content">
-          <p className="product-card__brand">{product?.goods_brand ?? shopName}</p>
+          {marketplacePlatforms.includes('xianyu') ? <div className="product-card__marketplaces"><span>闲鱼在售</span></div> : null}
           <h3>{product?.item_name ?? '未命名商品'}</h3>
           <div className="product-card__number"><span>货号</span><CopyItemNoButton itemNo={product?.item_no} compact /></div>
           <div className="product-card__footer">
@@ -364,6 +379,14 @@ export function App() {
   const [seckillState, setSeckillState] = useState<SeckillState>(INITIAL_SECKILL_STATE);
   // 当前选中的秒杀分区。
   const [selectedSeckillActivityId, setSelectedSeckillActivityId] = useState('');
+  // 当前全部渠道在售商品。
+  const [marketplaceListings, setMarketplaceListings] = useState<MarketplaceListing[]>([]);
+  // 渠道在售列表加载状态。
+  const [isMarketplaceLoading, setIsMarketplaceLoading] = useState(false);
+  // 渠道在售列表错误信息。
+  const [marketplaceErrorMessage, setMarketplaceErrorMessage] = useState('');
+  // 闲鱼最近同步时间。
+  const [marketplaceLastSyncedAt, setMarketplaceLastSyncedAt] = useState<string>();
   // 最近查询记录。
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>(loadRecentSearches);
   // 当前商详数据。
@@ -401,7 +424,7 @@ export function App() {
   // 当前结果区标题。
   const resultTitle = getCatalogTitle(catalogMode, isBrowseMode, currentRegion.shortName);
   // 页面级接口加载状态。
-  const isGlobalLoading = searchState.isLoading || seckillState.isLoading || isBrandLoading;
+  const isGlobalLoading = searchState.isLoading || seckillState.isLoading || isBrandLoading || isMarketplaceLoading;
   // 是否还能继续加载。
   const canLoadMore = catalogMode === 'seckill'
     ? seckillState.products.length < seckillState.total
@@ -426,6 +449,26 @@ export function App() {
   // 当前优先展示的秒杀活动。
   const primarySeckillActivity = seckillState.activities.find((activity) => activity.status === 'ongoing')
     ?? seckillState.activities[0];
+  // 按货号索引的渠道在售状态。
+  const marketplacePlatformsByItemNo = useMemo(() => {
+    // 货号到渠道集合的映射。
+    const platformMap = new Map<string, Set<string>>();
+    marketplaceListings.forEach((listing) => {
+      const normalizedItemNo = normalizeMarketplaceItemNo(listing.itemNo);
+      if (!normalizedItemNo) {
+        return;
+      }
+      const platforms = platformMap.get(normalizedItemNo) ?? new Set<string>();
+      platforms.add(listing.platform);
+      platformMap.set(normalizedItemNo, platforms);
+    });
+    return platformMap;
+  }, [marketplaceListings]);
+
+  /** 返回商品当前在售渠道。 */
+  function getProductMarketplacePlatforms(itemNo?: string): string[] {
+    return Array.from(marketplacePlatformsByItemNo.get(normalizeMarketplaceItemNo(itemNo)) ?? []);
+  }
 
   /** 执行商品查询。 */
   async function executeSearch({
@@ -543,6 +586,36 @@ export function App() {
     }
   }
 
+  /** 加载第三方渠道当前在售商品。 */
+  async function loadMarketplaceListings() {
+    setIsMarketplaceLoading(true);
+    setMarketplaceErrorMessage('');
+    try {
+      // 当前闲鱼在售列表响应。
+      const response = await fetchMarketplaceListings('xianyu');
+      setMarketplaceListings(response.list ?? []);
+      setMarketplaceLastSyncedAt(response.lastSyncedAt);
+    } catch (error) {
+      setMarketplaceErrorMessage(error instanceof Error ? error.message : '渠道在售状态加载失败');
+    } finally {
+      setIsMarketplaceLoading(false);
+    }
+  }
+
+  /** 手动同步闲鱼在售状态并刷新本地列表。 */
+  async function handleSyncMarketplaceListings() {
+    setIsMarketplaceLoading(true);
+    setMarketplaceErrorMessage('');
+    try {
+      await syncMarketplaceListings('xianyu');
+      await loadMarketplaceListings();
+    } catch (error) {
+      setMarketplaceErrorMessage(error instanceof Error ? error.message : '同步闲鱼在售状态失败');
+    } finally {
+      setIsMarketplaceLoading(false);
+    }
+  }
+
   /** 按地区和输入内容加载品牌候选项。 */
   async function loadBrandOptions(nextRegionId: string, brandQuery = '') {
     // 本次品牌请求序号。
@@ -618,6 +691,12 @@ export function App() {
 
   /** 加载首页默认商品。 */
   function loadInitialProducts() {
+    void loadMarketplaceListings();
+    if (isMarketplacePageRoute()) {
+      setCatalogMode('marketplace');
+      setActiveCategory('渠道上架');
+      return;
+    }
     if (isSeckillPageRoute()) {
       setCatalogMode('seckill');
       setActiveCategory('秒杀专区');
@@ -631,6 +710,13 @@ export function App() {
 
   /** 根据地址切换独立秒杀页或选品主页。 */
   function handleRouteChange() {
+    if (isMarketplacePageRoute()) {
+      setCatalogMode('marketplace');
+      setActiveCategory('渠道上架');
+      setQuery('');
+      void loadMarketplaceListings();
+      return;
+    }
     if (isSeckillPageRoute()) {
       setCatalogMode('seckill');
       setActiveCategory('秒杀专区');
@@ -652,6 +738,16 @@ export function App() {
     }
 
     window.location.hash = '/seckill';
+  }
+
+  /** 打开独立渠道上架页。 */
+  function handleOpenMarketplacePage() {
+    if (isMarketplacePageRoute()) {
+      void loadMarketplaceListings();
+      return;
+    }
+
+    window.location.hash = '/marketplace';
   }
 
   /** 返回选品主页。 */
@@ -696,7 +792,13 @@ export function App() {
     currentRegionIdRef.current = nextRegionId;
     setRegionId(nextRegionId);
     setQuery('');
-    setActiveCategory(catalogMode === 'seckill' ? '秒杀专区' : '全部');
+    let nextActiveCategory = '全部';
+    if (catalogMode === 'seckill') {
+      nextActiveCategory = '秒杀专区';
+    } else if (catalogMode === 'marketplace') {
+      nextActiveCategory = '渠道上架';
+    }
+    setActiveCategory(nextActiveCategory);
     setBrandId('all');
     setBrandOptions([]);
     brandRequestSequence.current += 1;
@@ -707,6 +809,9 @@ export function App() {
       void loadSeckillProducts({ nextRegionId });
       return;
     }
+    if (catalogMode === 'marketplace') {
+      return;
+    }
 
     void executeSearch({ nextQuery: '', nextRegionId, nextBrandId: 'all', recordHistory: false });
   }
@@ -715,6 +820,10 @@ export function App() {
   function handleSelectCategory(categoryName: string) {
     if (categoryName === '秒杀专区') {
       handleOpenSeckillPage();
+      return;
+    }
+    if (categoryName === '渠道上架') {
+      handleOpenMarketplacePage();
       return;
     }
 
@@ -886,6 +995,16 @@ export function App() {
         </div>
       </nav>
 
+      {catalogMode === 'marketplace' ? (
+        <MarketplacePage
+          listings={marketplaceListings}
+          lastSyncedAt={marketplaceLastSyncedAt}
+          isLoading={isMarketplaceLoading}
+          errorMessage={marketplaceErrorMessage}
+          onBack={handleReturnToStorefront}
+          onRefresh={handleSyncMarketplaceListings}
+        />
+      ) : (
       <main id="home">
         {catalogMode === 'standard' ? (
           <>
@@ -951,7 +1070,7 @@ export function App() {
               {seckillState.errorMessage ? <div className="notice notice--error">{seckillState.errorMessage}</div> : null}
               {seckillState.isLoading && seckillState.products.length === 0 ? <ProductGridSkeleton /> : null}
               {!seckillState.isLoading && !seckillState.errorMessage && visibleSeckillProducts.length === 0 ? <div className="empty-state empty-state--seckill"><strong>当前没有进行中的秒杀商品</strong><p>切换仓库或稍后刷新，活动开始后商品会自动出现在这里。</p></div> : null}
-              {visibleSeckillProducts.length > 0 ? <div className="product-grid">{visibleSeckillProducts.map((product) => <ProductCard key={`seckill-${product?.regionauth_id}-${product?.goods_id}-${product?.item_id}`} product={product} onOpen={handleOpenProduct} />)}</div> : null}
+              {visibleSeckillProducts.length > 0 ? <div className="product-grid">{visibleSeckillProducts.map((product) => <ProductCard key={`seckill-${product?.regionauth_id}-${product?.goods_id}-${product?.item_id}`} product={product} marketplacePlatforms={getProductMarketplacePlatforms(product?.item_no)} onOpen={handleOpenProduct} />)}</div> : null}
               {canLoadMore ? <button type="button" className="load-more" onClick={handleLoadMore} disabled={seckillState.isLoading}>{seckillState.isLoading ? '正在加载…' : `加载更多秒杀商品 · ${PRODUCT_PAGE_SIZE} 件`}</button> : null}
             </>
           ) : (
@@ -973,18 +1092,20 @@ export function App() {
               {searchState.errorMessage ? <div className="notice notice--error">{searchState.errorMessage}</div> : null}
               {searchState.isLoading && searchState.products.length === 0 ? <ProductGridSkeleton /> : null}
               {!searchState.isLoading && !searchState.errorMessage && visibleProducts.length === 0 ? <div className="empty-state"><strong>没有找到符合条件的商品</strong><p>换个关键词或切换其他仓库试试。</p></div> : null}
-              {visibleProducts.length > 0 ? <div className="product-grid">{visibleProducts.map((product) => <ProductCard key={`${product?.regionauth_id}-${product?.goods_id}-${product?.item_id}`} product={product} onOpen={handleOpenProduct} />)}</div> : null}
+              {visibleProducts.length > 0 ? <div className="product-grid">{visibleProducts.map((product) => <ProductCard key={`${product?.regionauth_id}-${product?.goods_id}-${product?.item_id}`} product={product} marketplacePlatforms={getProductMarketplacePlatforms(product?.item_no)} onOpen={handleOpenProduct} />)}</div> : null}
               {canLoadMore ? <button type="button" className="load-more" onClick={handleLoadMore} disabled={searchState.isLoading}>{searchState.isLoading ? '正在加载…' : `加载更多商品 · ${PRODUCT_PAGE_SIZE} 件`}</button> : null}
             </>
           )}
         </section>
       </main>
+      )}
 
       {isDetailOpen ? (
         <ProductDetailDrawer
           product={selectedProduct}
           isLoading={isDetailLoading}
           errorMessage={detailErrorMessage}
+          marketplacePlatforms={getProductMarketplacePlatforms(selectedProduct?.item_no)}
           onClose={handleCloseDetail}
           onPublish={handleOpenPublish}
         />
@@ -994,6 +1115,7 @@ export function App() {
           key={publishProduct?.default_item_id ?? publishProduct?.item_id}
           product={publishProduct}
           onClose={handleClosePublish}
+          onPublished={loadMarketplaceListings}
         />
       ) : null}
     </div>

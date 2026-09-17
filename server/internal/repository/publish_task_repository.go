@@ -69,6 +69,30 @@ func (repository *PublishTaskRepository) List(ctx context.Context, limit int64) 
 	return tasks, nil
 }
 
+// FindByXianyuItemIDs 查询已记录闲鱼商品 ID 的发布任务。
+func (repository *PublishTaskRepository) FindByXianyuItemIDs(
+	ctx context.Context,
+	itemIDs []string,
+) ([]model.PublishTask, error) {
+	if len(itemIDs) == 0 {
+		return []model.PublishTask{}, nil
+	}
+
+	cursor, err := repository.collection.Find(ctx, bson.M{
+		"xianyuItemId": bson.M{"$in": itemIDs},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var tasks []model.PublishTask
+	if err := cursor.All(ctx, &tasks); err != nil {
+		return nil, err
+	}
+	return tasks, nil
+}
+
 // UpdateStatus 更新任务状态和可选结果。
 func (repository *PublishTaskRepository) UpdateStatus(
 	ctx context.Context,

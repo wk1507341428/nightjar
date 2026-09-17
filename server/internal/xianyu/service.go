@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,15 @@ type PublishInput struct {
 type PublishResult struct {
 	ItemID string
 	URL    string
+}
+
+// OnSaleItem 是闲鱼“我发布的”接口返回的当前在卖商品。
+type OnSaleItem struct {
+	ItemID     string
+	Title      string
+	PriceCents int64
+	ImageURL   string
+	CategoryID string
 }
 
 // Service 管理加密会话并编排闲鱼 MTop 发布流程。
@@ -85,6 +95,50 @@ func (service *Service) Connection(ctx context.Context) (model.XianyuSession, er
 // Disconnect 删除本地保存的闲鱼会话。
 func (service *Service) Disconnect(ctx context.Context) error {
 	return service.sessionRepository.Delete(ctx)
+}
+
+// ListOnSaleItems 分页获取当前账号正在闲鱼出售的全部商品。
+func (service *Service) ListOnSaleItems(ctx context.Context) ([]OnSaleItem, error) {
+	client, displayName, err := service.loadClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		persistenceContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName)
+	}()
+
+	// 聚合后的当前在卖商品。
+	items := make([]OnSaleItem, 0)
+	for pageNumber := 1; pageNumber <= 100; pageNumber++ {
+		var pageResponse map[string]any
+		if err := client.Call(ctx, "mtop.taobao.idle.wx.user.publish.items", "9.3", map[string]any{
+			"pageNumber": pageNumber,
+		}, &pageResponse); err != nil {
+			return nil, fmt.Errorf("获取闲鱼在卖商品失败：%w", err)
+		}
+
+		for _, cardValue := range sliceValue(pageResponse["itemCards"]) {
+			card := mapValue(cardValue)
+			itemID := stringValue(card["id"])
+			if itemID == "" {
+				continue
+			}
+			items = append(items, OnSaleItem{
+				ItemID:     itemID,
+				Title:      stringValue(card["title"]),
+				PriceCents: parseYuanPriceCents(stringValue(card["price"])),
+				ImageURL:   stringValue(card["picUrl"]),
+				CategoryID: stringValue(card["categoryId"]),
+			})
+		}
+
+		if !boolValue(pageResponse["nextPage"]) {
+			break
+		}
+	}
+	return items, nil
 }
 
 // Publish 通过闲鱼 API 完成图片上传、属性推荐、服务配置和正式发布。
@@ -650,6 +704,16 @@ func boolValue(value any) bool {
 	default:
 		return false
 	}
+}
+
+// parseYuanPriceCents 将闲鱼人民币价格转换为分。
+func parseYuanPriceCents(value string) int64 {
+	normalizedValue := strings.TrimSpace(strings.TrimPrefix(value, "¥"))
+	price, err := strconv.ParseFloat(normalizedValue, 64)
+	if err != nil || price <= 0 {
+		return 0
+	}
+	return int64(math.Round(price * 100))
 }
 
 // optionalPrice 省略无意义的原价字段。

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Form, Input, InputNumber, Modal, Progress, Select } from 'antd';
 import { getWarehouseShortName } from './constants';
 import { createPublishTask, fetchPublishTask, retryPublishTask } from './xianyuApi';
@@ -152,9 +152,11 @@ function getTaskLabel(status: PublishTaskStatus): string {
 export function PublishProductModal({
   product,
   onClose,
+  onPublished,
 }: {
   product: ProductDetail;
   onClose: () => void;
+  onPublished: () => void;
 }) {
   // Ant Design 发布表单实例。
   const [form] = Form.useForm<PublishFormValues>();
@@ -164,6 +166,8 @@ export function PublishProductModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   // 发布请求错误。
   const [errorMessage, setErrorMessage] = useState('');
+  // 是否已通知父页面刷新渠道状态。
+  const hasNotifiedPublished = useRef(false);
   // 商品图文详情图片。
   const detailImageURLs = extractDetailImageURLs(product?.intro);
   // 当前商品全部发布图片。
@@ -186,6 +190,37 @@ export function PublishProductModal({
   const shippingRegionID = product?.regionauth_id ?? product?.distributor_info?.regionauth_id;
   // 商品实际发货城市简称。
   const shippingRegionName = getWarehouseShortName(shippingRegionID);
+  // 商品品牌名称，用于生成尺码提示。
+  const productBrandName = product?.goods_brand ?? '对应品牌';
+  // 购买说明模板，控制在闲鱼描述字数限制内。
+  const purchaseNoticeLines = [
+    ' ',
+    '购买说明',
+    '拍下商品即表示已阅读并接受以下说明：',
+    '',
+    '1. 正品保障',
+    '商品均来自奥特莱斯正规渠道，全新未穿，支持提供发票或购买凭证（隐私信息会适当遮挡），也支持得物等正规平台鉴定，请放心购买。',
+    '',
+    '2. 库存说明',
+    '部分尺码为现货，部分需要到店采购。奥莱库存变化较快，下单前请先联系确认尺码和库存；如遇临时缺货，会第一时间沟通。',
+    '',
+    '3. 商品品相',
+    '奥莱商品可能存在轻微线头、溢胶、试穿痕迹或鞋盒挤压等情况，通常不影响正常穿着。明显瑕疵会提前告知并提供实拍，细节要求较高请确认后再购买。',
+    '',
+    '4. 发货时效',
+    '现货一般下单后24小时内发出，代购商品通常24—48小时内发出。如遇门店调货或库存变化，会及时沟通；急用请提前确认。',
+    '',
+    '5. 快递说明',
+    '默认普通快递包邮，新疆、西藏及其他偏远地区请提前咨询。商品会用纸箱加固寄出，如需顺丰可补差价升级。',
+    '',
+    '6. 价格说明',
+    '奥莱活动、库存和不同尺码的采购价格可能调整，售价也会随之变化。商品成交后不提供保价或补差价服务。',
+    '',
+    '7. 尺码与售后',
+    `可根据脚长和日常穿着习惯协助推荐尺码，但脚型和穿着感受因人而异，请以自己常穿的${productBrandName}鞋码为主要参考。售后按闲鱼平台规则处理；如有质量问题或与描述明显不符，请保留商品、鞋盒及外包装并及时联系。`,
+    '',
+    '购买前如需查看鞋标、鞋盒、发票或其他细节，欢迎私聊，我会尽量提供清晰实拍。感谢理解，祝购物愉快！',
+  ];
   // 发布描述默认内容行。
   const defaultDescriptionLines = [
     `全新 ${product?.item_name ?? ''}`,
@@ -193,6 +228,7 @@ export function PublishProductModal({
     inStockVariantText,
     `发货地区：${shippingRegionName}`,
     '奥莱正品，支持验货。库存实时变化，下单前请先确认。',
+    ...purchaseNoticeLines,
   ].filter(Boolean);
   // 发布描述默认内容。
   const defaultDescription = defaultDescriptionLines.join('\n');
@@ -206,6 +242,10 @@ export function PublishProductModal({
       const nextTask = await fetchPublishTask(taskId);
       setPublishTask(nextTask);
       setErrorMessage('');
+      if (nextTask.status === 'succeeded' && !hasNotifiedPublished.current) {
+        hasNotifiedPublished.current = true;
+        onPublished();
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '读取发布进度失败');
     }

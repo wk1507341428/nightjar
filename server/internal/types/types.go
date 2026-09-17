@@ -5,6 +5,35 @@ type HealthResponse struct {
 	Status string `json:"status"`
 }
 
+// MarketplaceListingResponse 是一个渠道当前在售商品。
+type MarketplaceListingResponse struct {
+	ID             string `json:"id"`
+	Platform       string `json:"platform"`
+	PlatformItemID string `json:"platformItemId"`
+	SourceItemID   string `json:"sourceItemId,omitempty"`
+	ItemNo         string `json:"itemNo,omitempty"`
+	Title          string `json:"title"`
+	PriceCents     int64  `json:"priceCents"`
+	ImageURL       string `json:"imageUrl,omitempty"`
+	ItemURL        string `json:"itemUrl,omitempty"`
+	ListedAt       string `json:"listedAt"`
+	LastSyncedAt   string `json:"lastSyncedAt"`
+}
+
+// MarketplaceListingListResponse 是渠道当前在售列表。
+type MarketplaceListingListResponse struct {
+	List         []MarketplaceListingResponse `json:"list"`
+	Total        int                          `json:"total"`
+	LastSyncedAt string                       `json:"lastSyncedAt,omitempty"`
+}
+
+// MarketplaceSyncResponse 是一次渠道同步结果。
+type MarketplaceSyncResponse struct {
+	Platform     string `json:"platform"`
+	SyncedCount  int    `json:"syncedCount"`
+	LastSyncedAt string `json:"lastSyncedAt"`
+}
+
 // ConnectionResponse 是闲鱼连接状态响应。
 type ConnectionResponse struct {
 	Platform       string `json:"platform"`

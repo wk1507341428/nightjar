@@ -10,6 +10,32 @@ type HealthResponse {
 	Status string `json:"status"`
 }
 
+type MarketplaceListingResponse {
+	Id             string `json:"id"`
+	Platform       string `json:"platform"`
+	PlatformItemId string `json:"platformItemId"`
+	SourceItemId   string `json:"sourceItemId,optional"`
+	ItemNo         string `json:"itemNo,optional"`
+	Title          string `json:"title"`
+	PriceCents     int64  `json:"priceCents"`
+	ImageUrl       string `json:"imageUrl,optional"`
+	ItemUrl        string `json:"itemUrl,optional"`
+	ListedAt       string `json:"listedAt"`
+	LastSyncedAt   string `json:"lastSyncedAt"`
+}
+
+type MarketplaceListingListResponse {
+	List         []MarketplaceListingResponse `json:"list"`
+	Total        int                          `json:"total"`
+	LastSyncedAt string                       `json:"lastSyncedAt,optional"`
+}
+
+type MarketplaceSyncResponse {
+	Platform     string `json:"platform"`
+	SyncedCount  int    `json:"syncedCount"`
+	LastSyncedAt string `json:"lastSyncedAt"`
+}
+
 type SeckillActivity {
 	Id        string `json:"id"`
 	Name      string `json:"name"`
@@ -79,6 +105,12 @@ service sidejob-api {
 
 	@handler listSeckillProducts
 	get /catalog/seckill returns (SeckillProductsResponse)
+
+	@handler listMarketplaceListings
+	get /marketplace/listings returns (MarketplaceListingListResponse)
+
+	@handler syncMarketplaceListings
+	post /marketplace/sync returns (MarketplaceSyncResponse)
 
 	@handler saveXianyuSession
 	post /xianyu/session (SaveXianyuSessionRequest) returns (ConnectionResponse)

@@ -158,6 +158,35 @@ export interface XianyuConnection {
 	message?: string;
 }
 
+/** 第三方渠道当前在售商品。 */
+export interface MarketplaceListing {
+	id: string;
+	platform: 'xianyu' | 'taobao' | 'pinduoduo' | string;
+	platformItemId: string;
+	sourceItemId?: string;
+	itemNo?: string;
+	title: string;
+	priceCents: number;
+	imageUrl?: string;
+	itemUrl?: string;
+	listedAt: string;
+	lastSyncedAt: string;
+}
+
+/** 渠道当前在售列表响应。 */
+export interface MarketplaceListingListResponse {
+	list: MarketplaceListing[];
+	total: number;
+	lastSyncedAt?: string;
+}
+
+/** 渠道手动同步响应。 */
+export interface MarketplaceSyncResponse {
+	platform: string;
+	syncedCount: number;
+	lastSyncedAt: string;
+}
+
 /** 闲鱼发布任务状态。 */
 export type PublishTaskStatus =
 	| 'queued'

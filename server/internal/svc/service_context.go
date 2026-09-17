@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/zeromicro/go-zero/core/logx"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"sidejob-server/internal/catalog"
 	"sidejob-server/internal/config"
+	"sidejob-server/internal/marketplace"
 	"sidejob-server/internal/publish"
 	"sidejob-server/internal/repository"
 	"sidejob-server/internal/security"
@@ -18,14 +20,16 @@ import (
 
 // ServiceContext 汇总 API 服务的共享依赖。
 type ServiceContext struct {
-	Config            config.Config
-	MongoClient       *mongo.Client
-	PublishRepository *repository.PublishTaskRepository
-	SessionRepository *repository.SessionRepository
-	XianyuService     *xianyu.Service
-	PublishService    *publish.Service
-	CatalogService    *catalog.Service
-	runtimeCancel     context.CancelFunc
+	Config             config.Config
+	MongoClient        *mongo.Client
+	PublishRepository  *repository.PublishTaskRepository
+	SessionRepository  *repository.SessionRepository
+	ListingRepository  *repository.MarketplaceListingRepository
+	XianyuService      *xianyu.Service
+	PublishService     *publish.Service
+	CatalogService     *catalog.Service
+	MarketplaceService *marketplace.Service
+	runtimeCancel      context.CancelFunc
 }
 
 // NewServiceContext 初始化 MongoDB 和浏览器管理器。
@@ -47,6 +51,11 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 		_ = mongoClient.Disconnect(context.Background())
 		return nil, fmt.Errorf("ensure publish task indexes: %w", err)
 	}
+	listingRepository := repository.NewMarketplaceListingRepository(mongoClient.Database(serviceConfig.Mongo.Database))
+	if err := listingRepository.EnsureIndexes(databaseContext); err != nil {
+		_ = mongoClient.Disconnect(context.Background())
+		return nil, fmt.Errorf("ensure marketplace listing indexes: %w", err)
+	}
 
 	sessionRepository := repository.NewSessionRepository(mongoClient.Database(serviceConfig.Mongo.Database))
 	sessionCipher, err := security.NewCipherFromFile(serviceConfig.Xianyu.SessionKeyPath)
@@ -56,20 +65,37 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 	}
 	xianyuService := xianyu.NewService(serviceConfig.Xianyu, sessionRepository, sessionCipher)
 	catalogService := catalog.NewService(serviceConfig.Catalog)
+	marketplaceService := marketplace.NewService(listingRepository, publishRepository, xianyuService)
 
 	runtimeContext, runtimeCancel := context.WithCancel(context.Background())
-	publishService := publish.NewService(runtimeContext, publishRepository, xianyuService)
+	publishService := publish.NewService(runtimeContext, publishRepository, xianyuService, marketplaceService)
+	go syncXianyuListings(runtimeContext, marketplaceService)
 
 	return &ServiceContext{
-		Config:            serviceConfig,
-		MongoClient:       mongoClient,
-		PublishRepository: publishRepository,
-		SessionRepository: sessionRepository,
-		XianyuService:     xianyuService,
-		PublishService:    publishService,
-		CatalogService:    catalogService,
-		runtimeCancel:     runtimeCancel,
+		Config:             serviceConfig,
+		MongoClient:        mongoClient,
+		PublishRepository:  publishRepository,
+		SessionRepository:  sessionRepository,
+		ListingRepository:  listingRepository,
+		XianyuService:      xianyuService,
+		PublishService:     publishService,
+		CatalogService:     catalogService,
+		MarketplaceService: marketplaceService,
+		runtimeCancel:      runtimeCancel,
 	}, nil
+}
+
+// syncXianyuListings 在服务启动时异步同步当前闲鱼在售商品。
+func syncXianyuListings(runtimeContext context.Context, marketplaceService *marketplace.Service) {
+	syncContext, cancel := context.WithTimeout(runtimeContext, 90*time.Second)
+	defer cancel()
+
+	listingCount, err := marketplaceService.SyncXianyu(syncContext)
+	if err != nil {
+		logx.Errorf("startup xianyu listing sync skipped: %v", err)
+		return
+	}
+	logx.Infof("startup xianyu listing sync completed: %d active listings", listingCount)
 }
 
 // Close 释放浏览器和数据库连接。

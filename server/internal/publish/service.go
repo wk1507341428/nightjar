@@ -15,6 +15,7 @@ import (
 
 	"github.com/zeromicro/go-zero/core/logx"
 
+	"sidejob-server/internal/marketplace"
 	"sidejob-server/internal/model"
 	"sidejob-server/internal/repository"
 	"sidejob-server/internal/xianyu"
@@ -29,6 +30,7 @@ const (
 type Service struct {
 	repository    *repository.PublishTaskRepository
 	xianyuService *xianyu.Service
+	marketplace   *marketplace.Service
 	httpClient    *http.Client
 	queue         chan string
 }
@@ -38,10 +40,12 @@ func NewService(
 	runtimeContext context.Context,
 	taskRepository *repository.PublishTaskRepository,
 	xianyuService *xianyu.Service,
+	marketplaceService *marketplace.Service,
 ) *Service {
 	service := &Service{
 		repository:    taskRepository,
 		xianyuService: xianyuService,
+		marketplace:   marketplaceService,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(request *http.Request, _ []*http.Request) error {
@@ -133,6 +137,9 @@ func (service *Service) processTask(runtimeContext context.Context, taskID strin
 		publishResult.URL,
 	); err != nil {
 		logx.Errorf("save publish task %s result: %v", taskID, err)
+	}
+	if err := service.marketplace.MarkXianyuPublished(runtimeContext, task, publishResult); err != nil {
+		logx.Errorf("mark xianyu listing %s: %v", publishResult.ItemID, err)
 	}
 }
 

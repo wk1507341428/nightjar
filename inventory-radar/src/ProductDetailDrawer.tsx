@@ -165,12 +165,14 @@ export function ProductDetailDrawer({
   product,
   isLoading,
   errorMessage,
+  marketplacePlatforms,
   onClose,
   onPublish,
 }: {
   product: ProductDetail | null;
   isLoading: boolean;
   errorMessage: string;
+  marketplacePlatforms: string[];
   onClose: () => void;
   onPublish: (product: ProductDetail) => void;
 }) {
@@ -278,7 +280,7 @@ export function ProductDetailDrawer({
           </div>
 
           <div className="detail-summary">
-            <div className="detail-summary__tags"><span>{product?.goods_brand ?? '品牌商品'}</span><span>{formatDiscount(product?.discount_rate)}</span></div>
+            <div className="detail-summary__tags"><span>{product?.goods_brand ?? '品牌商品'}</span><span>{formatDiscount(product?.discount_rate)}</span>{marketplacePlatforms.includes('xianyu') ? <span className="marketplace-status-tag">闲鱼在售</span> : null}</div>
             <h2>{product?.item_name ?? '未命名商品'}</h2>
             <div className="detail-summary__number"><span>货号</span><CopyItemNoButton itemNo={product?.item_no} /></div>
             <div className="detail-summary__price">

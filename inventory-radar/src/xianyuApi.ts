@@ -1,5 +1,5 @@
 import { SIDEJOB_API_BASE_URL } from './constants';
-import type { CreatePublishTaskRequest, PublishTask, XianyuConnection } from './types';
+import type { CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceSyncResponse, PublishTask, XianyuConnection } from './types';
 
 /** 解析本地服务 JSON 响应并提取错误信息。 */
 async function requestSideJob<ResponseType>(path: string, init?: RequestInit): Promise<ResponseType> {
@@ -51,4 +51,19 @@ export function retryPublishTask(taskId: string): Promise<PublishTask> {
   return requestSideJob<PublishTask>(`/xianyu/publish-tasks/${encodeURIComponent(taskId)}/retry`, {
     method: 'POST',
   });
+}
+
+/** 查询指定渠道当前在售商品。 */
+export function fetchMarketplaceListings(platform = 'xianyu'): Promise<MarketplaceListingListResponse> {
+  return requestSideJob<MarketplaceListingListResponse>(
+    `/marketplace/listings?platform=${encodeURIComponent(platform)}`,
+  );
+}
+
+/** 手动同步指定渠道当前在售商品。 */
+export function syncMarketplaceListings(platform = 'xianyu'): Promise<MarketplaceSyncResponse> {
+  return requestSideJob<MarketplaceSyncResponse>(
+    `/marketplace/sync?platform=${encodeURIComponent(platform)}`,
+    { method: 'POST' },
+  );
 }
