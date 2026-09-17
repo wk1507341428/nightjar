@@ -1,0 +1,1004 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Drawer, Select, Spin, Switch } from 'antd';
+import { fetchBrandOptions, fetchProductDetail, searchProducts } from './api';
+import { INITIAL_SEARCH_STATE, PRODUCT_PAGE_SIZE, REGION_OPTIONS, getWarehouseName, getWarehouseShortName } from './constants';
+import { loadRecentSearches, saveRecentSearch } from './storage';
+import { PublishProductModal } from './PublishProductModal';
+import { XianyuConnectionControl } from './XianyuConnectionControl';
+import type {
+  ProductDetail,
+  BrandOption,
+  ProductSearchState,
+  ProductSku,
+  ProductSummary,
+  RecentSearch,
+} from './types';
+
+/** 人民币金额格式化器。 */
+const CURRENCY_FORMATTER = new Intl.NumberFormat('zh-CN', {
+  style: 'currency',
+  currency: 'CNY',
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+
+/** 更新时间格式化器。 */
+const TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+/** 首页快捷分类。 */
+const QUICK_CATEGORIES = ['全部', '运动鞋', '跑步鞋', '休闲鞋', '童鞋', '男装', '女装', '箱包'];
+
+/** 商品排序方式。 */
+type SortMode = 'default' | 'priceAsc' | 'priceDesc' | 'discount';
+
+/** 将接口分单位价格格式化为人民币。 */
+function formatPrice(price?: string | number): string {
+  // 数值化后的价格。
+  const numericPrice = Number(price ?? 0);
+
+  return CURRENCY_FORMATTER.format(numericPrice / 100);
+}
+
+/** 获取商品或 SKU 的实际活动价。 */
+function getEffectivePrice(item: ProductSummary | ProductSku): number {
+  // 平台补贴活动价。
+  const activityPrice = Number(item?.activity_price ?? item?.act_price ?? 0);
+
+  if (activityPrice > 0) {
+    return activityPrice;
+  }
+
+  return Number(item?.price ?? 0);
+}
+
+/** 获取平台补贴金额。 */
+function getSubsidyAmount(item: ProductSummary | ProductSku): number {
+  // 商品基础折扣价。
+  const basePrice = Number(item?.price ?? 0);
+  // 商品实际活动价。
+  const effectivePrice = getEffectivePrice(item);
+
+  return Math.max(basePrice - effectivePrice, 0);
+}
+
+/** 格式化接口折扣率。 */
+function formatDiscount(discountRate?: string | number): string {
+  // 百分制折扣率。
+  const numericDiscount = Number(discountRate ?? 0);
+
+  return numericDiscount > 0 ? `${(numericDiscount / 10).toFixed(1)}折` : '特惠';
+}
+
+/** 格式化活动结束时间。 */
+function formatPromotionEndTime(endTimestamp?: string | number): string {
+  // 秒级活动结束时间。
+  const numericTimestamp = Number(endTimestamp ?? 0);
+
+  if (numericTimestamp <= 0) {
+    return '';
+  }
+
+  // 活动结束日期。
+  const endDate = new Date(numericTimestamp * 1000);
+  // 月份文本。
+  const month = String(endDate.getMonth() + 1).padStart(2, '0');
+  // 日期文本。
+  const day = String(endDate.getDate()).padStart(2, '0');
+  // 小时文本。
+  const hour = String(endDate.getHours()).padStart(2, '0');
+  // 分钟文本。
+  const minute = String(endDate.getMinutes()).padStart(2, '0');
+
+  return `${month}/${day} ${hour}:${minute} 截止`;
+}
+
+/** 从商品图文详情中提取安全的图片地址。 */
+function extractDetailImageUrls(detailHtml?: string): string[] {
+  if (!detailHtml) {
+    return [];
+  }
+
+  // 商品详情 HTML 文档。
+  const detailDocument = new DOMParser().parseFromString(detailHtml, 'text/html');
+  // 商品详情图片地址。
+  const imageUrls = Array.from(detailDocument.querySelectorAll('img'))
+    .map((imageElement) => imageElement.getAttribute('src') ?? '')
+    .filter((imageUrl) => /^https?:\/\//.test(imageUrl));
+
+  return Array.from(new Set(imageUrls));
+}
+
+/** 读取 SKU 的指定规格值。 */
+function getSkuSpec(sku: ProductSku, specName: string): string {
+  // 匹配的规格项。
+  const matchedSpec = sku?.item_spec?.find((spec) => spec?.spec_name === specName);
+
+  return matchedSpec?.spec_value_name ?? '—';
+}
+
+/** 汇总商品全部在售 SKU 库存。 */
+function getProductStock(product: ProductSummary): number {
+  // 商品在售规格。
+  const onSaleSkus = product?.spec_items?.filter(
+    (sku) => sku?.approve_status === 'onsale',
+  );
+
+  if (onSaleSkus && onSaleSkus.length > 0) {
+    return onSaleSkus.reduce((stockTotal, sku) => stockTotal + Number(sku?.store ?? 0), 0);
+  }
+
+  return Number(product?.item_total_store ?? product?.store ?? 0);
+}
+
+/** 获取商详查询使用的 Item ID。 */
+function getDetailItemId(product: ProductSummary): string {
+  return product?.default_item_id ?? product?.item_id ?? product?.goods_id ?? '';
+}
+
+/** 将页面排序方式转换为后端排序值。 */
+function getBackendGoodsSort(sortMode: SortMode): number | undefined {
+  if (sortMode === 'priceAsc') {
+    return 3;
+  }
+
+  if (sortMode === 'priceDesc') {
+    return 2;
+  }
+
+  if (sortMode === 'discount') {
+    return 6;
+  }
+
+  return undefined;
+}
+
+/** 搜索图标。 */
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="11" cy="11" r="6.8" />
+      <path d="m16 16 4.2 4.2" />
+    </svg>
+  );
+}
+
+/** 定位图标。 */
+function PinIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 21s6-5.1 6-11a6 6 0 1 0-12 0c0 5.9 6 11 6 11Z" />
+      <circle cx="12" cy="10" r="2" />
+    </svg>
+  );
+}
+
+/** 刷新图标。 */
+function RefreshIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M20 6v5h-5" />
+      <path d="M18.2 15.5A7 7 0 1 1 17 7l3 4" />
+    </svg>
+  );
+}
+
+/** 复制图标。 */
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="8" y="8" width="11" height="11" rx="2" />
+      <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+    </svg>
+  );
+}
+
+/** 将文本写入系统剪贴板。 */
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  // 兼容旧浏览器的临时输入框。
+  const fallbackInput = document.createElement('textarea');
+  fallbackInput.value = text;
+  fallbackInput.style.position = 'fixed';
+  fallbackInput.style.opacity = '0';
+  document.body.appendChild(fallbackInput);
+  fallbackInput.select();
+  document.execCommand('copy');
+  fallbackInput.remove();
+}
+
+/** 可复制货号。 */
+function CopyItemNoButton({ itemNo, compact = false }: { itemNo?: string; compact?: boolean }) {
+  // 复制完成提示状态。
+  const [isCopied, setIsCopied] = useState(false);
+
+  /** 复制当前货号。 */
+  async function handleCopyItemNo(event: React.MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+
+    if (!itemNo) {
+      return;
+    }
+
+    await copyTextToClipboard(itemNo);
+    setIsCopied(true);
+    window.setTimeout(() => setIsCopied(false), 1200);
+  }
+
+  return (
+    <button
+      type="button"
+      className={compact ? 'copy-item-no copy-item-no--compact' : 'copy-item-no'}
+      onClick={handleCopyItemNo}
+      title="复制货号"
+    >
+      <CopyIcon />
+      <span>{isCopied ? '已复制' : itemNo ?? '—'}</span>
+    </button>
+  );
+}
+
+/** 商品卡片。 */
+function ProductCard({
+  product,
+  onOpen,
+}: {
+  product: ProductSummary;
+  onOpen: (product: ProductSummary) => void;
+}) {
+  // 商品库存数量。
+  const stock = getProductStock(product);
+  // 商品展示图。
+  const imageUrl = product?.main_img ?? product?.pics?.[0] ?? '';
+  // 商品门店名称。
+  const shopName = product?.distributor_info?.name ?? '奥莱门店';
+  // 商品实际仓库地区 ID。
+  const warehouseRegionId = product?.regionauth_id ?? product?.distributor_info?.regionauth_id;
+  // 商品实际仓库简称。
+  const warehouseShortName = getWarehouseShortName(warehouseRegionId);
+  // 商品折扣文案。
+  const discountLabel = formatDiscount(product?.discount_rate);
+  // 商品平台补贴金额。
+  const subsidyAmount = getSubsidyAmount(product);
+  // 商品是否参加限时活动。
+  const hasLimitedSale = subsidyAmount > 0;
+  // 商品活动结束文案。
+  const promotionEndLabel = formatPromotionEndTime(product?.promotion_end_time);
+
+  /** 打开当前商品详情。 */
+  function handleOpenProduct() {
+    onOpen(product);
+  }
+
+  /** 通过键盘打开商品详情。 */
+  function handleProductKeyDown(event: React.KeyboardEvent<HTMLElement>) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onOpen(product);
+    }
+  }
+
+  return (
+    <article className="product-card">
+      <div className="product-card__button" role="button" tabIndex={0} onClick={handleOpenProduct} onKeyDown={handleProductKeyDown}>
+        <div className="product-card__media">
+          {imageUrl ? (
+            <img src={imageUrl} alt={product?.item_name ?? '商品图片'} loading="lazy" />
+          ) : (
+            <div className="product-card__placeholder">SIDEJOB SELECT</div>
+          )}
+          <span className="product-card__discount">{discountLabel}</span>
+          <span className={stock > 0 ? 'product-card__stock product-card__stock--ok' : 'product-card__stock'}>
+            {stock > 0 ? `库存 ${stock}` : '暂时无货'}
+          </span>
+          {subsidyAmount > 0 ? <span className="product-card__subsidy">平台补贴 {formatPrice(subsidyAmount)}</span> : null}
+          {hasLimitedSale ? <span className="product-card__seckill">限时秒杀{promotionEndLabel ? ` · ${promotionEndLabel}` : ''}</span> : null}
+        </div>
+        <div className="product-card__content">
+          <p className="product-card__brand">{product?.goods_brand ?? shopName}</p>
+          <h3>{product?.item_name ?? '未命名商品'}</h3>
+          <div className="product-card__number"><span>货号</span><CopyItemNoButton itemNo={product?.item_no} compact /></div>
+          <div className="product-card__footer">
+            <div><strong>{formatPrice(getEffectivePrice(product))}</strong><del>{formatPrice(product?.market_price)}</del><span className="product-card__warehouse">{warehouseShortName}</span></div>
+            <span className="product-card__store" title={shopName}>{shopName}</span>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+/** 商品列表骨架。 */
+function ProductGridSkeleton() {
+  // 骨架卡片序号。
+  const skeletonItems = Array.from({ length: 8 }, (_, itemIndex) => itemIndex);
+
+  return (
+    <div className="product-grid" aria-label="商品正在加载">
+      {skeletonItems.map((itemIndex) => (
+        <div className="product-card product-card--skeleton" key={itemIndex}>
+          <div className="skeleton-media" />
+          <div className="skeleton-copy"><i /><i /><i /></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** 商品详情抽屉。 */
+function ProductDetailDrawer({
+  product,
+  isLoading,
+  errorMessage,
+  onClose,
+  onPublish,
+}: {
+  product: ProductDetail | null;
+  isLoading: boolean;
+  errorMessage: string;
+  onClose: () => void;
+  onPublish: (product: ProductDetail) => void;
+}) {
+  // 在售 SKU 列表。
+  const onSaleSkus = product?.spec_items?.filter((sku) => sku?.approve_status === 'onsale') ?? [];
+  // 商详库存合计。
+  const totalStock = product ? getProductStock(product) : 0;
+  // 图文详情图片列表。
+  const detailImageUrls = useMemo(
+    () => extractDetailImageUrls(product?.intro),
+    [product?.intro],
+  );
+  // 商品图片滚动容器。
+  const galleryRef = useRef<HTMLDivElement>(null);
+  // 鼠标拖拽过程数据。
+  const galleryDragState = useRef({
+    isDragging: false,
+    startX: 0,
+    startScrollLeft: 0,
+    nextScrollLeft: 0,
+    animationFrameId: null as number | null,
+  });
+
+  /** 开始拖动商品图片。 */
+  function handleGalleryPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.pointerType !== 'mouse' || event.button !== 0) {
+      return;
+    }
+
+    // 当前图片滚动容器。
+    const galleryElement = galleryRef.current;
+
+    if (!galleryElement) {
+      return;
+    }
+
+    galleryDragState.current = {
+      isDragging: true,
+      startX: event.clientX,
+      startScrollLeft: galleryElement.scrollLeft,
+      nextScrollLeft: galleryElement.scrollLeft,
+      animationFrameId: null,
+    };
+    galleryElement.setPointerCapture(event.pointerId);
+    galleryElement.classList.add('detail-gallery--dragging');
+  }
+
+  /** 根据鼠标位移滚动商品图片。 */
+  function handleGalleryPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    // 当前拖拽状态。
+    const dragState = galleryDragState.current;
+    // 当前图片滚动容器。
+    const galleryElement = galleryRef.current;
+
+    if (!dragState.isDragging || !galleryElement) {
+      return;
+    }
+
+    event.preventDefault();
+    dragState.nextScrollLeft = dragState.startScrollLeft - (event.clientX - dragState.startX);
+
+    if (dragState.animationFrameId !== null) {
+      return;
+    }
+
+    dragState.animationFrameId = window.requestAnimationFrame(() => {
+      galleryElement.scrollLeft = dragState.nextScrollLeft;
+      dragState.animationFrameId = null;
+    });
+  }
+
+  /** 结束拖动商品图片。 */
+  function handleGalleryPointerUp(event: React.PointerEvent<HTMLDivElement>) {
+    // 当前图片滚动容器。
+    const galleryElement = galleryRef.current;
+    // 当前拖拽状态。
+    const dragState = galleryDragState.current;
+
+    if (dragState.animationFrameId !== null) {
+      window.cancelAnimationFrame(dragState.animationFrameId);
+      if (galleryElement) {
+        galleryElement.scrollLeft = dragState.nextScrollLeft;
+      }
+      dragState.animationFrameId = null;
+    }
+
+    dragState.isDragging = false;
+    galleryElement?.classList.remove('detail-gallery--dragging');
+
+    if (galleryElement?.hasPointerCapture(event.pointerId)) {
+      galleryElement.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  return (
+    <Drawer
+      open
+      onClose={onClose}
+      size={680}
+      rootClassName="product-detail-drawer-root"
+      title={<div className="drawer-title"><small>PRODUCT DETAIL</small><strong>商品详情</strong></div>}
+      className="product-detail-drawer"
+    >
+        {isLoading ? (
+          <div className="detail-loading"><Spin size="large" tip="正在读取实时商详…"><div className="detail-loading__space" /></Spin></div>
+        ) : null}
+        {!isLoading && errorMessage ? <div className="notice notice--error">{errorMessage}</div> : null}
+        {!isLoading && !errorMessage && product ? (
+          <div className="detail-content">
+            <div
+              ref={galleryRef}
+              className="detail-gallery"
+              onPointerDown={handleGalleryPointerDown}
+              onPointerMove={handleGalleryPointerMove}
+              onPointerUp={handleGalleryPointerUp}
+              onPointerCancel={handleGalleryPointerUp}
+            >
+              {(product?.pics ?? [product?.main_img ?? '']).filter(Boolean).map((imageUrl, imageIndex) => (
+                <img key={`${imageUrl}-${imageIndex}`} src={imageUrl} alt={`商品图片 ${imageIndex + 1}`} draggable={false} />
+              ))}
+            </div>
+
+            <div className="detail-summary">
+              <div className="detail-summary__tags"><span>{product?.goods_brand ?? '品牌商品'}</span><span>{formatDiscount(product?.discount_rate)}</span></div>
+              <h2>{product?.item_name ?? '未命名商品'}</h2>
+              <div className="detail-summary__number"><span>货号</span><CopyItemNoButton itemNo={product?.item_no} /></div>
+              <div className="detail-summary__price">
+                <strong>{formatPrice(getEffectivePrice(product))}</strong>
+                <del>{formatPrice(product?.market_price)}</del>
+                {getSubsidyAmount(product) > 0 ? <em>平台补贴 {formatPrice(getSubsidyAmount(product))}</em> : null}
+                <span>共 {totalStock} 件</span>
+              </div>
+              <button type="button" className="detail-publish-button" onClick={() => onPublish(product)}>
+                发布到闲鱼 <span>→</span>
+              </button>
+            </div>
+
+            {getSubsidyAmount(product) > 0 ? (
+              <section className="seckill-banner">
+                <div><small>FLASH SALE</small><strong>限时秒杀</strong></div>
+                <span>平台已补贴 {formatPrice(getSubsidyAmount(product))}</span>
+                <em>{formatPromotionEndTime(product?.promotion_end_time) || '活动进行中'}</em>
+              </section>
+            ) : null}
+
+            <section className="detail-section">
+              <div className="detail-section__heading"><h3>尺码与库存</h3><span>实时库存</span></div>
+              <div className="sku-list">
+                {onSaleSkus.map((sku) => (
+                  <div className="sku-row" key={sku?.item_id}>
+                    <strong>{getSkuSpec(sku, '尺码')}</strong>
+                    <span>{getSkuSpec(sku, '颜色')}</span>
+                    <span>{formatPrice(getEffectivePrice(sku))}</span>
+                    <em>{Number(sku?.store ?? 0)} 件</em>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="detail-facts">
+              <div><span>仓库地点</span><strong>{getWarehouseName(product?.regionauth_id ?? product?.distributor_info?.regionauth_id)}</strong></div>
+              <div><span>店铺代码</span><strong>{product?.store_code ?? product?.distributor_info?.shop_code ?? '—'}</strong></div>
+              <div><span>销售状态</span><strong>{product?.approve_status === 'onsale' ? '在售' : '非在售'}</strong></div>
+            </section>
+
+            {detailImageUrls.length > 0 ? (
+              <section className="detail-rich-content">
+                <div className="detail-rich-content__heading">
+                  <small>PRODUCT STORY</small>
+                  <h3>商品图文详情</h3>
+                </div>
+                <div className="detail-rich-content__images">
+                  {detailImageUrls.map((imageUrl, imageIndex) => (
+                    <img
+                      key={`${imageUrl}-${imageIndex}`}
+                      src={imageUrl}
+                      alt={`商品详情图 ${imageIndex + 1}`}
+                      loading="lazy"
+                    />
+                  ))}
+                </div>
+              </section>
+            ) : null}
+          </div>
+        ) : null}
+    </Drawer>
+  );
+}
+
+/** 应用主页面。 */
+export function App() {
+  // 当前输入关键词。
+  const [query, setQuery] = useState('');
+  // 当前地区 ID。
+  const [regionId, setRegionId] = useState('3');
+  // 当前快捷分类。
+  const [activeCategory, setActiveCategory] = useState('全部');
+  // 当前排序方式。
+  const [sortMode, setSortMode] = useState<SortMode>('default');
+  // 是否仅展示有货商品。
+  const [stockOnly, setStockOnly] = useState(true);
+  // 当前品牌门店 ID。
+  const [brandId, setBrandId] = useState('all');
+  // 当前地区品牌列表。
+  const [brandOptions, setBrandOptions] = useState<BrandOption[]>([]);
+  // 品牌列表加载状态。
+  const [isBrandLoading, setIsBrandLoading] = useState(false);
+  // 商品搜索状态。
+  const [searchState, setSearchState] = useState<ProductSearchState>(INITIAL_SEARCH_STATE);
+  // 最近查询记录。
+  const [recentSearches, setRecentSearches] = useState<RecentSearch[]>(loadRecentSearches);
+  // 当前商详数据。
+  const [selectedProduct, setSelectedProduct] = useState<ProductDetail | null>(null);
+  // 商详加载状态。
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
+  // 商详错误文案。
+  const [detailErrorMessage, setDetailErrorMessage] = useState('');
+  // 商详抽屉状态。
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
+  // 当前准备发布到闲鱼的商品。
+  const [publishProduct, setPublishProduct] = useState<ProductDetail | null>(null);
+  // 是否已执行首页首次加载。
+  const hasLoadedInitialProducts = useRef(false);
+  // 最新搜索请求序号。
+  const searchRequestSequence = useRef(0);
+  // 最新商详请求序号。
+  const detailRequestSequence = useRef(0);
+  // 品牌搜索防抖计时器。
+  const brandSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 最新品牌请求序号。
+  const brandRequestSequence = useRef(0);
+  // 当前地区配置。
+  const currentRegion = REGION_OPTIONS.find((region) => region.id === regionId) ?? REGION_OPTIONS[0];
+  // 当前是否处于首页浏览模式。
+  const isBrowseMode = query.trim() === '' && activeCategory === '全部';
+  // 当前结果区标题。
+  const resultTitle = isBrowseMode ? `${currentRegion.shortName}在售好物` : '搜索结果';
+  // 发布弹窗使用商品实际仓库，避免“全部”被当作地区参数。
+  const publishRegionId = publishProduct?.regionauth_id
+    ?? publishProduct?.distributor_info?.regionauth_id
+    ?? (regionId === 'all' ? '3' : regionId);
+  // 页面级接口加载状态。
+  const isGlobalLoading = searchState.isLoading || isBrandLoading;
+  // 是否还能继续加载。
+  const canLoadMore = searchState.products.length < searchState.total;
+  // 库存筛选后的商品列表。
+  const visibleProducts = useMemo(() => {
+    return stockOnly
+      ? searchState.products.filter((product) => getProductStock(product) > 0)
+      : [...searchState.products];
+  }, [searchState.products, stockOnly]);
+
+  /** 执行商品查询。 */
+  async function executeSearch({
+    nextQuery,
+    nextRegionId,
+    nextPage = 1,
+    append = false,
+    recordHistory = true,
+    nextBrandId = brandId,
+    nextSortMode = sortMode,
+  }: {
+    nextQuery: string;
+    nextRegionId: string;
+    nextPage?: number;
+    append?: boolean;
+    recordHistory?: boolean;
+    nextBrandId?: string;
+    nextSortMode?: SortMode;
+  }) {
+    // 清理后的关键词。
+    const trimmedQuery = nextQuery.trim();
+
+    // 本次请求序号。
+    const requestSequence = searchRequestSequence.current + 1;
+    searchRequestSequence.current = requestSequence;
+    setSearchState((currentState) => ({ ...currentState, isLoading: true, hasSearched: true, errorMessage: '' }));
+
+    try {
+      // 当前选中的聚合品牌。
+      const selectedBrandOption = nextBrandId === 'all'
+        ? undefined
+        : brandOptions.find((brandOption) => brandOption.value === nextBrandId);
+      // 商品查询结果。
+      const result = await searchProducts({
+        query: trimmedQuery,
+        mode: 'name',
+        regionId: nextRegionId,
+        page: nextPage,
+        brandDistributorIds: selectedBrandOption?.distributorIds ?? [],
+        goodsSort: getBackendGoodsSort(nextSortMode),
+      });
+
+      if (requestSequence !== searchRequestSequence.current) {
+        return;
+      }
+
+      setSearchState((currentState) => ({
+        products: append ? [...currentState.products, ...result.products] : result.products,
+        similarProducts: result.similarProducts,
+        total: result.total,
+        page: nextPage,
+        hasSearched: true,
+        isLoading: false,
+        errorMessage: '',
+        updatedAt: TIME_FORMATTER.format(new Date()),
+      }));
+
+      if (recordHistory && trimmedQuery) {
+        // 新增的最近查询记录。
+        const nextRecentSearch: RecentSearch = { query: trimmedQuery, mode: 'name', regionId: nextRegionId };
+        setRecentSearches((currentSearches) => saveRecentSearch(currentSearches, nextRecentSearch));
+      }
+    } catch (error) {
+      if (requestSequence !== searchRequestSequence.current) {
+        return;
+      }
+
+      // 用户可读错误信息。
+      const errorMessage = error instanceof Error ? error.message : '查询失败，请稍后重试';
+      setSearchState((currentState) => ({ ...currentState, isLoading: false, errorMessage }));
+    }
+  }
+
+  /** 按地区和输入内容加载品牌候选项。 */
+  async function loadBrandOptions(nextRegionId: string, brandQuery = '') {
+    // 本次品牌请求序号。
+    const requestSequence = brandRequestSequence.current + 1;
+    brandRequestSequence.current = requestSequence;
+    setIsBrandLoading(true);
+
+    try {
+      // 后端检索得到的品牌候选项。
+      const nextBrandOptions = await fetchBrandOptions(nextRegionId, brandQuery);
+      if (requestSequence !== brandRequestSequence.current) {
+        return;
+      }
+      setBrandOptions(nextBrandOptions);
+    } catch {
+      if (requestSequence !== brandRequestSequence.current) {
+        return;
+      }
+      setBrandOptions([]);
+    } finally {
+      if (requestSequence === brandRequestSequence.current) {
+        setIsBrandLoading(false);
+      }
+    }
+  }
+
+  /** 防抖执行品牌后端检索。 */
+  function handleSearchBrand(brandQuery: string) {
+    if (brandSearchTimer.current) {
+      clearTimeout(brandSearchTimer.current);
+    }
+    brandSearchTimer.current = setTimeout(() => {
+      void loadBrandOptions(regionId, brandQuery);
+    }, 300);
+  }
+
+  /** 加载首页默认商品。 */
+  function loadInitialProducts() {
+    void executeSearch({ nextQuery: '', nextRegionId: '3', recordHistory: false });
+    void loadBrandOptions('3');
+  }
+
+  useEffect(() => {
+    if (hasLoadedInitialProducts.current) {
+      return;
+    }
+
+    hasLoadedInitialProducts.current = true;
+    loadInitialProducts();
+  }, []);
+
+  /** 提交搜索表单。 */
+  function handleSubmitSearch(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setActiveCategory('全部');
+    void executeSearch({ nextQuery: query, nextRegionId: regionId });
+  }
+
+  /** 切换查询地区并加载该地区首页商品。 */
+  function handleChangeRegion(nextRegionId: string) {
+    setRegionId(nextRegionId);
+    setQuery('');
+    setActiveCategory('全部');
+    setBrandId('all');
+    setBrandOptions([]);
+    brandRequestSequence.current += 1;
+    void loadBrandOptions(nextRegionId);
+    void executeSearch({ nextQuery: '', nextRegionId, nextBrandId: 'all', recordHistory: false });
+  }
+
+  /** 选择首页快捷分类。 */
+  function handleSelectCategory(categoryName: string) {
+    // 全部分类对应的空关键词。
+    const categoryQuery = categoryName === '全部' ? '' : categoryName;
+
+    setActiveCategory(categoryName);
+    setQuery(categoryQuery);
+    void executeSearch({ nextQuery: categoryQuery, nextRegionId: regionId, recordHistory: false });
+  }
+
+  /** 切换品牌门店筛选。 */
+  function handleChangeBrand(nextBrandId: string) {
+    setBrandId(nextBrandId);
+    void executeSearch({
+      nextQuery: query,
+      nextRegionId: regionId,
+      nextBrandId,
+      recordHistory: false,
+    });
+  }
+
+  /** 切换排序并从后端重新获取第一页。 */
+  function handleChangeSort(nextSortMode: SortMode) {
+    setSortMode(nextSortMode);
+    void executeSearch({
+      nextQuery: query,
+      nextRegionId: regionId,
+      nextSortMode,
+      recordHistory: false,
+    });
+  }
+
+  /** 重新加载当前结果。 */
+  function handleRefreshProducts() {
+    void executeSearch({ nextQuery: query, nextRegionId: regionId, recordHistory: false });
+  }
+
+  /** 加载下一页名称搜索结果。 */
+  function handleLoadMore() {
+    void executeSearch({ nextQuery: query, nextRegionId: regionId, nextPage: searchState.page + 1, append: true, recordHistory: false });
+  }
+
+  /** 复用最近查询。 */
+  function handleUseRecentSearch(recentSearch: RecentSearch) {
+    setQuery(recentSearch.query);
+    setRegionId(recentSearch.regionId);
+    setActiveCategory('全部');
+    void executeSearch({ nextQuery: recentSearch.query, nextRegionId: recentSearch.regionId, recordHistory: false });
+  }
+
+  /** 打开商品完整详情。 */
+  async function handleOpenProduct(product: ProductSummary) {
+    // 商详 Item ID。
+    const itemId = getDetailItemId(product);
+
+    if (!itemId) {
+      return;
+    }
+
+    // 本次详情请求序号。
+    const requestSequence = detailRequestSequence.current + 1;
+    detailRequestSequence.current = requestSequence;
+    setSelectedProduct(null);
+    setDetailErrorMessage('');
+    setIsDetailLoading(true);
+    setIsDetailOpen(true);
+
+    try {
+      // 商品自身仓库 ID；“全部”模式下商详仍必须指定具体仓库。
+      const productRegionId = product?.regionauth_id
+        ?? product?.distributor_info?.regionauth_id
+        ?? (regionId === 'all' ? '3' : regionId);
+      // 完整商品详情。
+      const productDetail = await fetchProductDetail(itemId, productRegionId);
+
+      if (requestSequence !== detailRequestSequence.current) {
+        return;
+      }
+
+      setSelectedProduct({
+        ...product,
+        ...productDetail,
+        regionauth_id: productDetail?.regionauth_id ?? product?.regionauth_id,
+        distributor_info: productDetail?.distributor_info ?? product?.distributor_info,
+      });
+      setIsDetailLoading(false);
+    } catch (error) {
+      if (requestSequence !== detailRequestSequence.current) {
+        return;
+      }
+
+      // 用户可读详情错误。
+      const errorMessage = error instanceof Error ? error.message : '商详加载失败';
+      setDetailErrorMessage(errorMessage);
+      setIsDetailLoading(false);
+    }
+  }
+
+  /** 关闭商品详情。 */
+  function handleCloseDetail() {
+    detailRequestSequence.current += 1;
+    setIsDetailOpen(false);
+  }
+
+  /** 打开闲鱼发布确认面板。 */
+  function handleOpenPublish(product: ProductDetail) {
+    setPublishProduct(product);
+  }
+
+  /** 关闭闲鱼发布确认面板。 */
+  function handleClosePublish() {
+    setPublishProduct(null);
+  }
+
+  return (
+    <div className="storefront">
+      {isGlobalLoading ? <div className="global-loading-bar" aria-label="数据加载中"><i /></div> : null}
+      <header className="store-header">
+        <div className="store-header__inner">
+          <a href="#home" className="store-logo" aria-label="SideJob Select 首页">
+            <span>SJ</span><div><strong>SideJob</strong><small>OUTLET SELECT</small></div>
+          </a>
+
+          <form className="header-search" onSubmit={handleSubmitSearch}>
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索商品名称、品牌或货号" aria-label="搜索商品" />
+            <button type="submit" aria-label="提交搜索"><SearchIcon /><span>搜索</span></button>
+          </form>
+
+          <XianyuConnectionControl />
+
+          <label className="region-picker">
+            <PinIcon /><span>仓库范围</span>
+            <Select
+              value={regionId}
+              onChange={handleChangeRegion}
+              options={REGION_OPTIONS.map((region) => ({ value: region.id, label: region.shortName }))}
+              aria-label="仓库范围"
+            />
+          </label>
+        </div>
+      </header>
+
+      <nav className="category-nav" aria-label="商品分类">
+        <div className="category-nav__inner">
+          {QUICK_CATEGORIES.map((categoryName) => (
+            <button type="button" className={activeCategory === categoryName ? 'category-nav__item category-nav__item--active' : 'category-nav__item'} key={categoryName} onClick={() => handleSelectCategory(categoryName)}>
+              {categoryName}
+            </button>
+          ))}
+        </div>
+      </nav>
+
+      <main id="home">
+        <section className="promo-hero">
+          <div className="promo-hero__content">
+            <span className="promo-hero__kicker">CURATED OUTLET GOODS · {currentRegion.shortName}</span>
+            <h1>奥莱好货，<br /><em>库存看得见。</em></h1>
+            <p>按名称随便逛，按货号准确查。价格、折扣、尺码库存一次看清。</p>
+            <div className="promo-actions">
+              <button type="button" onClick={() => handleSelectCategory('运动鞋')}>逛运动鞋 <span>→</span></button>
+              <div className="promo-features"><span>实时价格</span><span>尺码库存</span><span>品牌筛选</span></div>
+            </div>
+          </div>
+          <div className="promo-hero__visual">
+            <div className="promo-ticket"><small>TODAY'S PICKS</small><strong>{searchState.total > 9999 ? '10K+' : searchState.total}</strong><span>{currentRegion.shortName}在售商品</span></div>
+            <div className="promo-orbit promo-orbit--one" /><div className="promo-orbit promo-orbit--two" /><span className="promo-word">SELECT</span>
+          </div>
+        </section>
+
+        {recentSearches.length > 0 ? (
+          <section className="recent-strip">
+            <span>最近搜索</span>
+            <div>{recentSearches.map((recentSearch) => <button type="button" key={`${recentSearch.regionId}-${recentSearch.mode}-${recentSearch.query}`} onClick={() => handleUseRecentSearch(recentSearch)}>{recentSearch.query}</button>)}</div>
+          </section>
+        ) : null}
+
+        <section className="catalog-section">
+          <div className="catalog-heading">
+            <div>
+              <span className="catalog-heading__eyebrow">FRESH FROM THE OUTLET</span>
+              <h2>{resultTitle}</h2>
+              <p>共找到 {searchState.total.toLocaleString('zh-CN')} 件商品</p>
+            </div>
+            <div className="catalog-controls">
+              <Select
+                className="brand-select"
+                value={brandId}
+                onChange={handleChangeBrand}
+                loading={isBrandLoading}
+                showSearch
+                filterOption={false}
+                onSearch={handleSearchBrand}
+                popupMatchSelectWidth={260}
+                options={[
+                  { value: 'all', label: '全部品牌' },
+                  ...brandOptions,
+                ]}
+                aria-label="品牌筛选"
+              />
+              <label className="stock-toggle"><Switch size="small" checked={stockOnly} onChange={setStockOnly} /><span>只看有货</span></label>
+              <Select
+                className="sort-select"
+                value={sortMode}
+                onChange={handleChangeSort}
+                options={[
+                  { value: 'default', label: '综合排序' },
+                  { value: 'priceAsc', label: '价格从低到高' },
+                  { value: 'priceDesc', label: '价格从高到低' },
+                  { value: 'discount', label: '折扣从低到高' },
+                ]}
+                aria-label="商品排序"
+              />
+              <button type="button" className="refresh-button" onClick={handleRefreshProducts} disabled={searchState.isLoading}><RefreshIcon /><span>{searchState.updatedAt || '刷新'}</span></button>
+            </div>
+          </div>
+
+          {searchState.isLoading ? (
+            <div className="catalog-loading-indicator"><Spin size="small" /><span>正在获取实时商品数据…</span></div>
+          ) : null}
+
+          {searchState.errorMessage ? <div className="notice notice--error">{searchState.errorMessage}</div> : null}
+          {searchState.isLoading && searchState.products.length === 0 ? <ProductGridSkeleton /> : null}
+          {!searchState.isLoading && !searchState.errorMessage && visibleProducts.length === 0 ? (
+            <div className="empty-state"><strong>没有找到符合条件的商品</strong><p>换个关键词或切换其他仓库试试。</p></div>
+          ) : null}
+
+          {visibleProducts.length > 0 ? (
+            <div className="product-grid">
+              {visibleProducts.map((product) => (
+                <ProductCard
+                  key={`${product?.regionauth_id}-${product?.goods_id}-${product?.item_id}`}
+                  product={product}
+                  onOpen={handleOpenProduct}
+                />
+              ))}
+            </div>
+          ) : null}
+
+          {canLoadMore ? <button type="button" className="load-more" onClick={handleLoadMore} disabled={searchState.isLoading}>{searchState.isLoading ? '正在加载…' : `加载更多商品 · ${PRODUCT_PAGE_SIZE} 件`}</button> : null}
+        </section>
+      </main>
+
+      {isDetailOpen ? (
+        <ProductDetailDrawer
+          product={selectedProduct}
+          isLoading={isDetailLoading}
+          errorMessage={detailErrorMessage}
+          onClose={handleCloseDetail}
+          onPublish={handleOpenPublish}
+        />
+      ) : null}
+      {publishProduct ? (
+        <PublishProductModal
+          key={`${publishProduct?.default_item_id ?? publishProduct?.item_id}-${publishRegionId}`}
+          product={publishProduct}
+          regionId={publishRegionId}
+          onClose={handleClosePublish}
+        />
+      ) : null}
+    </div>
+  );
+}

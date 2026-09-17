@@ -1,0 +1,20 @@
+Name: sidejob-api
+Host: 127.0.0.1
+Port: 8888
+Timeout: 10000
+
+Mongo:
+  URI: mongodb://sidejob:sidejob-dev@127.0.0.1:27017/?authSource=admin
+  Database: sidejob
+
+Xianyu:
+  APIBase: https://h5api.m.goofish.com/h5
+  UploadURL: https://stream-upload.goofish.com/api/upload.api?floderId=0&appkey=fleamarket&_input_charset=utf-8
+  AppKey: "34839810"
+  SessionKeyPath: ""
+  RequestTimeout: 30
+
+Web:
+  AllowedOrigins:
+    - http://127.0.0.1:5173
+    - http://localhost:5173

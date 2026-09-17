@@ -1,0 +1,10 @@
+.sp-scrollview-native__bottom .no-more {
+  padding: 20rpx 0;
+}
+.sp-scrollview-native__bottom .result-empty {
+  color: #bfbfbf;
+  font-size: 28rpx;
+  font-weight: 400;
+  padding: 108rpx 0 48rpx;
+  text-align: center;
+}

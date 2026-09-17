@@ -1,0 +1,84 @@
+syntax = "v1"
+
+info (
+	title: "SideJob API"
+	desc: "SideJob 本地服务"
+	author: "SideJob"
+)
+
+type HealthResponse {
+	Status string `json:"status"`
+}
+
+type ConnectionResponse {
+	Platform       string `json:"platform"`
+	Status         string `json:"status"`
+	Authenticated  bool   `json:"authenticated"`
+	LastVerifiedAt string `json:"lastVerifiedAt,optional"`
+	Message        string `json:"message,optional"`
+}
+
+type SaveXianyuSessionRequest {
+	Cookie string `json:"cookie"`
+}
+
+type CreatePublishTaskRequest {
+	SourceItemId      string   `json:"sourceItemId"`
+	ItemNo            string   `json:"itemNo"`
+	Title             string   `json:"title"`
+	Description       string   `json:"description"`
+	PriceCents        int64    `json:"priceCents"`
+	OriginalPriceCents int64   `json:"originalPriceCents,optional"`
+	ImageURLs         []string `json:"imageUrls"`
+	RegionId          string   `json:"regionId,optional"`
+	Brand             string   `json:"brand,optional"`
+	Condition         string   `json:"condition"`
+	AvailableSizes    []string `json:"availableSizes,optional"`
+	IsFootwear        bool     `json:"isFootwear"`
+}
+
+type PublishTaskResponse {
+	Id         string `json:"id"`
+	Status     string `json:"status"`
+	ItemNo     string `json:"itemNo"`
+	Title      string `json:"title"`
+	PriceCents int64  `json:"priceCents"`
+	XianyuItemId string `json:"xianyuItemId,optional"`
+	XianyuURL  string `json:"xianyuUrl,optional"`
+	ErrorMessage string `json:"errorMessage,optional"`
+	CreatedAt  string `json:"createdAt"`
+	UpdatedAt  string `json:"updatedAt"`
+}
+
+type PublishTaskListResponse {
+	List []PublishTaskResponse `json:"list"`
+}
+
+@server (
+	prefix: /api
+)
+service sidejob-api {
+	@handler health
+	get /healthz returns (HealthResponse)
+
+	@handler saveXianyuSession
+	post /xianyu/session (SaveXianyuSessionRequest) returns (ConnectionResponse)
+
+	@handler getXianyuConnection
+	get /xianyu/connection returns (ConnectionResponse)
+
+	@handler deleteXianyuSession
+	delete /xianyu/session returns (ConnectionResponse)
+
+	@handler createPublishTask
+	post /xianyu/publish-tasks (CreatePublishTaskRequest) returns (PublishTaskResponse)
+
+	@handler getPublishTask
+	get /xianyu/publish-tasks/:id returns (PublishTaskResponse)
+
+	@handler retryPublishTask
+	post /xianyu/publish-tasks/:id/retry returns (PublishTaskResponse)
+
+	@handler listPublishTasks
+	get /xianyu/publish-tasks returns (PublishTaskListResponse)
+}

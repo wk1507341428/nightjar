@@ -1,0 +1,8 @@
+{
+  "navigationStyle": "custom",
+  "usingComponents": {
+    "custom-wrapper": "../../custom-wrapper",
+    "comp": "../../comp",
+    "mp-html": "../../components/sp-html/mp-weixin/index"
+  }
+}

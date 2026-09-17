@@ -1,0 +1,10 @@
+{
+  "miniprogramRoot": "",
+  "__compileDebugInfo__": {
+    "from": "ci",
+    "useNewCompileModule": true,
+    "devtoolsVersion": "0",
+    "compileSetting": { "minify": true, "es6": false },
+    "ciVersion": "1.9.16"
+  }
+}

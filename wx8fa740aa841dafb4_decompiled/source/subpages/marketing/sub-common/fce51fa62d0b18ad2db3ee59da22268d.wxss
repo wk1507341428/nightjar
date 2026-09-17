@@ -1,0 +1,46 @@
+.sp-filter-line {
+  align-items: center;
+  box-sizing: border-box;
+  display: flex;
+  height: 88rpx;
+  padding: 0 36rpx;
+  width: 100%;
+}
+.sp-filter-line .filter-line-body {
+  display: flex;
+  flex: 1;
+  gap: 48rpx;
+  height: 100%;
+}
+.sp-filter-line__item {
+  align-items: center;
+  display: flex;
+  height: 100%;
+  justify-content: center;
+  position: relative;
+}
+.sp-filter-line__item-text {
+  color: #1a1a1a;
+  font-size: 28rpx;
+}
+.sp-filter-line__item-icon {
+  height: 24rpx;
+  width: 24rpx;
+}
+.sp-filter-line__item--active .sp-filter-line__item-text {
+  color: var(--color-primary);
+  font-weight: 500;
+}
+.sp-filter-line__filter {
+  align-items: center;
+  display: flex;
+}
+.sp-filter-line__filter-text {
+  color: #333;
+  font-size: 28rpx;
+  margin-right: 8rpx;
+}
+.sp-filter-line__filter-icon {
+  height: 40rpx;
+  width: 40rpx;
+}

@@ -1,0 +1,133 @@
+.point-modal-content {
+  padding-bottom: 42rpx;
+}
+.point-modal .at-modal__container {
+  width: 580rpx;
+}
+.point-modal-bg {
+  align-items: center;
+  border-radius: 24rpx 24rpx 24rpx 24rpx;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+.point-modal-scope {
+  color: #cb9800;
+  display: flex;
+  font-family: PingFang SC;
+  font-size: 26rpx;
+  font-style: normal;
+  font-weight: 500;
+  height: 36rpx;
+  margin-left: 12rpx;
+  margin-right: 6rpx;
+  text-align: center;
+  text-transform: none;
+}
+.point-modal-signcontent {
+  padding: 24rpx 0rpx 24rpx 48rpx;
+}
+.point-modal-point,
+.point-modal-signcontent {
+  align-items: center;
+  display: flex;
+}
+.point-modal-point-num {
+  color: #e5a15c;
+  font-family: D-DIN-PRO;
+  font-size: 42rpx;
+  font-weight: 700;
+  margin-bottom: -4rpx;
+  margin-left: 6rpx;
+}
+.point-modal-point-unit {
+  color: #e5a15c;
+  font-size: 34rpx;
+  margin-left: 6rpx;
+}
+.point-modal-point-why {
+  color: #1a1a1a;
+  font-size: 28rpx;
+  font-weight: 500;
+  padding-bottom: 18rpx;
+  padding-top: 18rpx;
+}
+.point-modal-point-txt {
+  color: #e5a15c;
+  font-size: 34rpx;
+  font-style: normal;
+  font-weight: 500;
+  height: 42rpx;
+  text-align: center;
+  text-transform: none;
+}
+.point-modal .iconfont {
+  color: grey;
+  float: right;
+  font-size: 36rpx;
+}
+.point-modal .zoom-btn-close {
+  float: right;
+  margin-right: 20rpx;
+  margin-top: 20rpx;
+}
+.point-modal-text {
+  color: #666;
+  font-family: PingFang SC;
+  font-size: 30rpx;
+  font-style: normal;
+  font-weight: 400;
+  height: 42rpx;
+  margin-bottom: 18rpx;
+  text-align: center;
+  text-transform: none;
+}
+.point-modal-btn,
+.point-modal-pointtxt {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+}
+.point-modal-btn {
+  background: #1a1a1a;
+  border-radius: 44rpx 44rpx 44rpx 44rpx;
+  color: #fff;
+  height: 88rpx;
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: 48rpx;
+  width: 344rpx;
+}
+.point-modal-btn .icon-a-iconarrow_forward {
+  color: #fff !important;
+  padding-top: 6rpx;
+}
+.point-modal-signtype {
+  background: radial-gradient(0 70%at 100% 50%, #fff 0, #fff4d9 100%);
+}
+.point-modal-coupon,
+.point-modal-signtype {
+  border-radius: 16rpx 16rpx 16rpx 16rpx;
+  height: 120rpx;
+  margin-bottom: 18rpx;
+}
+.point-modal-coupon {
+  background: radial-gradient(0 70%at 100% 50%, #fff 0, #ffe5ed 100%);
+}
+.point-modal .at-modal__header {
+  margin-top: 40rpx;
+  padding: 0rpx;
+  width: 100%;
+}
+.point-modal .at-modal__content {
+  padding: 58rpx 48rpx 18rpx;
+}
+.point-modal .at-modal__container {
+  border-radius: 36rpx 36rpx 36rpx 36rpx;
+}
+.point-modal-point-content {
+  color: #666;
+  font-size: 26rpx;
+  font-weight: 400;
+}

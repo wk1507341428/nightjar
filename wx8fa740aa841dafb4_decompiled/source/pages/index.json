@@ -1,0 +1,12 @@
+{
+  "navigationStyle": "custom",
+  "disableScroll": true,
+  "transparentTitle": "auto",
+  "titlePenetrate": "YES",
+  "navigationBarTitleText": "首页",
+  "usingComponents": {
+    "custom-wrapper": "../custom-wrapper",
+    "comp": "../comp",
+    "mp-html": "../components/sp-html/mp-weixin/index"
+  }
+}

@@ -1,0 +1,167 @@
+.sp-price-detail-modal .sp-float-layout-bd {
+  padding: 0 24rpx;
+  position: relative;
+}
+.sp-price-detail-modal__content {
+  padding: 0rpx 0 48rpx;
+}
+.sp-price-detail-modal__header {
+  align-items: center;
+  background: #fff;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 12rpx;
+  height: 180rpx;
+  justify-content: center;
+  padding: 48rpx 24rpx 24rpx;
+}
+.sp-price-detail-modal__price {
+  align-items: baseline;
+  color: #d4003b;
+  display: flex;
+  gap: 4rpx;
+}
+.sp-price-detail-modal__price-symbol {
+  font-family: D-DIN-PRO;
+  font-size: 42rpx;
+  font-weight: 500;
+  line-height: 1;
+}
+.sp-price-detail-modal__price-value {
+  font-family: D-DIN-PRO;
+  font-size: 60rpx;
+  font-weight: 600;
+  line-height: 1;
+}
+.sp-price-detail-modal__price-desc {
+  color: #d4003b;
+  font-size: 26rpx;
+  line-height: 1.2;
+}
+.sp-price-detail-modal__intro {
+  align-items: center;
+  display: flex;
+  gap: 16rpx;
+  justify-content: space-between;
+  padding: 18rpx 24rpx;
+}
+.sp-price-detail-modal__intro-title {
+  color: #1a1a1a;
+  flex-shrink: 0;
+  font-size: 30rpx;
+  font-weight: 500;
+}
+.sp-price-detail-modal__intro-tip {
+  color: #cb9800;
+  flex: 1;
+  font-size: 22rpx;
+  line-height: 1.4;
+  text-align: right;
+}
+.sp-price-detail-modal__card {
+  background: #f8f8f8;
+  border-radius: 16rpx;
+  padding: 24rpx;
+}
+.sp-price-detail-modal__row {
+  align-items: center;
+  display: flex;
+  gap: 16rpx;
+  justify-content: space-between;
+}
+.sp-price-detail-modal__row--original {
+  border-bottom: 1px solid #ebebeb;
+  padding-bottom: 18rpx;
+}
+.sp-price-detail-modal__row-label,
+.sp-price-detail-modal__row-value {
+  color: #1a1a1a;
+  font-size: 26rpx;
+  line-height: 1.2;
+}
+.sp-price-detail-modal__row-value {
+  font-weight: 500;
+}
+.sp-price-detail-modal__row-value--discount {
+  color: #d4003b;
+}
+.sp-price-detail-modal__discount-block {
+  display: flex;
+  flex-direction: column;
+  gap: 18rpx;
+  margin-bottom: 18rpx;
+  padding: 18rpx 0;
+}
+.sp-price-detail-modal__group,
+.sp-price-detail-modal__sub-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6rpx;
+}
+.sp-price-detail-modal__sub-list {
+  background: rgba(212, 0, 59, 0.05);
+  border-radius: 12rpx;
+  padding: 12rpx;
+}
+.sp-price-detail-modal__sub-row {
+  align-items: center;
+  display: flex;
+  gap: 16rpx;
+  justify-content: space-between;
+}
+.sp-price-detail-modal__tag {
+  align-items: center;
+  background: rgba(212, 0, 59, 0.1);
+  border: 1px solid rgba(212, 0, 59, 0.15);
+  border-radius: 6rpx;
+  box-sizing: border-box;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 26rpx;
+  padding: 0 6rpx 2rpx;
+}
+.sp-price-detail-modal__tag,
+.sp-price-detail-modal__tag-text {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-price-detail-modal__tag-text {
+  color: #d4003b;
+  font-size: 18rpx;
+  line-height: 1.2;
+}
+.sp-price-detail-modal__sub-amount {
+  align-items: baseline;
+  display: flex;
+  flex-shrink: 0;
+  gap: 12rpx;
+  justify-content: flex-end;
+}
+.sp-price-detail-modal__sub-tip {
+  color: #d4003b;
+  font-size: 20rpx;
+  line-height: 1.2;
+}
+.sp-price-detail-modal__sub-value {
+  color: #d4003b;
+  font-size: 22rpx;
+  line-height: 1.2;
+}
+.sp-price-detail-modal__total {
+  align-items: center;
+  border-top: 1px solid #ebebeb;
+  display: flex;
+  gap: 16rpx;
+  justify-content: space-between;
+  padding-top: 18rpx;
+}
+.sp-price-detail-modal__total-label,
+.sp-price-detail-modal__total-value {
+  color: #1a1a1a;
+  font-size: 30rpx;
+  font-weight: 500;
+}

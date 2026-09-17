@@ -1,0 +1,34 @@
+.expand-filter__header {
+  align-items: center;
+  border-bottom: 1px solid #ebebeb;
+  box-sizing: border-box;
+  display: flex;
+  height: 64rpx;
+  justify-content: space-between;
+  padding: 0 36rpx;
+}
+.expand-filter__section--expanded .expand-filter__header {
+  border-bottom: none;
+}
+.expand-filter__title {
+  color: #666;
+  font-size: 26rpx;
+  font-style: normal;
+  height: 36rpx;
+  line-height: 30rpx;
+  text-align: center;
+  text-transform: none;
+}
+.expand-filter__expand-icon {
+  height: 40rpx;
+  width: 40rpx;
+}
+.expand-filter__content {
+  box-sizing: border-box;
+  padding: 0 36rpx 18rpx;
+}
+.expand-filter__image {
+  height: 45rpx;
+  object-fit: cover;
+  width: 45rpx;
+}

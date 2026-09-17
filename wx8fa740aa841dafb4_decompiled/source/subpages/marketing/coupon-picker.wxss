@@ -1,0 +1,70 @@
+@import "/subpages/marketing/sub-vendors.wxss";
+.page-marketing-couponpicker .list-scroll {
+  padding: 20rpx;
+}
+.page-marketing-couponpicker .list-scroll .invalid-title {
+  font-size: 28rpx;
+  font-weight: 700;
+  margin-bottom: 10rpx;
+}
+.page-marketing-couponpicker .list-scroll .coupon-item-wrap {
+  display: flex;
+  justify-content: space-between;
+}
+.page-marketing-couponpicker .list-scroll .coupon-item-wrap:not(:last-child) {
+  margin-bottom: 20rpx;
+}
+.page-marketing-couponpicker .list-scroll .coupon-item-wrap .sp-coupon {
+  width: 650rpx;
+}
+.page-marketing-couponpicker
+  .list-scroll
+  .coupon-item-wrap
+  .sp-coupon-content:after,
+.page-marketing-couponpicker
+  .list-scroll
+  .coupon-item-wrap
+  .sp-coupon-content:before {
+  left: 438rpx;
+}
+.page-marketing-couponpicker .list-scroll .coupon-item-wrap .sp-checkbox-new {
+  position: relative;
+}
+.page-marketing-couponpicker
+  .list-scroll
+  .coupon-item-wrap
+  .sp-checkbox-new
+  .iconfont {
+  position: absolute;
+  right: 0;
+  top: 76rpx;
+}
+.page-marketing-couponpicker .btn-wrap {
+  align-items: center;
+  display: flex;
+  height: 100rpx;
+  padding: 0 20rpx;
+}
+.page-marketing-couponpicker .btn-wrap .sp-checkbox-new {
+  justify-content: space-between;
+  position: relative;
+}
+.page-marketing-couponpicker .btn-wrap .sp-checkbox-new__label {
+  margin: 0 16rpx 0 0;
+  width: 694rpx;
+}
+.page-marketing-couponpicker .btn-wrap .sp-checkbox-new .iconfont {
+  position: absolute;
+  right: 0;
+}
+.page-marketing-couponpicker .sp-coupon-ft {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+}
+.page-marketing-couponpicker .coupon-value {
+  margin-top: 0 !important;
+}
+.page-marketing-couponpicker .coupon-btn {
+  display: none;
+}

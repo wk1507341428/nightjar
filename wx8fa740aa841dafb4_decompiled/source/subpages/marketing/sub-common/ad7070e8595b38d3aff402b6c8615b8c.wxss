@@ -1,0 +1,28 @@
+.sp-shop-fullReduction {
+  color: #000;
+  display: flex;
+  flex-direction: row;
+}
+.sp-shop-fullReduction .label-style {
+  background: linear-gradient(174deg, #f31346, #ff4a4a);
+  border-radius: 5rpx;
+  color: #fff;
+  font-family: PingFangSC-Semibold, PingFang SC;
+  font-size: 22rpx;
+  font-weight: 600;
+  height: 34rpx;
+  line-height: 34rpx;
+  margin-right: 8rpx;
+  text-align: center;
+  width: 66rpx;
+}
+.sp-shop-fullReduction .text-style {
+  color: #999;
+  font-family: PingFangSC-Regular, PingFang SC;
+  font-size: 24rpx;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 300rpx;
+}
