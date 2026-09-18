@@ -1,5 +1,5 @@
 import { SIDEJOB_API_BASE_URL } from './constants';
-import type { CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceSyncResponse, PublishTask, XianyuConnection } from './types';
+import type { CreatePriceComparisonRequest, CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceSyncResponse, PinduoduoCredential, PlatformConnection, PriceComparisonResponse, PublishTask, XianyuConnection } from './types';
 
 /** 解析本地服务 JSON 响应并提取错误信息。 */
 async function requestSideJob<ResponseType>(path: string, init?: RequestInit): Promise<ResponseType> {
@@ -25,11 +25,38 @@ export function fetchXianyuConnection(): Promise<XianyuConnection> {
   return requestSideJob<XianyuConnection>('/xianyu/connection');
 }
 
-/** 校验并保存用户提供的闲鱼 Cookie。 */
-export function connectXianyu(cookie: string): Promise<XianyuConnection> {
+/** 校验并保存用户提供的闲鱼 cURL 或 Cookie。 */
+export function connectXianyu(credential: string): Promise<XianyuConnection> {
   return requestSideJob<XianyuConnection>('/xianyu/session', {
     method: 'POST',
-    body: JSON.stringify({ cookie }),
+    body: JSON.stringify({ credential }),
+  });
+}
+
+/** 删除本地保存的闲鱼会话。 */
+export function disconnectXianyu(): Promise<XianyuConnection> {
+  return requestSideJob<XianyuConnection>('/xianyu/session', {
+    method: 'DELETE',
+  });
+}
+
+/** 查询拼多多连接状态。 */
+export function fetchPinduoduoConnection(): Promise<PlatformConnection> {
+  return requestSideJob<PlatformConnection>('/pinduoduo/connection');
+}
+
+/** 校验并保存拼多多商家后台 cURL 或 Cookie。 */
+export function connectPinduoduo(credential: PinduoduoCredential): Promise<PlatformConnection> {
+  return requestSideJob<PlatformConnection>('/pinduoduo/session', {
+    method: 'POST',
+    body: JSON.stringify(credential),
+  });
+}
+
+/** 删除本地保存的拼多多凭证。 */
+export function disconnectPinduoduo(): Promise<PlatformConnection> {
+  return requestSideJob<PlatformConnection>('/pinduoduo/session', {
+    method: 'DELETE',
   });
 }
 
@@ -66,4 +93,12 @@ export function syncMarketplaceListings(platform = 'xianyu'): Promise<Marketplac
     `/marketplace/sync?platform=${encodeURIComponent(platform)}`,
     { method: 'POST' },
   );
+}
+
+/** 发起统一多平台比价。 */
+export function createPriceComparison(request: CreatePriceComparisonRequest): Promise<PriceComparisonResponse> {
+  return requestSideJob<PriceComparisonResponse>('/price-comparisons', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
 }

@@ -12,6 +12,8 @@ import (
 	"sidejob-server/internal/catalog"
 	"sidejob-server/internal/config"
 	"sidejob-server/internal/marketplace"
+	"sidejob-server/internal/pinduoduo"
+	"sidejob-server/internal/pricecompare"
 	"sidejob-server/internal/publish"
 	"sidejob-server/internal/repository"
 	"sidejob-server/internal/security"
@@ -20,16 +22,19 @@ import (
 
 // ServiceContext 汇总 API 服务的共享依赖。
 type ServiceContext struct {
-	Config             config.Config
-	MongoClient        *mongo.Client
-	PublishRepository  *repository.PublishTaskRepository
-	SessionRepository  *repository.SessionRepository
-	ListingRepository  *repository.MarketplaceListingRepository
-	XianyuService      *xianyu.Service
-	PublishService     *publish.Service
-	CatalogService     *catalog.Service
-	MarketplaceService *marketplace.Service
-	runtimeCancel      context.CancelFunc
+	Config              config.Config
+	MongoClient         *mongo.Client
+	PublishRepository   *repository.PublishTaskRepository
+	SessionRepository   *repository.SessionRepository
+	PinduoduoRepository *repository.PinduoduoSessionRepository
+	ListingRepository   *repository.MarketplaceListingRepository
+	XianyuService       *xianyu.Service
+	PinduoduoService    *pinduoduo.Service
+	PublishService      *publish.Service
+	CatalogService      *catalog.Service
+	MarketplaceService  *marketplace.Service
+	PriceCompareService *pricecompare.Service
+	runtimeCancel       context.CancelFunc
 }
 
 // NewServiceContext 初始化 MongoDB 和浏览器管理器。
@@ -58,30 +63,36 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 	}
 
 	sessionRepository := repository.NewSessionRepository(mongoClient.Database(serviceConfig.Mongo.Database))
+	pinduoduoRepository := repository.NewPinduoduoSessionRepository(mongoClient.Database(serviceConfig.Mongo.Database))
 	sessionCipher, err := security.NewCipherFromFile(serviceConfig.Xianyu.SessionKeyPath)
 	if err != nil {
 		_ = mongoClient.Disconnect(context.Background())
 		return nil, fmt.Errorf("initialize session cipher: %w", err)
 	}
 	xianyuService := xianyu.NewService(serviceConfig.Xianyu, sessionRepository, sessionCipher)
+	pinduoduoService := pinduoduo.NewService(pinduoduoRepository, sessionCipher)
 	catalogService := catalog.NewService(serviceConfig.Catalog)
 	marketplaceService := marketplace.NewService(listingRepository, publishRepository, xianyuService)
+	priceCompareService := pricecompare.NewService(xianyuService, pinduoduoService)
 
 	runtimeContext, runtimeCancel := context.WithCancel(context.Background())
 	publishService := publish.NewService(runtimeContext, publishRepository, xianyuService, marketplaceService)
 	go syncXianyuListings(runtimeContext, marketplaceService)
 
 	return &ServiceContext{
-		Config:             serviceConfig,
-		MongoClient:        mongoClient,
-		PublishRepository:  publishRepository,
-		SessionRepository:  sessionRepository,
-		ListingRepository:  listingRepository,
-		XianyuService:      xianyuService,
-		PublishService:     publishService,
-		CatalogService:     catalogService,
-		MarketplaceService: marketplaceService,
-		runtimeCancel:      runtimeCancel,
+		Config:              serviceConfig,
+		MongoClient:         mongoClient,
+		PublishRepository:   publishRepository,
+		SessionRepository:   sessionRepository,
+		PinduoduoRepository: pinduoduoRepository,
+		ListingRepository:   listingRepository,
+		XianyuService:       xianyuService,
+		PinduoduoService:    pinduoduoService,
+		PublishService:      publishService,
+		CatalogService:      catalogService,
+		MarketplaceService:  marketplaceService,
+		PriceCompareService: priceCompareService,
+		runtimeCancel:       runtimeCancel,
 	}, nil
 }
 

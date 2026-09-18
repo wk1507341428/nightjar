@@ -36,6 +36,56 @@ type MarketplaceSyncResponse {
 	LastSyncedAt string `json:"lastSyncedAt"`
 }
 
+type PriceComparisonProduct {
+	SourceItemId string `json:"sourceItemId,optional"`
+	ItemNo       string `json:"itemNo,optional"`
+	Brand        string `json:"brand,optional"`
+	Name         string `json:"name"`
+	ImageUrl     string `json:"imageUrl,optional"`
+	PriceCents   int64  `json:"priceCents,optional"`
+	OriginalPriceCents int64 `json:"originalPriceCents,optional"`
+}
+
+type PriceComparisonFilters {
+	Condition []string `json:"condition,optional"`
+	Shipping  string   `json:"shipping,optional"`
+	MaxResultsPerPlatform int `json:"maxResultsPerPlatform,optional"`
+}
+
+type CreatePriceComparisonRequest {
+	Product   PriceComparisonProduct `json:"product"`
+	Platforms []string               `json:"platforms"`
+	Filters   PriceComparisonFilters `json:"filters"`
+}
+
+type PriceComparisonCandidate {
+	Platform       string `json:"platform"`
+	PlatformItemId string `json:"platformItemId"`
+	Title          string `json:"title"`
+	PriceCents     int64  `json:"priceCents"`
+	OriginalPriceCents int64 `json:"originalPriceCents,optional"`
+	ImageUrl       string `json:"imageUrl,optional"`
+	ItemUrl        string `json:"itemUrl,optional"`
+	MatchScore     int    `json:"matchScore"`
+	MatchReason    string `json:"matchReason"`
+	Attributes     map[string]string `json:"attributes,optional"`
+}
+
+type PriceComparisonPlatformResult {
+	Platform   string                     `json:"platform"`
+	Status     string                     `json:"status"`
+	Message    string                     `json:"message,optional"`
+	Candidates []PriceComparisonCandidate `json:"candidates"`
+}
+
+type PriceComparisonResponse {
+	Id              string                          `json:"id"`
+	Status          string                          `json:"status"`
+	Product         PriceComparisonProduct          `json:"product"`
+	PlatformResults []PriceComparisonPlatformResult `json:"platformResults"`
+	CreatedAt       string                          `json:"createdAt"`
+}
+
 type SeckillActivity {
 	Id        string `json:"id"`
 	Name      string `json:"name"`
@@ -56,12 +106,19 @@ type ConnectionResponse {
 	Platform       string `json:"platform"`
 	Status         string `json:"status"`
 	Authenticated  bool   `json:"authenticated"`
+	SearchReady    bool   `json:"searchReady"`
 	LastVerifiedAt string `json:"lastVerifiedAt,optional"`
 	Message        string `json:"message,optional"`
 }
 
 type SaveXianyuSessionRequest {
-	Cookie string `json:"cookie"`
+	Credential string `json:"credential,optional"`
+	Cookie string `json:"cookie,optional"`
+}
+
+type SavePinduoduoSessionRequest {
+	Credential string `json:"credential,optional"`
+	Cookie     string `json:"cookie,optional"`
 }
 
 type CreatePublishTaskRequest {
@@ -112,6 +169,9 @@ service sidejob-api {
 	@handler syncMarketplaceListings
 	post /marketplace/sync returns (MarketplaceSyncResponse)
 
+	@handler createPriceComparison
+	post /price-comparisons (CreatePriceComparisonRequest) returns (PriceComparisonResponse)
+
 	@handler saveXianyuSession
 	post /xianyu/session (SaveXianyuSessionRequest) returns (ConnectionResponse)
 
@@ -120,6 +180,15 @@ service sidejob-api {
 
 	@handler deleteXianyuSession
 	delete /xianyu/session returns (ConnectionResponse)
+
+	@handler savePinduoduoSession
+	post /pinduoduo/session (SavePinduoduoSessionRequest) returns (ConnectionResponse)
+
+	@handler getPinduoduoConnection
+	get /pinduoduo/connection returns (ConnectionResponse)
+
+	@handler deletePinduoduoSession
+	delete /pinduoduo/session returns (ConnectionResponse)
 
 	@handler createPublishTask
 	post /xianyu/publish-tasks (CreatePublishTaskRequest) returns (PublishTaskResponse)

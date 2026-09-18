@@ -3,6 +3,9 @@ import { Drawer, Spin } from 'antd';
 import { getWarehouseName } from './constants';
 import type { ProductDetail, ProductSku } from './types';
 
+/** 商品详情底部内容标签。 */
+type DetailContentTab = 'description' | 'purchaseNotice';
+
 /** 人民币金额格式化器。 */
 const CURRENCY_FORMATTER = new Intl.NumberFormat('zh-CN', {
   style: 'currency',
@@ -168,6 +171,7 @@ export function ProductDetailDrawer({
   marketplacePlatforms,
   onClose,
   onPublish,
+  onCompare,
 }: {
   product: ProductDetail | null;
   isLoading: boolean;
@@ -175,6 +179,7 @@ export function ProductDetailDrawer({
   marketplacePlatforms: string[];
   onClose: () => void;
   onPublish: (product: ProductDetail) => void;
+  onCompare: (product: ProductDetail) => void;
 }) {
   // 在售 SKU 列表。
   const onSaleSkus = product?.spec_items?.filter((sku) => sku?.approve_status === 'onsale') ?? [];
@@ -182,6 +187,15 @@ export function ProductDetailDrawer({
   const totalStock = product ? getProductStock(product) : 0;
   // 图文详情图片列表。
   const detailImageUrls = useMemo(() => extractDetailImageUrls(product?.intro), [product?.intro]);
+  // 购买须知图片列表。
+  const purchaseNoticeImageUrls = useMemo(() => extractDetailImageUrls(product?.purchase_notice), [product?.purchase_notice]);
+  // 当前商品内容状态标识。
+  const currentProductKey = product?.item_id ?? product?.goods_id ?? '';
+  // 用户主动选择的商品内容标签。
+  const [contentTabSelection, setContentTabSelection] = useState<{ productKey: string; tab: DetailContentTab }>({
+    productKey: '',
+    tab: 'description',
+  });
   // 商品图片滚动容器。
   const galleryRef = useRef<HTMLDivElement>(null);
   // 鼠标拖拽过程数据。
@@ -192,6 +206,22 @@ export function ProductDetailDrawer({
     nextScrollLeft: 0,
     animationFrameId: null as number | null,
   });
+
+  // 当前商品是否开放购买须知。
+  const hasPurchaseNotice = product?.purchase_notice_open === true && purchaseNoticeImageUrls.length > 0;
+  // 当前展示的详情内容标签。
+  let activeContentTab: DetailContentTab = 'description';
+  if (contentTabSelection.productKey === currentProductKey) {
+    activeContentTab = contentTabSelection.tab;
+  }
+  if (activeContentTab === 'description' && detailImageUrls.length === 0 && hasPurchaseNotice) {
+    activeContentTab = 'purchaseNotice';
+  }
+
+  /** 切换商品底部的图文详情或购买须知。 */
+  function handleSelectContentTab(tab: DetailContentTab) {
+    setContentTabSelection({ productKey: currentProductKey, tab });
+  }
 
   /** 开始拖动商品图片。 */
   function handleGalleryPointerDown(event: React.PointerEvent<HTMLDivElement>) {
@@ -289,7 +319,10 @@ export function ProductDetailDrawer({
               {getSubsidyAmount(product) > 0 ? <em>平台补贴 {formatPrice(getSubsidyAmount(product))}</em> : null}
               <span>共 {totalStock} 件</span>
             </div>
-            <button type="button" className="detail-publish-button" onClick={() => onPublish(product)}>发布到闲鱼 <span>→</span></button>
+            <div className="detail-action-group">
+              <button type="button" className="detail-publish-button" onClick={() => onPublish(product)}>发布到闲鱼 <span>→</span></button>
+              <button type="button" className="detail-compare-button" onClick={() => onCompare(product)}>一键比价</button>
+            </div>
           </div>
 
           {getSubsidyAmount(product) > 0 ? <section className="seckill-banner"><div><small>FLASH SALE</small><strong>限时秒杀</strong></div><span>平台已补贴 {formatPrice(getSubsidyAmount(product))}</span><em>{formatPromotionEndTime(product?.promotion_end_time) || '活动进行中'}</em></section> : null}
@@ -307,7 +340,19 @@ export function ProductDetailDrawer({
             <div><span>销售状态</span><strong>{product?.approve_status === 'onsale' ? '在售' : '非在售'}</strong></div>
           </section>
 
-          {detailImageUrls.length > 0 ? <section className="detail-rich-content"><div className="detail-rich-content__heading"><small>PRODUCT STORY</small><h3>商品图文详情</h3></div><div className="detail-rich-content__images">{detailImageUrls.map((imageUrl, imageIndex) => <img key={`${imageUrl}-${imageIndex}`} src={imageUrl} alt={`商品详情图 ${imageIndex + 1}`} loading="lazy" />)}</div></section> : null}
+          {detailImageUrls.length > 0 || hasPurchaseNotice ? (
+            <section className="detail-rich-content">
+              <div className="detail-rich-content__heading">
+                <small>PRODUCT INFORMATION</small>
+                <div className="detail-content-tabs" role="tablist" aria-label="商品详情内容">
+                  <button type="button" role="tab" aria-selected={activeContentTab === 'description'} className={activeContentTab === 'description' ? 'detail-content-tab detail-content-tab--active' : 'detail-content-tab'} onClick={() => handleSelectContentTab('description')}>图文详情</button>
+                  {hasPurchaseNotice ? <button type="button" role="tab" aria-selected={activeContentTab === 'purchaseNotice'} className={activeContentTab === 'purchaseNotice' ? 'detail-content-tab detail-content-tab--active' : 'detail-content-tab'} onClick={() => handleSelectContentTab('purchaseNotice')}>购买须知</button> : null}
+                </div>
+              </div>
+              {activeContentTab === 'description' ? <div className="detail-rich-content__images" role="tabpanel">{detailImageUrls.map((imageUrl, imageIndex) => <img key={`${imageUrl}-${imageIndex}`} src={imageUrl} alt={`商品详情图 ${imageIndex + 1}`} loading="lazy" />)}</div> : null}
+              {activeContentTab === 'purchaseNotice' ? <div className="detail-rich-content__images detail-rich-content__images--notice" role="tabpanel">{purchaseNoticeImageUrls.map((imageUrl, imageIndex) => <img key={`${imageUrl}-${imageIndex}`} src={imageUrl} alt={`购买须知 ${imageIndex + 1}`} loading="lazy" />)}</div> : null}
+            </section>
+          ) : null}
         </div>
       ) : null}
     </Drawer>

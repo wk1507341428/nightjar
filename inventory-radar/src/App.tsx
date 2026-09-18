@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Select, Spin, Switch } from 'antd';
 import { fetchBrandOptions, fetchProductDetail, fetchSeckillProducts, searchProducts } from './api';
 import { INITIAL_SEARCH_STATE, INITIAL_SECKILL_STATE, PRODUCT_PAGE_SIZE, REGION_OPTIONS, getWarehouseName, getWarehouseShortName } from './constants';
-import { loadRecentSearches, saveRecentSearch } from './storage';
+import { loadCachedBrandOptions, loadRecentSearches, saveCachedBrandOptions, saveRecentSearch } from './storage';
 import { PublishProductModal } from './PublishProductModal';
 import { ProductDetailDrawer } from './ProductDetailDrawer';
 import { MarketplacePage } from './MarketplacePage';
+import { PriceComparisonModal } from './PriceComparisonModal';
 import { XianyuConnectionControl } from './XianyuConnectionControl';
 import { fetchMarketplaceListings, syncMarketplaceListings } from './xianyuApi';
 import type {
@@ -35,12 +36,6 @@ const TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
 
 /** 首页快捷分类。 */
 const QUICK_CATEGORIES = ['全部', '秒杀专区', '渠道上架', '运动鞋', '跑步鞋', '休闲鞋', '童鞋', '男装', '女装', '箱包'];
-
-/** 品牌远程搜索最少输入字符数。 */
-const BRAND_SEARCH_MIN_LENGTH = 2;
-
-/** 品牌远程搜索防抖等待时间。 */
-const BRAND_SEARCH_DEBOUNCE_MS = 600;
 
 /** 商品排序方式。 */
 type SortMode = 'default' | 'priceAsc' | 'priceDesc' | 'discount';
@@ -388,7 +383,11 @@ export function App() {
   // 闲鱼最近同步时间。
   const [marketplaceLastSyncedAt, setMarketplaceLastSyncedAt] = useState<string>();
   // 最近查询记录。
-  const [recentSearches, setRecentSearches] = useState<RecentSearch[]>(loadRecentSearches);
+  const [recentSearches, setRecentSearches] = useState<RecentSearch[]>(() => (
+    loadRecentSearches().filter((recentSearch) => (
+      REGION_OPTIONS.some((region) => region.id === recentSearch.regionId)
+    ))
+  ));
   // 当前商详数据。
   const [selectedProduct, setSelectedProduct] = useState<ProductDetail | null>(null);
   // 商详加载状态。
@@ -399,6 +398,8 @@ export function App() {
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   // 当前准备发布到闲鱼的商品。
   const [publishProduct, setPublishProduct] = useState<ProductDetail | null>(null);
+  // 当前用于比价的来源商品。
+  const [comparisonProduct, setComparisonProduct] = useState<ProductDetail | null>(null);
   // 是否已执行首页首次加载。
   const hasLoadedInitialProducts = useRef(false);
   // 最新搜索请求序号。
@@ -407,12 +408,6 @@ export function App() {
   const seckillRequestSequence = useRef(0);
   // 最新商详请求序号。
   const detailRequestSequence = useRef(0);
-  // 品牌搜索防抖计时器。
-  const brandSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 品牌输入框最后一次有效关键词。
-  const brandSearchQuery = useRef('');
-  // 已提交的品牌搜索标识。
-  const submittedBrandSearchKey = useRef('');
   // 最新品牌请求序号。
   const brandRequestSequence = useRef(0);
   // 地址切换时使用的最新地区 ID。
@@ -424,7 +419,7 @@ export function App() {
   // 当前结果区标题。
   const resultTitle = getCatalogTitle(catalogMode, isBrowseMode, currentRegion.shortName);
   // 页面级接口加载状态。
-  const isGlobalLoading = searchState.isLoading || seckillState.isLoading || isBrandLoading || isMarketplaceLoading;
+  const isGlobalLoading = searchState.isLoading || seckillState.isLoading || isMarketplaceLoading;
   // 是否还能继续加载。
   const canLoadMore = catalogMode === 'seckill'
     ? seckillState.products.length < seckillState.total
@@ -616,77 +611,42 @@ export function App() {
     }
   }
 
-  /** 按地区和输入内容加载品牌候选项。 */
-  async function loadBrandOptions(nextRegionId: string, brandQuery = '') {
+  /** 按地区加载品牌门店，优先使用本地缓存。 */
+  async function loadBrandOptions(nextRegionId: string) {
     // 本次品牌请求序号。
     const requestSequence = brandRequestSequence.current + 1;
     brandRequestSequence.current = requestSequence;
-    setIsBrandLoading(true);
+    // 当前地区的品牌缓存。
+    const cachedBrandOptions = loadCachedBrandOptions(nextRegionId);
+    if (cachedBrandOptions) {
+      setBrandOptions(cachedBrandOptions.options);
+    }
+    if (cachedBrandOptions?.isFresh) {
+      setIsBrandLoading(false);
+      return;
+    }
+    setIsBrandLoading(!cachedBrandOptions);
 
     try {
-      // 后端检索得到的品牌候选项。
-      const nextBrandOptions = await fetchBrandOptions(nextRegionId, brandQuery);
+      // 品牌馆接口返回的当前地区品牌门店。
+      const nextBrandOptions = await fetchBrandOptions(nextRegionId);
       if (requestSequence !== brandRequestSequence.current) {
         return;
       }
       setBrandOptions(nextBrandOptions);
+      saveCachedBrandOptions(nextRegionId, nextBrandOptions);
     } catch {
       if (requestSequence !== brandRequestSequence.current) {
         return;
       }
-      setBrandOptions([]);
+      if (!cachedBrandOptions) {
+        setBrandOptions([]);
+      }
     } finally {
       if (requestSequence === brandRequestSequence.current) {
         setIsBrandLoading(false);
       }
     }
-  }
-
-  /** 防抖执行品牌后端检索。 */
-  function handleSearchBrand(brandQuery: string) {
-    // 清理后的品牌关键词。
-    const normalizedBrandQuery = brandQuery.trim();
-
-    if (brandSearchTimer.current) {
-      clearTimeout(brandSearchTimer.current);
-      brandSearchTimer.current = null;
-    }
-    brandSearchQuery.current = normalizedBrandQuery;
-    if (normalizedBrandQuery.length < BRAND_SEARCH_MIN_LENGTH) {
-      return;
-    }
-
-    brandSearchTimer.current = setTimeout(() => {
-      brandSearchTimer.current = null;
-      submitBrandSearch(normalizedBrandQuery);
-    }, BRAND_SEARCH_DEBOUNCE_MS);
-  }
-
-  /** 提交未重复的品牌关键词搜索。 */
-  function submitBrandSearch(brandQuery: string) {
-    // 当前搜索唯一标识。
-    const searchKey = `${regionId}:${brandQuery}`;
-    if (submittedBrandSearchKey.current === searchKey) {
-      return;
-    }
-
-    submittedBrandSearchKey.current = searchKey;
-    void loadBrandOptions(regionId, brandQuery);
-  }
-
-  /** 在品牌输入框失焦时立即提交最后一次有效搜索。 */
-  function handleBlurBrandSearch() {
-    // 最后一次输入的品牌关键词。
-    const latestBrandQuery = brandSearchQuery.current;
-    if (latestBrandQuery.length < BRAND_SEARCH_MIN_LENGTH) {
-      return;
-    }
-
-    if (brandSearchTimer.current) {
-      clearTimeout(brandSearchTimer.current);
-      brandSearchTimer.current = null;
-    }
-    submitBrandSearch(latestBrandQuery);
   }
 
   /** 加载首页默认商品。 */
@@ -771,9 +731,6 @@ export function App() {
 
     return () => {
       window.removeEventListener('hashchange', handleRouteChange);
-      if (brandSearchTimer.current) {
-        clearTimeout(brandSearchTimer.current);
-      }
     };
   }, []);
 
@@ -788,7 +745,6 @@ export function App() {
 
   /** 切换查询地区并加载该地区首页商品。 */
   function handleChangeRegion(nextRegionId: string) {
-    handleBlurBrandSearch();
     currentRegionIdRef.current = nextRegionId;
     setRegionId(nextRegionId);
     setQuery('');
@@ -802,8 +758,6 @@ export function App() {
     setBrandId('all');
     setBrandOptions([]);
     brandRequestSequence.current += 1;
-    submittedBrandSearchKey.current = '';
-    brandSearchQuery.current = '';
     void loadBrandOptions(nextRegionId);
     if (catalogMode === 'seckill') {
       void loadSeckillProducts({ nextRegionId });
@@ -914,7 +868,7 @@ export function App() {
       // 商品自身仓库 ID；“全部”模式下商详仍必须指定具体仓库。
       const productRegionId = product?.regionauth_id
         ?? product?.distributor_info?.regionauth_id
-        ?? (regionId === 'all' ? '3' : regionId);
+        ?? regionId;
       // 完整商品详情。
       const productDetail = await fetchProductDetail(itemId, productRegionId);
 
@@ -955,6 +909,16 @@ export function App() {
   /** 关闭闲鱼发布确认面板。 */
   function handleClosePublish() {
     setPublishProduct(null);
+  }
+
+  /** 打开当前商品的一键比价弹窗。 */
+  function handleCompareProduct(product: ProductDetail) {
+    setComparisonProduct(product);
+  }
+
+  /** 关闭一键比价弹窗。 */
+  function handleCloseComparison() {
+    setComparisonProduct(null);
   }
 
   return (
@@ -1082,7 +1046,7 @@ export function App() {
                   <p>共找到 {searchState.total.toLocaleString('zh-CN')} 件商品</p>
                 </div>
                 <div className="catalog-controls">
-                  <Select className="brand-select" value={brandId} onChange={handleChangeBrand} loading={isBrandLoading} showSearch filterOption={false} onSearch={handleSearchBrand} onBlur={handleBlurBrandSearch} popupMatchSelectWidth={260} options={[{ value: 'all', label: '全部品牌' }, ...brandOptions]} aria-label="品牌筛选" />
+                  <Select className="brand-select" value={brandId} onChange={handleChangeBrand} loading={isBrandLoading} showSearch optionFilterProp="label" popupMatchSelectWidth={260} options={[{ value: 'all', label: '全部品牌' }, ...brandOptions]} aria-label="品牌筛选" />
                   <label className="stock-toggle"><Switch size="small" checked={stockOnly} onChange={setStockOnly} /><span>只看有货</span></label>
                   <Select className="sort-select" value={sortMode} onChange={handleChangeSort} options={[{ value: 'default', label: '综合排序' }, { value: 'priceAsc', label: '价格从低到高' }, { value: 'priceDesc', label: '价格从高到低' }, { value: 'discount', label: '折扣从低到高' }]} aria-label="商品排序" />
                   <button type="button" className="refresh-button" onClick={handleRefreshProducts} disabled={searchState.isLoading}><RefreshIcon /><span>{searchState.updatedAt || '刷新'}</span></button>
@@ -1108,6 +1072,7 @@ export function App() {
           marketplacePlatforms={getProductMarketplacePlatforms(selectedProduct?.item_no)}
           onClose={handleCloseDetail}
           onPublish={handleOpenPublish}
+          onCompare={handleCompareProduct}
         />
       ) : null}
       {publishProduct ? (
@@ -1116,6 +1081,20 @@ export function App() {
           product={publishProduct}
           onClose={handleClosePublish}
           onPublished={loadMarketplaceListings}
+        />
+      ) : null}
+      {comparisonProduct ? (
+        <PriceComparisonModal
+          product={{
+            sourceItemId: comparisonProduct.default_item_id ?? comparisonProduct.item_id,
+            itemNo: comparisonProduct.item_no,
+            brand: comparisonProduct.goods_brand,
+            name: comparisonProduct.item_name ?? '',
+            imageUrl: comparisonProduct.main_img ?? comparisonProduct.pics?.[0],
+            priceCents: getEffectivePrice(comparisonProduct),
+            originalPriceCents: Number(comparisonProduct.market_price ?? 0),
+          }}
+          onClose={handleCloseComparison}
         />
       ) : null}
     </div>

@@ -15,7 +15,7 @@ import (
 	"sidejob-server/internal/types"
 )
 
-// saveXianyuSessionHandler 校验、加密并保存闲鱼 Cookie。
+// saveXianyuSessionHandler 校验、加密并保存闲鱼 cURL 或 Cookie。
 func saveXianyuSessionHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
 		var requestBody types.SaveXianyuSessionRequest
@@ -23,12 +23,16 @@ func saveXianyuSessionHandler(serviceContext *svc.ServiceContext) http.HandlerFu
 			writeError(responseWriter, http.StatusBadRequest, "Cookie 参数格式错误")
 			return
 		}
-		if strings.TrimSpace(requestBody.Cookie) == "" {
-			writeError(responseWriter, http.StatusBadRequest, "请粘贴闲鱼请求中的完整 Cookie")
+		rawCredential := strings.TrimSpace(requestBody.Credential)
+		if rawCredential == "" {
+			rawCredential = strings.TrimSpace(requestBody.Cookie)
+		}
+		if rawCredential == "" {
+			writeError(responseWriter, http.StatusBadRequest, "请粘贴任意闲鱼请求 cURL 或完整 Cookie")
 			return
 		}
 
-		displayName, err := serviceContext.XianyuService.Connect(request.Context(), requestBody.Cookie)
+		displayName, searchReady, err := serviceContext.XianyuService.Connect(request.Context(), rawCredential)
 		if err != nil {
 			logx.Errorf("connect xianyu API session: %v", err)
 			writeError(responseWriter, http.StatusUnauthorized, err.Error())
@@ -39,6 +43,7 @@ func saveXianyuSessionHandler(serviceContext *svc.ServiceContext) http.HandlerFu
 			Platform:       model.XianyuPlatform,
 			Status:         "connected",
 			Authenticated:  true,
+			SearchReady:    searchReady,
 			LastVerifiedAt: time.Now().Format(time.RFC3339),
 			Message:        "已连接 " + displayName,
 		})
@@ -67,6 +72,7 @@ func getXianyuConnectionHandler(serviceContext *svc.ServiceContext) http.Handler
 			Platform:       model.XianyuPlatform,
 			Status:         "connected",
 			Authenticated:  true,
+			SearchReady:    session.EncryptedSearchCredential != "",
 			LastVerifiedAt: session.UpdatedAt.Format(time.RFC3339),
 			Message:        "已连接 " + session.DisplayName,
 		})

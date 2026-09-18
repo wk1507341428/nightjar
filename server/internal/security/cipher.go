@@ -13,7 +13,7 @@ import (
 
 const encryptionKeySize = 32
 
-// Cipher 使用本机独立密钥加密闲鱼 Cookie。
+// Cipher 使用服务端独立密钥加密各平台登录凭证。
 type Cipher struct {
 	aead cipher.AEAD
 }
@@ -51,7 +51,7 @@ func (sessionCipher *Cipher) Encrypt(plaintext string) (string, error) {
 	return base64.RawStdEncoding.EncodeToString(sealedPayload), nil
 }
 
-// Decrypt 解密数据库中的闲鱼会话。
+// Decrypt 解密数据库中的平台会话。
 func (sessionCipher *Cipher) Decrypt(encodedPayload string) (string, error) {
 	sealedPayload, err := base64.RawStdEncoding.DecodeString(encodedPayload)
 	if err != nil {
@@ -63,7 +63,7 @@ func (sessionCipher *Cipher) Decrypt(encodedPayload string) (string, error) {
 	}
 	plaintext, err := sessionCipher.aead.Open(nil, sealedPayload[:nonceSize], sealedPayload[nonceSize:], nil)
 	if err != nil {
-		return "", errors.New("decrypt xianyu session failed")
+		return "", errors.New("decrypt platform session failed")
 	}
 	return string(plaintext), nil
 }

@@ -14,7 +14,6 @@ export const PRODUCT_PAGE_SIZE = 24;
 
 /** 地区列表。 */
 export const REGION_OPTIONS: RegionOption[] = [
-  { id: 'all', code: 'ALL', name: '全部仓库', shortName: '全部' },
   { id: '3', code: 'FVSH', name: '上海佛罗伦萨小镇', shortName: '上海' },
   { id: '2', code: 'FVJJ', name: '京津佛罗伦萨小镇', shortName: '京津' },
   { id: '4', code: 'FVGF', name: '广佛佛罗伦萨小镇', shortName: '广佛' },
@@ -24,7 +23,7 @@ export const REGION_OPTIONS: RegionOption[] = [
 ];
 
 /** 可用于接口查询的实际仓库地区。 */
-export const WAREHOUSE_REGION_OPTIONS = REGION_OPTIONS.filter((region) => region.id !== 'all');
+export const WAREHOUSE_REGION_OPTIONS = REGION_OPTIONS;
 
 /** 根据地区 ID 返回仓库名称。 */
 export function getWarehouseName(regionId?: string): string {

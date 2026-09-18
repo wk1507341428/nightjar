@@ -33,6 +33,11 @@ func RegisterHandlers(server *rest.Server, serviceContext *svc.ServiceContext) {
 		},
 		{
 			Method:  http.MethodPost,
+			Path:    "/api/price-comparisons",
+			Handler: createPriceComparisonHandler(serviceContext),
+		},
+		{
+			Method:  http.MethodPost,
 			Path:    "/api/xianyu/session",
 			Handler: saveXianyuSessionHandler(serviceContext),
 		},
@@ -45,6 +50,21 @@ func RegisterHandlers(server *rest.Server, serviceContext *svc.ServiceContext) {
 			Method:  http.MethodDelete,
 			Path:    "/api/xianyu/session",
 			Handler: deleteXianyuSessionHandler(serviceContext),
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/api/pinduoduo/session",
+			Handler: savePinduoduoSessionHandler(serviceContext),
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/pinduoduo/connection",
+			Handler: getPinduoduoConnectionHandler(serviceContext),
+		},
+		{
+			Method:  http.MethodDelete,
+			Path:    "/api/pinduoduo/session",
+			Handler: deletePinduoduoSessionHandler(serviceContext),
 		},
 		{
 			Method:  http.MethodPost,

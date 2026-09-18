@@ -45,6 +45,25 @@ type OnSaleItem struct {
 	CategoryID string
 }
 
+// SearchInput 是闲鱼公开搜索所需的统一筛选条件。
+type SearchInput struct {
+	Keyword     string
+	RowsPerPage int
+	Condition   []string
+	Shipping    string
+}
+
+// SearchItem 是闲鱼市场搜索返回的候选商品。
+type SearchItem struct {
+	ItemID             string
+	Title              string
+	PriceCents         int64
+	OriginalPriceCents int64
+	ImageURL           string
+	ItemURL            string
+	Attributes         map[string]string
+}
+
 // Service 管理加密会话并编排闲鱼 MTop 发布流程。
 type Service struct {
 	config            config.XianyuConfig
@@ -65,26 +84,36 @@ func NewService(
 	}
 }
 
-// Connect 校验并加密保存用户提供的闲鱼 Cookie。
-func (service *Service) Connect(ctx context.Context, rawCookie string) (string, error) {
-	client, err := NewClient(service.config, strings.TrimSpace(rawCookie))
+// Connect 解析任意闲鱼 cURL 或 Cookie，校验后加密保存可用凭证。
+func (service *Service) Connect(ctx context.Context, rawCredential string) (string, bool, error) {
+	parsedCredential, err := ParseCredential(rawCredential)
 	if err != nil {
-		return "", err
+		return "", false, err
+	}
+	client, err := NewClient(service.config, parsedCredential.Cookie)
+	if err != nil {
+		return "", false, err
 	}
 
+	// 用户资料接口只用于补充昵称；部分可搜索的静默会话无法访问该接口，不阻断凭证保存。
 	var navigationResponse map[string]any
-	if err := client.Call(ctx, "mtop.idle.web.user.page.nav", "1.0", map[string]any{}, &navigationResponse); err != nil {
-		return "", fmt.Errorf("验证闲鱼登录失败：%w", err)
-	}
+	_ = client.Call(ctx, "mtop.idle.web.user.page.nav", "1.0", map[string]any{}, &navigationResponse)
 	displayName := readDisplayName(navigationResponse)
 	if displayName == "" {
-		return "", ErrSessionExpired
+		existingSession, existingErr := service.sessionRepository.Get(ctx)
+		if existingErr == nil {
+			displayName = existingSession.DisplayName
+		}
+		if displayName == "" {
+			displayName = "闲鱼凭证"
+		}
 	}
 
-	if err := service.saveCookie(ctx, client.CookieHeader(), displayName); err != nil {
-		return "", err
+	hasSearchCredential, err := service.saveConnectedCredential(ctx, client.CookieHeader(), displayName, parsedCredential.SearchCredential)
+	if err != nil {
+		return "", false, err
 	}
-	return displayName, nil
+	return displayName, hasSearchCredential, nil
 }
 
 // Connection 返回本地是否保存了闲鱼会话。
@@ -139,6 +168,166 @@ func (service *Service) ListOnSaleItems(ctx context.Context) ([]OnSaleItem, erro
 		}
 	}
 	return items, nil
+}
+
+// SearchItems 使用闲鱼 PC 搜索接口查询市场商品，复用当前 PC 登录态。
+func (service *Service) SearchItems(ctx context.Context, input SearchInput) ([]SearchItem, error) {
+	client, displayName, err := service.loadClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		persistenceContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName)
+	}()
+
+	rowsPerPage := input.RowsPerPage
+	if rowsPerPage <= 0 || rowsPerPage > 30 {
+		rowsPerPage = 30
+	}
+	// PC 搜索页固定使用 quickFilter:filterFreePostage,filterNew 表示包邮和全新。
+	searchFilter := buildPCSearchFilter(input)
+	searchRequest := map[string]any{
+		"pageNumber":        1,
+		"keyword":           input.Keyword,
+		"fromFilter":        searchFilter != "",
+		"rowsPerPage":       rowsPerPage,
+		"sortValue":         "",
+		"sortField":         "",
+		"customDistance":    "",
+		"gps":               "",
+		"propValueStr":      map[string]string{"searchFilter": searchFilter},
+		"customGps":         "",
+		"searchReqFromPage": "pcSearch",
+		"extraFilterValue":  "{}",
+		"userPositionJson":  "{}",
+	}
+	var searchResponse map[string]any
+	if err := client.CallWithSearchCredential(ctx, "mtop.taobao.idlemtopsearch.pc.search", "1.0", searchRequest, &searchResponse); err != nil {
+		return nil, fmt.Errorf("搜索闲鱼市场商品失败：%w", err)
+	}
+
+	searchItems := make([]SearchItem, 0)
+	for _, resultValue := range sliceValue(searchResponse["resultList"]) {
+		result := extractPCSearchItem(mapValue(resultValue))
+		itemID := firstNonEmptyString(result, "id", "itemId", "item_id")
+		if itemID == "" {
+			continue
+		}
+		itemTitle := firstNonEmptyString(result, "title", "itemTitle")
+		imageURL := firstNonEmptyString(result, "imageUrl", "picUrl", "mainPic", "mainPicUrl")
+		priceCents := parseSearchPriceCents(result)
+		searchItems = append(searchItems, SearchItem{
+			ItemID:             itemID,
+			Title:              itemTitle,
+			PriceCents:         priceCents,
+			OriginalPriceCents: parseSearchOriginalPriceCents(result),
+			ImageURL:           imageURL,
+			ItemURL:            "https://www.goofish.com/item?id=" + itemID,
+			Attributes: map[string]string{
+				"condition": strings.Join(input.Condition, ","),
+				"shipping":  input.Shipping,
+			},
+		})
+	}
+	return searchItems, nil
+}
+
+// buildPCSearchFilter 按闲鱼 PC 页面约定生成快捷筛选字符串。
+func buildPCSearchFilter(input SearchInput) string {
+	filters := make([]string, 0, 2)
+	if input.Shipping == "free" {
+		filters = append(filters, "filterFreePostage")
+	}
+	if containsString(input.Condition, "new") {
+		filters = append(filters, "filterNew")
+	}
+	if len(filters) == 0 {
+		return ""
+	}
+	return "quickFilter:" + strings.Join(filters, ",")
+}
+
+// containsString 判断筛选值是否存在。
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), expected) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractPCSearchItem 兼容 PC 搜索接口的新旧两种 resultList 数据结构。
+func extractPCSearchItem(result map[string]any) map[string]any {
+	data := mapValue(result["data"])
+	if len(data) == 0 {
+		return result
+	}
+	item := mapValue(data["item"])
+	main := mapValue(item["main"])
+	exContent := mapValue(main["exContent"])
+	if len(exContent) > 0 {
+		return exContent
+	}
+	return data
+}
+
+// firstNonEmptyString 读取多个可能的闲鱼字段名。
+func firstNonEmptyString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := stringValue(values[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// parseSearchPriceCents 兼容闲鱼搜索卡片中不同的价格字段。
+func parseSearchPriceCents(result map[string]any) int64 {
+	for _, key := range []string{"price", "priceText", "itemPrice"} {
+		if priceCents := parseYuanPriceCents(firstNonEmptyString(result, key)); priceCents > 0 {
+			return priceCents
+		}
+		if priceCents := parsePriceComponents(result[key]); priceCents > 0 {
+			return priceCents
+		}
+	}
+	return 0
+}
+
+// parsePriceComponents 解析 PC 搜索卡片的 sign/integer/decimal 价格组件。
+func parsePriceComponents(value any) int64 {
+	integerPart := ""
+	decimalPart := ""
+	for _, componentValue := range sliceValue(value) {
+		component := mapValue(componentValue)
+		switch stringValue(component["type"]) {
+		case "integer":
+			integerPart = stringValue(component["text"])
+		case "decimal":
+			decimalPart = strings.TrimPrefix(stringValue(component["text"]), ".")
+		}
+	}
+	if integerPart == "" {
+		return 0
+	}
+	priceText := integerPart
+	if decimalPart != "" {
+		priceText += "." + decimalPart
+	}
+	return parseYuanPriceCents(priceText)
+}
+
+// parseSearchOriginalPriceCents 读取划线原价字段。
+func parseSearchOriginalPriceCents(result map[string]any) int64 {
+	for _, key := range []string{"originalPrice", "originPrice", "marketPrice"} {
+		if priceCents := parseYuanPriceCents(firstNonEmptyString(result, key)); priceCents > 0 {
+			return priceCents
+		}
+	}
+	return 0
 }
 
 // Publish 通过闲鱼 API 完成图片上传、属性推荐、服务配置和正式发布。
@@ -436,7 +625,62 @@ func (service *Service) loadClient(ctx context.Context) (*Client, string, error)
 		return nil, "", err
 	}
 	client, err := NewClient(service.config, rawCookie)
-	return client, session.DisplayName, err
+	if err != nil {
+		return nil, "", err
+	}
+	if session.EncryptedSearchCredential != "" {
+		decryptedCredential, decryptErr := service.sessionCipher.Decrypt(session.EncryptedSearchCredential)
+		if decryptErr != nil {
+			return nil, "", decryptErr
+		}
+		searchCredential, decodeErr := DecodeSearchCredential(decryptedCredential)
+		if decodeErr != nil {
+			return nil, "", decodeErr
+		}
+		client.SetSearchCredential(searchCredential)
+	}
+	return client, session.DisplayName, nil
+}
+
+// saveConnectedCredential 保存 Cookie，并在 cURL 含搜索安全参数时更新比价凭证。
+func (service *Service) saveConnectedCredential(
+	ctx context.Context,
+	rawCookie string,
+	displayName string,
+	searchCredential SearchCredential,
+) (bool, error) {
+	// 普通 cURL 更新登录态时保留已经存在的比价凭证。
+	hasSearchCredential := false
+	existingSession, existingErr := service.sessionRepository.Get(ctx)
+	if existingErr == nil && existingSession.EncryptedSearchCredential != "" {
+		hasSearchCredential = true
+	}
+
+	encryptedCookie, err := service.sessionCipher.Encrypt(rawCookie)
+	if err != nil {
+		return false, err
+	}
+	session := model.XianyuSession{
+		Platform:        model.XianyuPlatform,
+		EncryptedCookie: encryptedCookie,
+		DisplayName:     displayName,
+		UpdatedAt:       time.Now(),
+	}
+	if searchCredential.Complete() {
+		encodedCredential, encodeErr := EncodeSearchCredential(searchCredential)
+		if encodeErr != nil {
+			return false, encodeErr
+		}
+		session.EncryptedSearchCredential, err = service.sessionCipher.Encrypt(encodedCredential)
+		if err != nil {
+			return false, err
+		}
+		hasSearchCredential = true
+	}
+	if err := service.sessionRepository.Save(ctx, session); err != nil {
+		return false, err
+	}
+	return hasSearchCredential, nil
 }
 
 // saveCookie 加密并保存最新 Cookie。

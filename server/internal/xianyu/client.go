@@ -43,10 +43,16 @@ func (apiError *APIError) Error() string {
 
 // Client 使用 Cookie 和 MTop 签名直接调用闲鱼接口。
 type Client struct {
-	config     config.XianyuConfig
-	httpClient *http.Client
-	mutex      sync.Mutex
-	cookies    map[string]string
+	config           config.XianyuConfig
+	httpClient       *http.Client
+	mutex            sync.Mutex
+	cookies          map[string]string
+	searchCredential SearchCredential
+}
+
+// SetSearchCredential 设置闲鱼 PC 搜索接口所需的动态安全参数。
+func (client *Client) SetSearchCredential(credential SearchCredential) {
+	client.searchCredential = credential
 }
 
 // NewClient 从浏览器复制出的 Cookie Header 创建 API 客户端。
@@ -75,13 +81,26 @@ func (client *Client) CookieHeader() string {
 
 // Call 调用一个已知 MTop API，并自动处理一次 Token 刷新重试。
 func (client *Client) Call(ctx context.Context, api string, version string, requestData any, responseData any) error {
+	return client.call(ctx, api, version, requestData, responseData, nil)
+}
+
+// CallWithSearchCredential 调用需要 Baxia 安全参数的闲鱼搜索接口。
+func (client *Client) CallWithSearchCredential(ctx context.Context, api string, version string, requestData any, responseData any) error {
+	if !client.searchCredential.Complete() {
+		return ErrSearchCredentialMissing
+	}
+	return client.call(ctx, api, version, requestData, responseData, client.searchCredential.FormValues())
+}
+
+// call 执行 MTop 调用，并在需要时附加额外表单字段。
+func (client *Client) call(ctx context.Context, api string, version string, requestData any, responseData any, extraForm url.Values) error {
 	dataBytes, err := json.Marshal(requestData)
 	if err != nil {
 		return fmt.Errorf("encode %s request: %w", api, err)
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		envelope, callErr := client.callOnce(ctx, api, version, dataBytes)
+		envelope, callErr := client.callOnce(ctx, api, version, dataBytes, extraForm)
 		if callErr != nil {
 			return callErr
 		}
@@ -160,7 +179,7 @@ func (client *Client) UploadImage(ctx context.Context, imagePath string) (Upload
 }
 
 // callOnce 发送一次带签名的 MTop 请求。
-func (client *Client) callOnce(ctx context.Context, api string, version string, dataBytes []byte) (mtopEnvelope, error) {
+func (client *Client) callOnce(ctx context.Context, api string, version string, dataBytes []byte, extraForm url.Values) (mtopEnvelope, error) {
 	timestamp := fmt.Sprintf("%d", time.Now().UnixMilli())
 	token, err := client.signingToken()
 	if err != nil {
@@ -184,9 +203,18 @@ func (client *Client) callOnce(ctx context.Context, api string, version string, 
 	query.Set("timeout", "20000")
 	query.Set("api", api)
 	query.Set("sessionOption", "AutoLoginOnly")
+	if api == "mtop.taobao.idlemtopsearch.pc.search" {
+		query.Set("spm_cnt", "a21ybx.search.0.0")
+		query.Set("spm_pre", "a21ybx.search.searchInput.0")
+	}
 	requestURL.RawQuery = query.Encode()
 
 	formBody := url.Values{"data": []string{string(dataBytes)}}
+	for formKey, formValues := range extraForm {
+		for _, formValue := range formValues {
+			formBody.Add(formKey, formValue)
+		}
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), strings.NewReader(formBody.Encode()))
 	if err != nil {
 		return mtopEnvelope{}, err

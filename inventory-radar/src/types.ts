@@ -81,6 +81,8 @@ export interface ProductDetail extends ProductSummary {
   approve_status?: string;
   audit_status?: string;
   intro?: string;
+  purchase_notice?: string;
+  purchase_notice_open?: boolean;
   service_interest_tag_list?: Array<{
     tagName?: string;
     tagDesc?: string;
@@ -130,6 +132,15 @@ export interface ProductDetailResponse {
   message?: string;
 }
 
+/** 商品购买须知设置接口响应。 */
+export interface ProductPurchaseNoticeResponse {
+  data?: {
+    product_purchase_notice?: string;
+    product_purchase_notice_open?: boolean;
+  };
+  message?: string;
+}
+
 /** 搜索结果状态。 */
 export interface ProductSearchState {
   products: ProductSummary[];
@@ -154,8 +165,17 @@ export interface XianyuConnection {
 	platform: string;
 	status: 'not_connected' | 'waiting_login' | 'connected' | 'verification_required';
 	authenticated: boolean;
+	searchReady?: boolean;
 	lastVerifiedAt?: string;
 	message?: string;
+}
+
+/** 平台 API 连接状态。 */
+export type PlatformConnection = XianyuConnection;
+
+/** 用户提供的拼多多商家后台 cURL 或 Cookie。 */
+export interface PinduoduoCredential {
+	credential: string;
 }
 
 /** 第三方渠道当前在售商品。 */
@@ -185,6 +205,62 @@ export interface MarketplaceSyncResponse {
 	platform: string;
 	syncedCount: number;
 	lastSyncedAt: string;
+}
+
+/** 比价来源商品。 */
+export interface PriceComparisonProduct {
+	sourceItemId?: string;
+	itemNo?: string;
+	brand?: string;
+	name: string;
+	imageUrl?: string;
+	priceCents?: number;
+	originalPriceCents?: number;
+}
+
+/** 多平台共用的比价筛选条件。 */
+export interface PriceComparisonFilters {
+	condition?: string[];
+	shipping?: 'free' | string;
+	maxResultsPerPlatform?: number;
+}
+
+/** 统一比价请求。 */
+export interface CreatePriceComparisonRequest {
+	product: PriceComparisonProduct;
+	platforms: string[];
+	filters: PriceComparisonFilters;
+}
+
+/** 单个平台候选商品。 */
+export interface PriceComparisonCandidate {
+	platform: string;
+	platformItemId: string;
+	title: string;
+	priceCents: number;
+	originalPriceCents?: number;
+	imageUrl?: string;
+	itemUrl?: string;
+	matchScore: number;
+	matchReason: string;
+	attributes?: Record<string, string>;
+}
+
+/** 单个平台比价结果。 */
+export interface PriceComparisonPlatformResult {
+	platform: string;
+	status: 'completed' | 'failed' | 'not_configured' | string;
+	message?: string;
+	candidates: PriceComparisonCandidate[];
+}
+
+/** 统一多平台比价响应。 */
+export interface PriceComparisonResponse {
+	id: string;
+	status: string;
+	product: PriceComparisonProduct;
+	platformResults: PriceComparisonPlatformResult[];
+	createdAt: string;
 }
 
 /** 闲鱼发布任务状态。 */
