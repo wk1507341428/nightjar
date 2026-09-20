@@ -200,7 +200,15 @@ export async function fetchLiveProductDetail(itemId: string, regionId: string): 
   if (!response?.data) {
     throw new Error(response?.message ?? '未获取到实时商品详情');
   }
-  return response.data;
+  const purchaseNoticeUrl = new URL(`${API_BASE_URL}/setting/itemNotice`);
+  purchaseNoticeUrl.searchParams.set('company_id', COMPANY_ID);
+  purchaseNoticeUrl.searchParams.set('regionauth_id', regionId);
+  const purchaseNoticeResponse = await requestJson<ProductPurchaseNoticeResponse>(purchaseNoticeUrl).catch(() => ({ data: undefined }));
+  return {
+    ...response.data,
+    purchase_notice: purchaseNoticeResponse?.data?.product_purchase_notice,
+    purchase_notice_open: purchaseNoticeResponse?.data?.product_purchase_notice_open === true,
+  };
 }
 
 /** 从 SideJob 服务获取指定地区的秒杀商品。 */

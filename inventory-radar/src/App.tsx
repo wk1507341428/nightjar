@@ -140,7 +140,7 @@ function getProductStock(product: ProductSummary): number {
 
 /** 获取商详查询使用的 Item ID。 */
 function getDetailItemId(product: ProductSummary): string {
-  return product?.catalog_offer_id ?? product?.default_item_id ?? product?.item_id ?? product?.goods_id ?? '';
+  return product?.default_item_id ?? product?.item_id ?? product?.goods_id ?? product?.catalog_offer_id ?? '';
 }
 
 /** 将页面排序方式转换为后端排序值。 */
@@ -992,9 +992,7 @@ export function App() {
         ?? product?.distributor_info?.regionauth_id
         ?? regionId;
       // 完整商品详情。
-      const productDetail = catalogDataSource === 'live'
-        ? await fetchLiveProductDetail(itemId, productRegionId)
-        : await fetchProductDetail(itemId, productRegionId);
+      const productDetail = await fetchLiveProductDetail(itemId, productRegionId);
 
       if (requestSequence !== detailRequestSequence.current) {
         return;

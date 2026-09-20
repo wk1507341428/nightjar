@@ -39,6 +39,25 @@ function getProductPriceCents(product: ProductSummary): number {
   return Number(product?.price ?? 0);
 }
 
+/** 按奥莱采购价计算闲鱼默认铺货售价。 */
+function getDefaultXianyuPrice(sourcePrice: number): number {
+  // 采购价对应的固定加价。
+  let markup = 120;
+  if (sourcePrice < 500) {
+    markup = 40;
+  } else if (sourcePrice < 1000) {
+    markup = 80;
+  }
+
+  // 阶梯加价后的原始售价。
+  const pricedAmount = sourcePrice + markup;
+  // 有小数的价格统一收为 .9。
+  if (!Number.isInteger(pricedAmount)) {
+    return Math.floor(pricedAmount) + 0.9;
+  }
+  return pricedAmount;
+}
+
 /** 从商品图文详情 HTML 中提取图片地址。 */
 function extractDetailImageURLs(detailHTML?: string): string[] {
   if (!detailHTML) {
@@ -174,8 +193,8 @@ export function PublishProductModal({
   const imageURLs = getPublishImageURLs(product, detailImageURLs);
   // 实际选入的图文详情图片数量。
   const selectedDetailImageCount = imageURLs.filter((imageURL) => detailImageURLs.includes(imageURL)).length;
-  // 当前商品实际售价。
-  const defaultPrice = getProductPriceCents(product) / 100;
+  // 当前商品默认闲鱼售价。
+  const defaultPrice = getDefaultXianyuPrice(getProductPriceCents(product) / 100);
   // 当前商品市场原价。
   const defaultOriginalPrice = Number(product?.market_price ?? 0) / 100;
   // 带全新标识的默认闲鱼标题。

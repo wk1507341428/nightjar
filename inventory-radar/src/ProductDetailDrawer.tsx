@@ -359,7 +359,7 @@ export function ProductDetailDrawer({
               <div className="detail-rich-content__heading">
                 <small>PRODUCT INFORMATION</small>
                 <div className="detail-content-tabs" role="tablist" aria-label="商品详情内容">
-                  <button type="button" role="tab" aria-selected={activeContentTab === 'description'} className={activeContentTab === 'description' ? 'detail-content-tab detail-content-tab--active' : 'detail-content-tab'} onClick={() => handleSelectContentTab('description')}>图文详情</button>
+                  {detailImageUrls.length > 0 ? <button type="button" role="tab" aria-selected={activeContentTab === 'description'} className={activeContentTab === 'description' ? 'detail-content-tab detail-content-tab--active' : 'detail-content-tab'} onClick={() => handleSelectContentTab('description')}>图文详情</button> : null}
                   {hasPurchaseNotice ? <button type="button" role="tab" aria-selected={activeContentTab === 'purchaseNotice'} className={activeContentTab === 'purchaseNotice' ? 'detail-content-tab detail-content-tab--active' : 'detail-content-tab'} onClick={() => handleSelectContentTab('purchaseNotice')}>购买须知</button> : null}
                 </div>
               </div>

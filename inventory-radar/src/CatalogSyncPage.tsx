@@ -39,7 +39,9 @@ function getSyncRunPresentation(run: CatalogSyncRun): { className: string; label
     return { className: 'catalog-sync-run catalog-sync-run--success', label: '同步完成' };
   }
   if (run.status === 'running') {
-    return { className: 'catalog-sync-run catalog-sync-run--running', label: '同步中，正在获取商品' };
+    const processedCount = run.createdCount + run.updatedCount;
+    const totalLabel = run.totalCount > 0 ? String(run.totalCount) : '…';
+    return { className: 'catalog-sync-run catalog-sync-run--running', label: `同步中 · 已完成 ${processedCount} / ${totalLabel}` };
   }
   if (run.status === 'suspicious_empty') {
     return { className: 'catalog-sync-run catalog-sync-run--warning', label: '上游空结果，已保护本地商品' };
