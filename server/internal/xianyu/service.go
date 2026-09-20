@@ -45,6 +45,12 @@ type OnSaleItem struct {
 	CategoryID string
 }
 
+// OfflineResult 是一次下架操作的逐商品结果。
+type OfflineResult struct {
+	SucceededItemIDs []string
+	FailedItemIDs    []string
+}
+
 // SearchInput 是闲鱼公开搜索所需的统一筛选条件。
 type SearchInput struct {
 	Keyword     string
@@ -69,6 +75,14 @@ type Service struct {
 	config            config.XianyuConfig
 	sessionRepository *repository.SessionRepository
 	sessionCipher     *security.Cipher
+	sellerWorkbench   bool
+}
+
+// NewSellerService 创建卖家工作台专用闲鱼服务。
+func NewSellerService(serviceConfig config.XianyuConfig, sessionRepository *repository.SessionRepository, sessionCipher *security.Cipher) *Service {
+	service := NewService(serviceConfig, sessionRepository, sessionCipher)
+	service.sellerWorkbench = true
+	return service
 }
 
 // NewService 创建闲鱼 API 服务。
@@ -168,6 +182,91 @@ func (service *Service) ListOnSaleItems(ctx context.Context) ([]OnSaleItem, erro
 		}
 	}
 	return items, nil
+}
+
+// OfflineItems 下架一个或多个当前在售的闲鱼商品。
+func (service *Service) OfflineItems(ctx context.Context, itemIDs []string) (OfflineResult, error) {
+	// 去重后的待下架商品 ID。
+	normalizedItemIDs := uniqueItemIDs(itemIDs)
+	if len(normalizedItemIDs) == 0 {
+		return OfflineResult{}, errors.New("请选择至少一件闲鱼商品")
+	}
+	client, displayName, err := service.loadClient(ctx)
+	if err != nil {
+		return OfflineResult{}, err
+	}
+	defer func() {
+		persistenceContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName)
+	}()
+
+	if len(normalizedItemIDs) == 1 {
+		itemID := normalizedItemIDs[0]
+		var response map[string]any
+		if err := client.Call(ctx, "mtop.alibaba.idle.seller.pc.item.offline", "1.0", map[string]any{"itemId": itemID}, &response); err != nil {
+			return OfflineResult{}, fmt.Errorf("下架闲鱼商品失败：%w", err)
+		}
+		if !boolValue(response["data"]) {
+			return OfflineResult{}, errors.New(firstNonEmptyString(response, "msg", "message"))
+		}
+		return OfflineResult{SucceededItemIDs: []string{itemID}}, nil
+	}
+
+	var response struct {
+		Data struct {
+			ItemProcessResultList []struct {
+				ItemID  string `json:"itemId"`
+				Success bool   `json:"success"`
+			} `json:"itemProcessResultList"`
+		} `json:"data"`
+	}
+	if err := client.Call(ctx, "mtop.alibaba.idle.seller.pc.item.batch.offline", "1.0", map[string]any{"itemIds": strings.Join(normalizedItemIDs, ",")}, &response); err != nil {
+		return OfflineResult{}, fmt.Errorf("批量下架闲鱼商品失败：%w", err)
+	}
+	if len(response.Data.ItemProcessResultList) == 0 {
+		return OfflineResult{}, errors.New("闲鱼未返回批量下架结果")
+	}
+
+	// 批量下架的逐商品执行结果。
+	result := OfflineResult{}
+	processedItemIDs := make(map[string]struct{}, len(response.Data.ItemProcessResultList))
+	for _, itemResult := range response.Data.ItemProcessResultList {
+		itemID := strings.TrimSpace(itemResult.ItemID)
+		if itemID == "" {
+			continue
+		}
+		processedItemIDs[itemID] = struct{}{}
+		if itemResult.Success {
+			result.SucceededItemIDs = append(result.SucceededItemIDs, itemID)
+		} else {
+			result.FailedItemIDs = append(result.FailedItemIDs, itemID)
+		}
+	}
+	for _, itemID := range normalizedItemIDs {
+		if _, wasProcessed := processedItemIDs[itemID]; !wasProcessed {
+			result.FailedItemIDs = append(result.FailedItemIDs, itemID)
+		}
+	}
+	return result, nil
+}
+
+// uniqueItemIDs 清理并去重用户选择的商品 ID。
+func uniqueItemIDs(itemIDs []string) []string {
+	itemIDSet := make(map[string]struct{}, len(itemIDs))
+	uniqueIDs := make([]string, 0, len(itemIDs))
+	for _, itemID := range itemIDs {
+		normalizedItemID := strings.TrimSpace(itemID)
+		if normalizedItemID == "" {
+			continue
+		}
+		if _, exists := itemIDSet[normalizedItemID]; exists {
+			continue
+		}
+		itemIDSet[normalizedItemID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, normalizedItemID)
+	}
+	return uniqueIDs
 }
 
 // SearchItems 使用闲鱼 PC 搜索接口查询市场商品，复用当前 PC 登录态。
@@ -628,6 +727,7 @@ func (service *Service) loadClient(ctx context.Context) (*Client, string, error)
 	if err != nil {
 		return nil, "", err
 	}
+	client.SetSellerWorkbenchMode(service.sellerWorkbench)
 	if session.EncryptedSearchCredential != "" {
 		decryptedCredential, decryptErr := service.sessionCipher.Decrypt(session.EncryptedSearchCredential)
 		if decryptErr != nil {
@@ -660,8 +760,12 @@ func (service *Service) saveConnectedCredential(
 	if err != nil {
 		return false, err
 	}
+	platform := model.XianyuPlatform
+	if service.sellerWorkbench {
+		platform = model.XianyuSellerPlatform
+	}
 	session := model.XianyuSession{
-		Platform:        model.XianyuPlatform,
+		Platform:        platform,
 		EncryptedCookie: encryptedCookie,
 		DisplayName:     displayName,
 		UpdatedAt:       time.Now(),
@@ -689,8 +793,12 @@ func (service *Service) saveCookie(ctx context.Context, rawCookie string, displa
 	if err != nil {
 		return err
 	}
+	platform := model.XianyuPlatform
+	if service.sellerWorkbench {
+		platform = model.XianyuSellerPlatform
+	}
 	return service.sessionRepository.Save(ctx, model.XianyuSession{
-		Platform:        model.XianyuPlatform,
+		Platform:        platform,
 		EncryptedCookie: encryptedCookie,
 		DisplayName:     displayName,
 		UpdatedAt:       time.Now(),

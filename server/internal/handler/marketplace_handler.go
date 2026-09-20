@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +13,36 @@ import (
 	"sidejob-server/internal/svc"
 	"sidejob-server/internal/types"
 )
+
+// offlineMarketplaceListingsHandler 下架当前闲鱼在售商品。
+func offlineMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
+	return func(responseWriter http.ResponseWriter, request *http.Request) {
+		var body types.MarketplaceOfflineRequest
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			writeError(responseWriter, http.StatusBadRequest, "下架请求格式不正确")
+			return
+		}
+		if len(body.ItemIDs) == 0 {
+			writeError(responseWriter, http.StatusBadRequest, "请选择至少一件闲鱼商品")
+			return
+		}
+		if len(body.ItemIDs) > 100 {
+			writeError(responseWriter, http.StatusBadRequest, "单次最多下架 100 件商品")
+			return
+		}
+
+		result, err := serviceContext.MarketplaceService.OfflineXianyuListings(request.Context(), body.ItemIDs)
+		if err != nil {
+			logx.Errorf("offline xianyu listings: %v", err)
+			writeError(responseWriter, http.StatusBadGateway, "闲鱼商品下架失败，请检查登录状态后重试")
+			return
+		}
+		writeJSON(responseWriter, http.StatusOK, types.MarketplaceOfflineResponse{
+			SucceededItemIDs: result.SucceededItemIDs,
+			FailedItemIDs:    result.FailedItemIDs,
+		})
+	}
+}
 
 // listMarketplaceListingsHandler 返回第三方渠道当前在售商品。
 func listMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {

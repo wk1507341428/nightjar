@@ -3,20 +3,25 @@ import { Alert, Button, Drawer, Input, Popconfirm, Tooltip } from 'antd';
 import {
   connectPinduoduo,
   connectXianyu,
+  connectXianyuSeller,
   disconnectPinduoduo,
   disconnectXianyu,
+  disconnectXianyuSeller,
   fetchPinduoduoConnection,
   fetchXianyuConnection,
+  fetchXianyuSellerConnection,
 } from './xianyuApi';
 import type { PlatformConnection } from './types';
 
 /** 当前可配置的平台标识。 */
-type ConfigurablePlatform = 'xianyu' | 'pinduoduo';
+type ConfigurablePlatform = 'xianyu' | 'xianyuSeller' | 'pinduoduo';
 
 /** 顶部多平台 API 连接管理入口。 */
 export function XianyuConnectionControl() {
   // 当前闲鱼连接状态。
   const [xianyuConnection, setXianyuConnection] = useState<PlatformConnection | null>(null);
+  // 当前闲鱼卖家后台连接状态。
+  const [xianyuSellerConnection, setXianyuSellerConnection] = useState<PlatformConnection | null>(null);
   // 当前拼多多连接状态。
   const [pinduoduoConnection, setPinduoduoConnection] = useState<PlatformConnection | null>(null);
   // 平台管理抽屉显示状态。
@@ -25,6 +30,8 @@ export function XianyuConnectionControl() {
   const [activePlatform, setActivePlatform] = useState<ConfigurablePlatform>('xianyu');
   // 用户粘贴的闲鱼 cURL 或 Cookie Header。
   const [xianyuCredentialText, setXianyuCredentialText] = useState('');
+  // 用户粘贴的闲鱼卖家后台 cURL 或 Cookie Header。
+  const [xianyuSellerCredentialText, setXianyuSellerCredentialText] = useState('');
   // 用户提供的拼多多商家后台 cURL 或 Cookie。
   const [pinduoduoCredentialText, setPinduoduoCredentialText] = useState('');
   // 当前正在保存的平台。
@@ -36,8 +43,9 @@ export function XianyuConnectionControl() {
 
   /** 刷新所有平台的本地连接状态。 */
   async function refreshAllConnections() {
-    const [xianyuResult, pinduoduoResult] = await Promise.allSettled([
+    const [xianyuResult, sellerXianyuResult, pinduoduoResult] = await Promise.allSettled([
       fetchXianyuConnection(),
+      fetchXianyuSellerConnection(),
       fetchPinduoduoConnection(),
     ]);
     if (xianyuResult.status === 'fulfilled') {
@@ -46,7 +54,10 @@ export function XianyuConnectionControl() {
     if (pinduoduoResult.status === 'fulfilled') {
       setPinduoduoConnection(pinduoduoResult.value);
     }
-    if (xianyuResult.status === 'rejected' && pinduoduoResult.status === 'rejected') {
+    if (sellerXianyuResult.status === 'fulfilled') {
+      setXianyuSellerConnection(sellerXianyuResult.value);
+    }
+    if (xianyuResult.status === 'rejected' && sellerXianyuResult.status === 'rejected' && pinduoduoResult.status === 'rejected') {
       setErrorMessage('本地服务不可用');
     }
   }
@@ -78,6 +89,26 @@ export function XianyuConnectionControl() {
       setXianyuCredentialText('');
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '闲鱼连接失败');
+    } finally {
+      setSavingPlatform(null);
+    }
+  }
+
+  /** 校验并保存闲鱼卖家后台连接信息。 */
+  async function handleConnectXianyuSeller() {
+    const normalizedCredential = xianyuSellerCredentialText.trim();
+    if (!normalizedCredential) {
+      setErrorMessage('请粘贴卖家工作台请求 cURL 或完整 Cookie');
+      return;
+    }
+    setSavingPlatform('xianyuSeller');
+    setErrorMessage('');
+    try {
+      const nextConnection = await connectXianyuSeller(normalizedCredential);
+      setXianyuSellerConnection(nextConnection);
+      setXianyuSellerCredentialText('');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '闲鱼卖家后台连接失败');
     } finally {
       setSavingPlatform(null);
     }
@@ -118,6 +149,21 @@ export function XianyuConnectionControl() {
     }
   }
 
+  /** 删除本地保存的闲鱼卖家后台连接信息。 */
+  async function handleDisconnectXianyuSeller() {
+    setDisconnectingPlatform('xianyuSeller');
+    setErrorMessage('');
+    try {
+      const nextConnection = await disconnectXianyuSeller();
+      setXianyuSellerConnection(nextConnection);
+      setXianyuSellerCredentialText('');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '断开闲鱼卖家后台失败');
+    } finally {
+      setDisconnectingPlatform(null);
+    }
+  }
+
   /** 删除本地保存的拼多多连接信息。 */
   async function handleDisconnectPinduoduo() {
     setDisconnectingPlatform('pinduoduo');
@@ -139,18 +185,20 @@ export function XianyuConnectionControl() {
 
   // 闲鱼是否已经连接。
   const isXianyuConnected = xianyuConnection?.authenticated === true;
+  // 闲鱼卖家后台是否已经连接。
+  const isXianyuSellerConnected = xianyuSellerConnection?.authenticated === true;
   // 拼多多是否已经连接。
   const isPinduoduoConnected = pinduoduoConnection?.authenticated === true;
   // 已连接的平台数量。
-  const connectedPlatformCount = Number(isXianyuConnected) + Number(isPinduoduoConnected);
+  const connectedPlatformCount = Number(isXianyuConnected) + Number(isXianyuSellerConnected) + Number(isPinduoduoConnected);
   // 顶部连接入口文案。
   const connectionButtonLabel = connectedPlatformCount > 0
-    ? `平台 API ${connectedPlatformCount}/2`
+    ? `平台 API ${connectedPlatformCount}/3`
     : '连接平台 API';
 
   return (
     <>
-      <Tooltip title={`闲鱼${isXianyuConnected ? '已连接' : '未连接'} · 拼多多${isPinduoduoConnected ? '已连接' : '未连接'}`}>
+      <Tooltip title={`闲鱼${isXianyuConnected ? '已连接' : '未连接'} · 卖家后台${isXianyuSellerConnected ? '已连接' : '未连接'} · 拼多多${isPinduoduoConnected ? '已连接' : '未连接'}`}>
         <Button className={connectedPlatformCount > 0 ? 'xianyu-connect xianyu-connect--online' : 'xianyu-connect'} type={connectedPlatformCount > 0 ? 'default' : 'primary'} onClick={handleOpenDrawer}>
           <span className="xianyu-connect__dot" />
           {connectionButtonLabel}
@@ -161,6 +209,7 @@ export function XianyuConnectionControl() {
         <div className="platform-connection-layout">
           <aside className="platform-connection-nav" aria-label="平台列表">
             <button type="button" className={activePlatform === 'xianyu' ? 'platform-nav-card platform-nav-card--active' : 'platform-nav-card'} onClick={() => handleSelectPlatform('xianyu')}><i className="platform-nav-card__logo platform-nav-card__logo--xianyu">闲</i><span><strong>闲鱼</strong><small>{isXianyuConnected ? '已连接' : '未连接'}</small></span><em className={isXianyuConnected ? 'status-dot status-dot--online' : 'status-dot'} /></button>
+            <button type="button" className={activePlatform === 'xianyuSeller' ? 'platform-nav-card platform-nav-card--active' : 'platform-nav-card'} onClick={() => handleSelectPlatform('xianyuSeller')}><i className="platform-nav-card__logo platform-nav-card__logo--seller">鱼</i><span><strong>闲鱼卖家后台</strong><small>{isXianyuSellerConnected ? '已连接' : '未连接'}</small></span><em className={isXianyuSellerConnected ? 'status-dot status-dot--online' : 'status-dot'} /></button>
             <button type="button" className={activePlatform === 'pinduoduo' ? 'platform-nav-card platform-nav-card--active' : 'platform-nav-card'} onClick={() => handleSelectPlatform('pinduoduo')}><i className="platform-nav-card__logo platform-nav-card__logo--pdd">拼</i><span><strong>拼多多</strong><small>{isPinduoduoConnected ? '已连接' : '未连接'}</small></span><em className={isPinduoduoConnected ? 'status-dot status-dot--online' : 'status-dot'} /></button>
             <div className="platform-nav-card platform-nav-card--disabled"><i className="platform-nav-card__logo">淘</i><span><strong>淘宝</strong><small>后续接入</small></span></div>
             <div className="platform-nav-card platform-nav-card--disabled"><i className="platform-nav-card__logo">京</i><span><strong>京东</strong><small>后续接入</small></span></div>
@@ -175,6 +224,17 @@ export function XianyuConnectionControl() {
                 <Alert type="info" showIcon message="登录凭证会使用服务端独立密钥加密保存，页面和日志不会再次显示明文。" />
                 {errorMessage ? <Alert type="error" showIcon message={errorMessage} /> : null}
                 <footer>{isXianyuConnected ? <Popconfirm title="确认断开闲鱼连接？" description="只删除 SideJob 保存的凭证，不会退出闲鱼网页。" okText="确认断开" cancelText="取消" onConfirm={handleDisconnectXianyu}><Button danger loading={disconnectingPlatform === 'xianyu'}>断开连接</Button></Popconfirm> : <span />}<Button type="primary" loading={savingPlatform === 'xianyu'} onClick={handleConnectXianyu}>{isXianyuConnected ? '更新闲鱼凭证' : '验证并连接闲鱼'}</Button></footer>
+              </section>
+            ) : null}
+
+            {activePlatform === 'xianyuSeller' ? (
+              <section className="platform-config-section">
+                <header><span>GOOFISH SELLER</span><h2>闲鱼卖家后台 API</h2><p>仅用于商品管理操作：下架、改价、库存与粉丝价；不会覆盖普通闲鱼 API 凭证。</p></header>
+                {isXianyuSellerConnected ? <Alert type="success" showIcon message={xianyuSellerConnection?.message || '闲鱼卖家后台已连接'} description="卖家后台凭证已独立保存，可用于渠道上架页的下架操作。" /> : null}
+                <div className="platform-config-form"><p>登录 <code>seller.goofish.com</code> 后，从商品管理页任意一个 <code>h5api.m.goofish.com</code> 请求中复制完整 cURL，或粘贴完整 Cookie。</p><Button href="https://seller.goofish.com/?site=COMMONPRO#/seller-item/goods-manage" target="_blank">打开商品管理页</Button><label><span>卖家后台 cURL / Cookie</span><Input.TextArea value={xianyuSellerCredentialText} onChange={(event) => setXianyuSellerCredentialText(event.target.value)} placeholder="粘贴卖家后台商品管理请求的完整 cURL 或 Cookie" autoSize={{ minRows: 7, maxRows: 12 }} /></label></div>
+                <Alert type="info" showIcon message="该凭证会独立加密保存，仅用于卖家后台商品操作；普通闲鱼发布与比价凭证不会被替换。" />
+                {errorMessage ? <Alert type="error" showIcon message={errorMessage} /> : null}
+                <footer>{isXianyuSellerConnected ? <Popconfirm title="确认断开闲鱼卖家后台连接？" description="只删除 SideJob 保存的卖家后台凭证，不会退出网页。" okText="确认断开" cancelText="取消" onConfirm={handleDisconnectXianyuSeller}><Button danger loading={disconnectingPlatform === 'xianyuSeller'}>断开连接</Button></Popconfirm> : <span />}<Button type="primary" loading={savingPlatform === 'xianyuSeller'} onClick={handleConnectXianyuSeller}>{isXianyuSellerConnected ? '更新卖家后台凭证' : '验证并连接卖家后台'}</Button></footer>
               </section>
             ) : null}
 

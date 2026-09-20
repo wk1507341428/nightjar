@@ -7,7 +7,7 @@ const RECENT_SEARCHES_KEY = 'sidejob-stock-room:recent-searches:v1';
 const MAX_RECENT_SEARCHES = 6;
 
 /** 地区品牌缓存键前缀。 */
-const BRAND_OPTIONS_CACHE_PREFIX = 'sidejob-stock-room:brand-options:v4:';
+const BRAND_OPTIONS_CACHE_PREFIX = 'sidejob-stock-room:brand-options:v5:';
 
 /** 地区品牌缓存有效期。 */
 const BRAND_OPTIONS_CACHE_TTL_MS = 30 * 60 * 1000;

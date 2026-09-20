@@ -1,4 +1,4 @@
-import { Spin } from 'antd';
+import { Button, Spin } from 'antd';
 import type { MarketplaceListing } from './types';
 
 /** 人民币金额格式化器。 */
@@ -62,8 +62,9 @@ export function MarketplacePage({
         <button type="button" className="marketplace-channel-tab marketplace-channel-tab--active"><i>闲</i><span>闲鱼</span><strong>{listings.length}</strong></button>
         <button type="button" className="marketplace-channel-tab" disabled><i>淘</i><span>淘宝</span><small>待接入</small></button>
         <button type="button" className="marketplace-channel-tab" disabled><i>拼</i><span>拼多多</span><small>待接入</small></button>
-        <div className="marketplace-sync-meta"><span>最后同步 {formatMarketplaceDate(lastSyncedAt)}</span><button type="button" onClick={onRefresh} disabled={isLoading}>{isLoading ? '同步中…' : '同步闲鱼状态'}</button></div>
+        <div className="marketplace-sync-meta"><span>最后同步 {formatMarketplaceDate(lastSyncedAt)}</span><Button size="small" onClick={onRefresh} loading={isLoading}>同步闲鱼状态</Button></div>
       </section>
+
 
       {isLoading ? <div className="marketplace-loading"><Spin size="small" /><span>正在读取渠道在售商品…</span></div> : null}
       {errorMessage ? <div className="notice notice--error">{errorMessage}</div> : null}
@@ -80,8 +81,10 @@ export function MarketplacePage({
               <div className="marketplace-listing-card__content">
                 <small>{listing.itemNo || '未关联货号'}</small>
                 <h2>{listing.title}</h2>
-                <div><strong>{formatMarketplacePrice(listing.priceCents)}</strong><span>同步于 {formatMarketplaceDate(listing.lastSyncedAt)}</span></div>
-                {listing.itemUrl ? <a href={listing.itemUrl} target="_blank" rel="noreferrer">查看闲鱼商品 <span>↗</span></a> : null}
+                <div className="marketplace-listing-card__meta"><strong>{formatMarketplacePrice(listing.priceCents)}</strong><span>同步于 {formatMarketplaceDate(listing.lastSyncedAt)}</span></div>
+                <div className="marketplace-listing-card__actions">
+                  {listing.itemUrl ? <a href={listing.itemUrl} target="_blank" rel="noreferrer">查看闲鱼商品 <span>↗</span></a> : null}
+                </div>
               </div>
             </article>
           ))}

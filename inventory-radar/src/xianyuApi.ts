@@ -1,5 +1,5 @@
 import { SIDEJOB_API_BASE_URL } from './constants';
-import type { CreatePriceComparisonRequest, CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceSyncResponse, PinduoduoCredential, PlatformConnection, PriceComparisonResponse, PublishTask, XianyuConnection } from './types';
+import type { CreatePriceComparisonRequest, CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceOfflineResponse, MarketplaceSyncResponse, PinduoduoCredential, PlatformConnection, PriceComparisonResponse, PublishTask, XianyuConnection } from './types';
 
 /** 解析本地服务 JSON 响应并提取错误信息。 */
 async function requestSideJob<ResponseType>(path: string, init?: RequestInit): Promise<ResponseType> {
@@ -36,6 +36,26 @@ export function connectXianyu(credential: string): Promise<XianyuConnection> {
 /** 删除本地保存的闲鱼会话。 */
 export function disconnectXianyu(): Promise<XianyuConnection> {
   return requestSideJob<XianyuConnection>('/xianyu/session', {
+    method: 'DELETE',
+  });
+}
+
+/** 查询闲鱼卖家工作台连接状态。 */
+export function fetchXianyuSellerConnection(): Promise<XianyuConnection> {
+  return requestSideJob<XianyuConnection>('/xianyu-seller/connection');
+}
+
+/** 保存闲鱼卖家工作台专用凭证。 */
+export function connectXianyuSeller(credential: string): Promise<XianyuConnection> {
+  return requestSideJob<XianyuConnection>('/xianyu-seller/session', {
+    method: 'POST',
+    body: JSON.stringify({ credential }),
+  });
+}
+
+/** 删除本地保存的闲鱼卖家工作台凭证。 */
+export function disconnectXianyuSeller(): Promise<XianyuConnection> {
+  return requestSideJob<XianyuConnection>('/xianyu-seller/session', {
     method: 'DELETE',
   });
 }
@@ -93,6 +113,14 @@ export function syncMarketplaceListings(platform = 'xianyu'): Promise<Marketplac
     `/marketplace/sync?platform=${encodeURIComponent(platform)}`,
     { method: 'POST' },
   );
+}
+
+/** 下架一个或多个当前闲鱼在售商品。 */
+export function offlineMarketplaceListings(itemIds: string[]): Promise<MarketplaceOfflineResponse> {
+  return requestSideJob<MarketplaceOfflineResponse>('/marketplace/listings/offline', {
+    method: 'POST',
+    body: JSON.stringify({ itemIds }),
+  });
 }
 
 /** 发起统一多平台比价。 */

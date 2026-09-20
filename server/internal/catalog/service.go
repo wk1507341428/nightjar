@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"sidejob-server/internal/config"
+	"sidejob-server/internal/repository"
 )
 
 // allRegionIDs 是平台支持的实际仓库地区。
@@ -21,8 +22,10 @@ var allRegionIDs = []string{"2", "3", "4", "5", "6", "7"}
 
 // Service 提供活动商品查询能力。
 type Service struct {
-	config     config.CatalogConfig
-	httpClient *http.Client
+	config              config.CatalogConfig
+	httpClient          *http.Client
+	inventoryRepository *InventoryRepository
+	listingRepository   *repository.MarketplaceListingRepository
 }
 
 // SeckillActivity 是前端展示所需的秒杀场次信息。
@@ -82,7 +85,7 @@ type regionSeckillResult struct {
 }
 
 // NewService 创建秒杀数据服务。
-func NewService(serviceConfig config.CatalogConfig) *Service {
+func NewService(serviceConfig config.CatalogConfig, inventoryRepository *InventoryRepository, listingRepository *repository.MarketplaceListingRepository) *Service {
 	// 外部接口超时时间。
 	timeoutSeconds := serviceConfig.RequestTimeout
 	if timeoutSeconds <= 0 {
@@ -90,7 +93,9 @@ func NewService(serviceConfig config.CatalogConfig) *Service {
 	}
 
 	return &Service{
-		config: serviceConfig,
+		config:              serviceConfig,
+		inventoryRepository: inventoryRepository,
+		listingRepository:   listingRepository,
 		httpClient: &http.Client{
 			Timeout: time.Duration(timeoutSeconds) * time.Second,
 		},

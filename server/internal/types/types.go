@@ -5,6 +5,52 @@ type HealthResponse struct {
 	Status string `json:"status"`
 }
 
+// CatalogBrandStoreResponse 是可配置同步的品牌门店。
+type CatalogBrandStoreResponse struct {
+	ID            string `json:"id"`
+	RegionID      string `json:"regionId"`
+	DistributorID string `json:"distributorId"`
+	BrandID       string `json:"brandId"`
+	BrandName     string `json:"brandName"`
+	ShopCode      string `json:"shopCode,omitempty"`
+	StoreName     string `json:"storeName,omitempty"`
+	SyncEnabled   bool   `json:"syncEnabled"`
+	LastSyncedAt  string `json:"lastSyncedAt,omitempty"`
+}
+
+// SaveCatalogBrandStoreRequest 更新品牌门店的同步配置。
+type SaveCatalogBrandStoreRequest struct {
+	RegionID      string `json:"regionId"`
+	DistributorID string `json:"distributorId"`
+	BrandName     string `json:"brandName"`
+	ShopCode      string `json:"shopCode,omitempty"`
+	StoreName     string `json:"storeName,omitempty"`
+	SyncEnabled   bool   `json:"syncEnabled"`
+}
+
+// CatalogOfferListResponse 是本地商品库查询结果。
+type CatalogOfferListResponse struct {
+	List  []map[string]any `json:"list"`
+	Total int64            `json:"total"`
+}
+
+// CatalogSyncResponse 是一次本地商品库同步结果。
+type CatalogSyncResponse struct {
+	ID             string `json:"id"`
+	ScopeType      string `json:"scopeType"`
+	BrandStoreID   string `json:"brandStoreId,omitempty"`
+	OfferID        string `json:"offerId,omitempty"`
+	Status         string `json:"status"`
+	TotalCount     int    `json:"totalCount"`
+	CreatedCount   int    `json:"createdCount"`
+	UpdatedCount   int    `json:"updatedCount"`
+	InactiveCount  int    `json:"inactiveCount"`
+	SuspectedCount int    `json:"suspectedCount"`
+	ErrorMessage   string `json:"errorMessage,omitempty"`
+	StartedAt      string `json:"startedAt"`
+	FinishedAt     string `json:"finishedAt,omitempty"`
+}
+
 // MarketplaceListingResponse 是一个渠道当前在售商品。
 type MarketplaceListingResponse struct {
 	ID             string `json:"id"`
@@ -32,6 +78,17 @@ type MarketplaceSyncResponse struct {
 	Platform     string `json:"platform"`
 	SyncedCount  int    `json:"syncedCount"`
 	LastSyncedAt string `json:"lastSyncedAt"`
+}
+
+// MarketplaceOfflineRequest 是渠道商品下架请求。
+type MarketplaceOfflineRequest struct {
+	ItemIDs []string `json:"itemIds"`
+}
+
+// MarketplaceOfflineResponse 是渠道商品下架结果。
+type MarketplaceOfflineResponse struct {
+	SucceededItemIDs []string `json:"succeededItemIds"`
+	FailedItemIDs    []string `json:"failedItemIds"`
 }
 
 // PriceComparisonProduct 是待比价的来源商品。

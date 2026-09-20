@@ -48,11 +48,17 @@ type Client struct {
 	mutex            sync.Mutex
 	cookies          map[string]string
 	searchCredential SearchCredential
+	sellerWorkbench  bool
 }
 
 // SetSearchCredential 设置闲鱼 PC 搜索接口所需的动态安全参数。
 func (client *Client) SetSearchCredential(credential SearchCredential) {
 	client.searchCredential = credential
+}
+
+// SetSellerWorkbenchMode 使用闲鱼卖家工作台的请求来源。
+func (client *Client) SetSellerWorkbenchMode(enabled bool) {
+	client.sellerWorkbench = enabled
 }
 
 // NewClient 从浏览器复制出的 Cookie Header 创建 API 客户端。
@@ -153,8 +159,15 @@ func (client *Client) UploadImage(ctx context.Context, imagePath string) (Upload
 	}
 	request.Header.Set("Content-Type", multipartWriter.FormDataContentType())
 	request.Header.Set("Cookie", client.CookieHeader())
-	request.Header.Set("Origin", "https://www.goofish.com")
-	request.Header.Set("Referer", "https://www.goofish.com/")
+	origin := "https://www.goofish.com"
+	referer := "https://www.goofish.com/"
+	if client.sellerWorkbench {
+		origin = "https://seller.goofish.com"
+		referer = "https://seller.goofish.com/?site=COMMONPRO#/seller-item/goods-manage"
+		request.Header.Set("idle_site_biz_code", "COMMONPRO")
+	}
+	request.Header.Set("Origin", origin)
+	request.Header.Set("Referer", referer)
 	request.Header.Set("User-Agent", defaultUserAgent)
 
 	response, err := client.httpClient.Do(request)
@@ -203,6 +216,9 @@ func (client *Client) callOnce(ctx context.Context, api string, version string, 
 	query.Set("timeout", "20000")
 	query.Set("api", api)
 	query.Set("sessionOption", "AutoLoginOnly")
+	if client.sellerWorkbench {
+		query.Set("needLoginPC", "true")
+	}
 	if api == "mtop.taobao.idlemtopsearch.pc.search" {
 		query.Set("spm_cnt", "a21ybx.search.0.0")
 		query.Set("spm_pre", "a21ybx.search.searchInput.0")
@@ -221,8 +237,15 @@ func (client *Client) callOnce(ctx context.Context, api string, version string, 
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
 	request.Header.Set("Cookie", client.CookieHeader())
-	request.Header.Set("Origin", "https://www.goofish.com")
-	request.Header.Set("Referer", "https://www.goofish.com/")
+	origin := "https://www.goofish.com"
+	referer := "https://www.goofish.com/"
+	if client.sellerWorkbench {
+		origin = "https://seller.goofish.com"
+		referer = "https://seller.goofish.com/?site=COMMONPRO#/seller-item/goods-manage"
+		request.Header.Set("idle_site_biz_code", "COMMONPRO")
+	}
+	request.Header.Set("Origin", origin)
+	request.Header.Set("Referer", referer)
 	request.Header.Set("User-Agent", defaultUserAgent)
 
 	response, err := client.httpClient.Do(request)

@@ -22,19 +22,22 @@ import (
 
 // ServiceContext 汇总 API 服务的共享依赖。
 type ServiceContext struct {
-	Config              config.Config
-	MongoClient         *mongo.Client
-	PublishRepository   *repository.PublishTaskRepository
-	SessionRepository   *repository.SessionRepository
-	PinduoduoRepository *repository.PinduoduoSessionRepository
-	ListingRepository   *repository.MarketplaceListingRepository
-	XianyuService       *xianyu.Service
-	PinduoduoService    *pinduoduo.Service
-	PublishService      *publish.Service
-	CatalogService      *catalog.Service
-	MarketplaceService  *marketplace.Service
-	PriceCompareService *pricecompare.Service
-	runtimeCancel       context.CancelFunc
+	Config                  config.Config
+	MongoClient             *mongo.Client
+	PublishRepository       *repository.PublishTaskRepository
+	SessionRepository       *repository.SessionRepository
+	SellerSessionRepository *repository.SessionRepository
+	PinduoduoRepository     *repository.PinduoduoSessionRepository
+	ListingRepository       *repository.MarketplaceListingRepository
+	InventoryRepository     *catalog.InventoryRepository
+	XianyuService           *xianyu.Service
+	SellerXianyuService     *xianyu.Service
+	PinduoduoService        *pinduoduo.Service
+	PublishService          *publish.Service
+	CatalogService          *catalog.Service
+	MarketplaceService      *marketplace.Service
+	PriceCompareService     *pricecompare.Service
+	runtimeCancel           context.CancelFunc
 }
 
 // NewServiceContext 初始化 MongoDB 和浏览器管理器。
@@ -63,6 +66,7 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 	}
 
 	sessionRepository := repository.NewSessionRepository(mongoClient.Database(serviceConfig.Mongo.Database))
+	sellerSessionRepository := repository.NewSellerSessionRepository(mongoClient.Database(serviceConfig.Mongo.Database))
 	pinduoduoRepository := repository.NewPinduoduoSessionRepository(mongoClient.Database(serviceConfig.Mongo.Database))
 	sessionCipher, err := security.NewCipherFromFile(serviceConfig.Xianyu.SessionKeyPath)
 	if err != nil {
@@ -70,9 +74,15 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 		return nil, fmt.Errorf("initialize session cipher: %w", err)
 	}
 	xianyuService := xianyu.NewService(serviceConfig.Xianyu, sessionRepository, sessionCipher)
+	sellerXianyuService := xianyu.NewSellerService(serviceConfig.Xianyu, sellerSessionRepository, sessionCipher)
 	pinduoduoService := pinduoduo.NewService(pinduoduoRepository, sessionCipher)
-	catalogService := catalog.NewService(serviceConfig.Catalog)
-	marketplaceService := marketplace.NewService(listingRepository, publishRepository, xianyuService)
+	inventoryRepository := catalog.NewInventoryRepository(mongoClient.Database(serviceConfig.Mongo.Database))
+	if err := inventoryRepository.EnsureIndexes(databaseContext); err != nil {
+		_ = mongoClient.Disconnect(context.Background())
+		return nil, fmt.Errorf("ensure catalog inventory indexes: %w", err)
+	}
+	catalogService := catalog.NewService(serviceConfig.Catalog, inventoryRepository, listingRepository)
+	marketplaceService := marketplace.NewService(listingRepository, publishRepository, xianyuService, sellerXianyuService)
 	priceCompareService := pricecompare.NewService(xianyuService, pinduoduoService)
 
 	runtimeContext, runtimeCancel := context.WithCancel(context.Background())
@@ -80,19 +90,22 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 	go syncXianyuListings(runtimeContext, marketplaceService)
 
 	return &ServiceContext{
-		Config:              serviceConfig,
-		MongoClient:         mongoClient,
-		PublishRepository:   publishRepository,
-		SessionRepository:   sessionRepository,
-		PinduoduoRepository: pinduoduoRepository,
-		ListingRepository:   listingRepository,
-		XianyuService:       xianyuService,
-		PinduoduoService:    pinduoduoService,
-		PublishService:      publishService,
-		CatalogService:      catalogService,
-		MarketplaceService:  marketplaceService,
-		PriceCompareService: priceCompareService,
-		runtimeCancel:       runtimeCancel,
+		Config:                  serviceConfig,
+		MongoClient:             mongoClient,
+		PublishRepository:       publishRepository,
+		SessionRepository:       sessionRepository,
+		SellerSessionRepository: sellerSessionRepository,
+		PinduoduoRepository:     pinduoduoRepository,
+		ListingRepository:       listingRepository,
+		InventoryRepository:     inventoryRepository,
+		XianyuService:           xianyuService,
+		SellerXianyuService:     sellerXianyuService,
+		PinduoduoService:        pinduoduoService,
+		PublishService:          publishService,
+		CatalogService:          catalogService,
+		MarketplaceService:      marketplaceService,
+		PriceCompareService:     priceCompareService,
+		runtimeCancel:           runtimeCancel,
 	}, nil
 }
 

@@ -18,10 +18,17 @@ var itemNoPattern = regexp.MustCompile(`(?i)[a-z][a-z0-9.]*-[a-z0-9.-]*[0-9][a-z
 
 // Service 编排渠道远程同步和发布成功后的即时标记。
 type Service struct {
-	listingRepository *repository.MarketplaceListingRepository
-	publishRepository *repository.PublishTaskRepository
-	xianyuService     *xianyu.Service
-	syncMutex         sync.Mutex
+	listingRepository   *repository.MarketplaceListingRepository
+	publishRepository   *repository.PublishTaskRepository
+	xianyuService       *xianyu.Service
+	sellerXianyuService *xianyu.Service
+	syncMutex           sync.Mutex
+}
+
+// OfflineResult 是渠道下架后的逐商品处理结果。
+type OfflineResult struct {
+	SucceededItemIDs []string
+	FailedItemIDs    []string
 }
 
 // NewService 创建渠道同步服务。
@@ -29,11 +36,13 @@ func NewService(
 	listingRepository *repository.MarketplaceListingRepository,
 	publishRepository *repository.PublishTaskRepository,
 	xianyuService *xianyu.Service,
+	sellerXianyuService *xianyu.Service,
 ) *Service {
 	return &Service{
-		listingRepository: listingRepository,
-		publishRepository: publishRepository,
-		xianyuService:     xianyuService,
+		listingRepository:   listingRepository,
+		publishRepository:   publishRepository,
+		xianyuService:       xianyuService,
+		sellerXianyuService: sellerXianyuService,
 	}
 }
 
@@ -121,6 +130,24 @@ func (service *Service) MarkXianyuPublished(
 		ListedAt:       now,
 		LastSyncedAt:   now,
 	})
+}
+
+// OfflineXianyuListings 下架闲鱼商品并同步删除本地在售快照。
+func (service *Service) OfflineXianyuListings(ctx context.Context, itemIDs []string) (OfflineResult, error) {
+	service.syncMutex.Lock()
+	defer service.syncMutex.Unlock()
+
+	xianyuResult, err := service.sellerXianyuService.OfflineItems(ctx, itemIDs)
+	if err != nil {
+		return OfflineResult{}, err
+	}
+	if err := service.listingRepository.DeletePlatformItemIDs(ctx, model.XianyuPlatform, xianyuResult.SucceededItemIDs); err != nil {
+		return OfflineResult{}, err
+	}
+	return OfflineResult{
+		SucceededItemIDs: xianyuResult.SucceededItemIDs,
+		FailedItemIDs:    xianyuResult.FailedItemIDs,
+	}, nil
 }
 
 // extractItemNo 从系统生成的闲鱼标题中提取标准货号。

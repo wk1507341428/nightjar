@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Drawer, Spin } from 'antd';
+import { Button, Drawer, Spin } from 'antd';
 import { getWarehouseName } from './constants';
 import type { ProductDetail, ProductSku } from './types';
 
@@ -169,7 +169,9 @@ export function ProductDetailDrawer({
   isLoading,
   errorMessage,
   marketplacePlatforms,
+  isLocalCatalog,
   onClose,
+  onRefresh,
   onPublish,
   onCompare,
 }: {
@@ -177,7 +179,9 @@ export function ProductDetailDrawer({
   isLoading: boolean;
   errorMessage: string;
   marketplacePlatforms: string[];
+  isLocalCatalog: boolean;
   onClose: () => void;
+  onRefresh: (product: ProductDetail) => void;
   onPublish: (product: ProductDetail) => void;
   onCompare: (product: ProductDetail) => void;
 }) {
@@ -217,6 +221,15 @@ export function ProductDetailDrawer({
   if (activeContentTab === 'description' && detailImageUrls.length === 0 && hasPurchaseNotice) {
     activeContentTab = 'purchaseNotice';
   }
+
+  // 抽屉底部统一操作区；避免操作按钮混入商品信息内容。
+  const drawerFooter = !isLoading && !errorMessage && product ? (
+    <div className="detail-drawer-actions">
+      {isLocalCatalog ? <Button onClick={() => onRefresh(product)}>刷新商品</Button> : null}
+      <Button onClick={() => onCompare(product)}>一键比价</Button>
+      <Button type="primary" onClick={() => onPublish(product)}>发布到闲鱼</Button>
+    </div>
+  ) : null;
 
   /** 切换商品底部的图文详情或购买须知。 */
   function handleSelectContentTab(tab: DetailContentTab) {
@@ -298,6 +311,7 @@ export function ProductDetailDrawer({
       rootClassName="product-detail-drawer-root"
       title={<div className="drawer-title"><small>PRODUCT DETAIL</small><strong>商品详情</strong></div>}
       className="product-detail-drawer"
+      footer={drawerFooter}
     >
       {isLoading ? <div className="detail-loading"><Spin size="large" tip="正在读取实时商详…"><div className="detail-loading__space" /></Spin></div> : null}
       {!isLoading && errorMessage ? <div className="notice notice--error">{errorMessage}</div> : null}
@@ -319,10 +333,6 @@ export function ProductDetailDrawer({
               {getSubsidyAmount(product) > 0 ? <em>平台补贴 {formatPrice(getSubsidyAmount(product))}</em> : null}
               <span>共 {totalStock} 件</span>
             </div>
-            <div className="detail-action-group">
-              <button type="button" className="detail-publish-button" onClick={() => onPublish(product)}>发布到闲鱼 <span>→</span></button>
-              <button type="button" className="detail-compare-button" onClick={() => onCompare(product)}>一键比价</button>
-            </div>
           </div>
 
           {getSubsidyAmount(product) > 0 ? <section className="seckill-banner"><div><small>FLASH SALE</small><strong>限时秒杀</strong></div><span>平台已补贴 {formatPrice(getSubsidyAmount(product))}</span><em>{formatPromotionEndTime(product?.promotion_end_time) || '活动进行中'}</em></section> : null}
@@ -339,6 +349,10 @@ export function ProductDetailDrawer({
             <div><span>店铺代码</span><strong>{product?.store_code ?? product?.distributor_info?.shop_code ?? '—'}</strong></div>
             <div><span>销售状态</span><strong>{product?.approve_status === 'onsale' ? '在售' : '非在售'}</strong></div>
           </section>
+
+          {isLocalCatalog ? <section className="detail-local-sync">
+            <div><small>LOCAL CATALOG</small><strong>本地数据同步于 {product?.last_synced_at ? new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(product.last_synced_at)) : '尚未同步'}</strong><span>可通过底部“刷新商品”实时核对价格、库存和尺码。</span></div>
+          </section> : null}
 
           {detailImageUrls.length > 0 || hasPurchaseNotice ? (
             <section className="detail-rich-content">

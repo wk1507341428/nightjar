@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -105,6 +106,50 @@ func (repository *MarketplaceListingRepository) List(
 		return nil, err
 	}
 	return listings, nil
+}
+
+// ListNormalizedItemNos 返回一个渠道全部在售商品的标准化货号。
+func (repository *MarketplaceListingRepository) ListNormalizedItemNos(ctx context.Context, platform string) ([]string, error) {
+	filter := bson.M{}
+	if platform != "" && platform != "all" {
+		filter["platform"] = platform
+	}
+	values, err := repository.collection.Distinct(ctx, "itemNo", filter)
+	if err != nil {
+		return nil, err
+	}
+
+	// 去重后的标准化货号集合。
+	itemNoSet := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		itemNo, isString := value.(string)
+		if !isString {
+			continue
+		}
+		normalizedItemNo := strings.ToUpper(strings.TrimSpace(itemNo))
+		if normalizedItemNo != "" {
+			itemNoSet[normalizedItemNo] = struct{}{}
+		}
+	}
+
+	// 标准化后的货号列表。
+	itemNos := make([]string, 0, len(itemNoSet))
+	for itemNo := range itemNoSet {
+		itemNos = append(itemNos, itemNo)
+	}
+	return itemNos, nil
+}
+
+// DeletePlatformItemIDs 删除已确认下架的渠道在售快照。
+func (repository *MarketplaceListingRepository) DeletePlatformItemIDs(ctx context.Context, platform string, itemIDs []string) error {
+	if len(itemIDs) == 0 {
+		return nil
+	}
+	_, err := repository.collection.DeleteMany(ctx, bson.M{
+		"platform":       platform,
+		"platformItemId": bson.M{"$in": itemIDs},
+	})
+	return err
 }
 
 // LatestSyncTime 返回某个渠道最近同步时间。

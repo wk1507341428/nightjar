@@ -40,6 +40,7 @@ export interface DistributorInfo {
 
 /** 商品搜索结果。 */
 export interface ProductSummary {
+  catalog_offer_id?: string;
   goods_id?: string;
   item_id?: string;
   default_item_id?: string;
@@ -60,6 +61,8 @@ export interface ProductSummary {
   item_total_store?: string | number;
   sales?: string | number;
   regionauth_id?: string;
+  last_synced_at?: string;
+  xianyu_listed?: boolean;
   main_img?: string;
   pics?: string[];
   distributor_info?: DistributorInfo;
@@ -141,6 +144,40 @@ export interface ProductPurchaseNoticeResponse {
   message?: string;
 }
 
+/** 上游发现的一家品牌门店。 */
+export interface CatalogBrandStoreCandidate {
+  regionId: string;
+  distributorId: string;
+  brandName: string;
+  shopCode?: string;
+  storeName?: string;
+}
+
+/** 本地保存的品牌门店同步配置。 */
+export interface CatalogBrandStore extends CatalogBrandStoreCandidate {
+  id: string;
+  brandId: string;
+  syncEnabled: boolean;
+  lastSyncedAt?: string;
+}
+
+/** 本地商品库同步任务摘要。 */
+export interface CatalogSyncRun {
+  id: string;
+  scopeType: string;
+  brandStoreId?: string;
+  offerId?: string;
+  status: string;
+  totalCount: number;
+  createdCount: number;
+  updatedCount: number;
+  inactiveCount: number;
+  suspectedCount: number;
+  errorMessage?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
 /** 搜索结果状态。 */
 export interface ProductSearchState {
   products: ProductSummary[];
@@ -205,6 +242,12 @@ export interface MarketplaceSyncResponse {
 	platform: string;
 	syncedCount: number;
 	lastSyncedAt: string;
+}
+
+/** 渠道商品下架结果。 */
+export interface MarketplaceOfflineResponse {
+	succeededItemIds: string[];
+	failedItemIds: string[];
 }
 
 /** 比价来源商品。 */
