@@ -1,6 +1,9 @@
 package publish
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // TestValidatePublicImageURL 验证图片下载只允许公网 HTTP 地址。
 func TestValidatePublicImageURL(t *testing.T) {
@@ -17,6 +20,24 @@ func TestValidatePublicImageURL(t *testing.T) {
 		if err := validatePublicImageURL(imageURL); err == nil {
 			t.Fatalf("private image URL accepted: %s", imageURL)
 		}
+	}
+}
+
+// TestNextPublishDelay 验证任务间隔遵循每个任务的配置。
+func TestNextPublishDelay(t *testing.T) {
+	for testIndex := 0; testIndex < 100; testIndex++ {
+		delay := nextPublishDelay(4, 7)
+		if delay < 4*time.Second || delay > 7*time.Second {
+			t.Fatalf("unexpected publish delay: %s", delay)
+		}
+	}
+}
+
+// TestNextPublishDelayUsesDefaults 验证旧任务没有配置时使用默认间隔。
+func TestNextPublishDelayUsesDefaults(t *testing.T) {
+	delay := nextPublishDelay(0, 0)
+	if delay < 4*time.Second || delay > 7*time.Second {
+		t.Fatalf("unexpected default publish delay: %s", delay)
 	}
 }
 

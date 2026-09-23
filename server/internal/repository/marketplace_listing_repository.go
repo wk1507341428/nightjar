@@ -108,6 +108,33 @@ func (repository *MarketplaceListingRepository) List(
 	return listings, nil
 }
 
+// ListByItemNos 返回指定货号集合对应的当前在售商品。
+func (repository *MarketplaceListingRepository) ListByItemNos(ctx context.Context, platform string, itemNos []string) ([]model.MarketplaceListing, error) {
+	normalizedItemNos := make([]string, 0, len(itemNos))
+	for _, itemNo := range itemNos {
+		if normalizedItemNo := strings.ToUpper(strings.TrimSpace(itemNo)); normalizedItemNo != "" {
+			normalizedItemNos = append(normalizedItemNos, normalizedItemNo)
+		}
+	}
+	if len(normalizedItemNos) == 0 {
+		return []model.MarketplaceListing{}, nil
+	}
+	filter := bson.M{"itemNo": bson.M{"$in": normalizedItemNos}}
+	if platform != "" && platform != "all" {
+		filter["platform"] = platform
+	}
+	cursor, err := repository.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "lastSyncedAt", Value: -1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	listings := make([]model.MarketplaceListing, 0)
+	if err := cursor.All(ctx, &listings); err != nil {
+		return nil, err
+	}
+	return listings, nil
+}
+
 // ListNormalizedItemNos 返回一个渠道全部在售商品的标准化货号。
 func (repository *MarketplaceListingRepository) ListNormalizedItemNos(ctx context.Context, platform string) ([]string, error) {
 	filter := bson.M{}

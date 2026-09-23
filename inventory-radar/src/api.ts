@@ -1,6 +1,7 @@
 import { API_BASE_URL, COMPANY_ID, PRODUCT_PAGE_SIZE, SIDEJOB_API_BASE_URL } from './constants';
 import type {
   BrandOption,
+  BrandCategory,
   ProductDetail,
   ProductPurchaseNoticeResponse,
   ProductSummary,
@@ -18,6 +19,7 @@ interface SearchProductsParams {
   regionId: string;
   page?: number;
   brandDistributorIds?: string[];
+  categoryId?: string;
   goodsSort?: number;
   localSort?: string;
 }
@@ -30,7 +32,7 @@ interface SearchProductsResult {
 }
 
 /** 构造小程序实时商品列表请求。 */
-function buildLiveSearchUrl(query: string, regionId: string, page: number, distributorId?: string, goodsSort?: number): URL {
+function buildLiveSearchUrl(query: string, regionId: string, page: number, distributorId?: string, goodsSort?: number, categoryId?: string): URL {
   const requestUrl = new URL(`${API_BASE_URL}/goods/items`);
   requestUrl.searchParams.set('company_id', COMPANY_ID);
   requestUrl.searchParams.set('regionauth_id', regionId);
@@ -45,6 +47,9 @@ function buildLiveSearchUrl(query: string, regionId: string, page: number, distr
   }
   if (goodsSort) {
     requestUrl.searchParams.set('goodsSort', String(goodsSort));
+  }
+  if (categoryId) {
+    requestUrl.searchParams.set('main_category', categoryId);
   }
   return requestUrl;
 }
@@ -83,6 +88,7 @@ export async function searchProducts({
   brandDistributorIds = [],
   goodsSort,
   localSort,
+  categoryId,
 }: SearchProductsParams): Promise<SearchProductsResult> {
   // 当前选中的本地品牌门店。
   const brandStoreId = brandDistributorIds[0] ?? 'all';
@@ -104,6 +110,7 @@ export async function searchProducts({
     pageSize: String(PRODUCT_PAGE_SIZE),
     stockOnly: 'false',
     sort: catalogSort,
+    categoryId: categoryId ?? '',
   });
   return {
     products: response?.list ?? [],
@@ -113,9 +120,9 @@ export async function searchProducts({
 }
 
 /** 查询小程序实时货源。 */
-export async function searchLiveProducts({ query, regionId, page = 1, brandDistributorIds = [], goodsSort }: SearchProductsParams): Promise<SearchProductsResult> {
+export async function searchLiveProducts({ query, regionId, page = 1, brandDistributorIds = [], goodsSort, categoryId }: SearchProductsParams): Promise<SearchProductsResult> {
   const distributorId = brandDistributorIds[0];
-  const response = await requestJson<{ data?: { list?: ProductSummary[]; total_count?: number } }>(buildLiveSearchUrl(query, regionId, page, distributorId, goodsSort));
+  const response = await requestJson<{ data?: { list?: ProductSummary[]; total_count?: number } }>(buildLiveSearchUrl(query, regionId, page, distributorId, goodsSort, categoryId));
   return { products: response?.data?.list ?? [], similarProducts: [], total: Number(response?.data?.total_count ?? 0) };
 }
 
@@ -140,10 +147,10 @@ function interleaveProductLists(productLists: ProductSummary[][]): ProductSummar
 /** 按地区加载小程序品牌馆的完整在售品牌门店。 */
 export async function fetchBrandOptions(regionId: string): Promise<BrandOption[]> {
   // 当前地区已启用的本地品牌门店。
-  const response = await requestCatalog<Array<{ id?: string; brandName?: string; shopCode?: string; syncEnabled?: boolean }>>('/catalog/brand-stores', { regionId });
+  const response = await requestCatalog<Array<{ id?: string; brandName?: string; distributorId?: string; shopCode?: string; syncEnabled?: boolean }>>('/catalog/brand-stores', { regionId });
   return (response ?? [])
     .filter((brandStore) => brandStore?.syncEnabled && Boolean(brandStore?.id) && Boolean(brandStore?.brandName))
-    .map((brandStore) => ({ value: brandStore.id ?? '', label: brandStore.brandName ?? '', shopCode: brandStore.shopCode, distributorIds: brandStore.id ? [brandStore.id] : [] }))
+    .map((brandStore) => ({ value: brandStore.id ?? '', label: brandStore.brandName ?? '', shopCode: brandStore.shopCode, categoryDistributorId: brandStore.distributorId, distributorIds: brandStore.id ? [brandStore.id] : [] }))
     .sort((firstBrand, secondBrand) => firstBrand.label.localeCompare(secondBrand.label, 'zh-CN'));
 }
 
@@ -156,7 +163,25 @@ export async function fetchLiveBrandOptions(regionId: string): Promise<BrandOpti
   requestUrl.searchParams.set('pageSize', '1000');
   requestUrl.searchParams.set('sort_type', '5');
   const response = await requestJson<{ data?: { list?: Array<{ distributor_id?: string; name?: string; shop_code?: string }> } }>(requestUrl);
-  return (response?.data?.list ?? []).filter((brandStore) => Boolean(brandStore?.distributor_id) && Boolean(brandStore?.name)).map((brandStore) => ({ value: `live:${brandStore.distributor_id}`, label: brandStore.name?.trim() ?? '', shopCode: brandStore.shop_code, distributorIds: brandStore.distributor_id ? [brandStore.distributor_id] : [] })).sort((firstBrand, secondBrand) => firstBrand.label.localeCompare(secondBrand.label, 'zh-CN'));
+  return (response?.data?.list ?? []).filter((brandStore) => Boolean(brandStore?.distributor_id) && Boolean(brandStore?.name)).map((brandStore) => ({ value: `live:${brandStore.distributor_id}`, label: brandStore.name?.trim() ?? '', shopCode: brandStore.shop_code, categoryDistributorId: brandStore.distributor_id, distributorIds: brandStore.distributor_id ? [brandStore.distributor_id] : [] })).sort((firstBrand, secondBrand) => firstBrand.label.localeCompare(secondBrand.label, 'zh-CN'));
+}
+
+/** 读取小程序为品牌门店配置的商品品类。 */
+export async function fetchLiveBrandCategories(regionId: string, distributorId: string): Promise<BrandCategory[]> {
+  const requestUrl = new URL(`${API_BASE_URL}/goods/shopcategory`);
+  requestUrl.searchParams.set('company_id', COMPANY_ID);
+  requestUrl.searchParams.set('regionauth_id', regionId);
+  requestUrl.searchParams.set('distributor_id', distributorId);
+  requestUrl.searchParams.set('is_marketing_category', '1');
+  const response = await requestJson<{ data?: Array<{ category_id?: string; category_name?: string; image_url?: string }> }>(requestUrl);
+  return (response?.data ?? [])
+    .filter((category) => Boolean(category?.category_id) && Boolean(category?.category_name))
+    .map((category) => ({ id: category.category_id ?? '', name: category.category_name ?? '', imageUrl: category.image_url }));
+}
+
+/** 读取本地品牌门店对应的小程序商品品类。 */
+export function fetchLocalBrandCategories(brandStoreId: string): Promise<BrandCategory[]> {
+  return requestCatalog<BrandCategory[]>(`/catalog/brand-stores/${encodeURIComponent(brandStoreId)}/categories`);
 }
 
 /** 获取指定商品的完整商详。 */

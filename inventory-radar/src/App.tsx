@@ -1,20 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Select, Spin, Switch } from 'antd';
-import { fetchBrandOptions, fetchLiveBrandOptions, fetchLiveProductDetail, fetchProductDetail, fetchSeckillProducts, searchLiveProducts, searchProducts } from './api';
+import { fetchBrandOptions, fetchLiveBrandCategories, fetchLiveBrandOptions, fetchLiveProductDetail, fetchLocalBrandCategories, fetchProductDetail, fetchSeckillProducts, searchLiveProducts, searchProducts } from './api';
 import { refreshCatalogOffer } from './catalogManagementApi';
 import { INITIAL_SEARCH_STATE, INITIAL_SECKILL_STATE, PRODUCT_PAGE_SIZE, REGION_OPTIONS, getWarehouseName, getWarehouseShortName } from './constants';
-import { loadCachedBrandOptions, loadRecentSearches, saveCachedBrandOptions, saveRecentSearch } from './storage';
+import { clearLegacyBrandOptionCache, loadRecentSearches, saveRecentSearch } from './storage';
 import { PublishProductModal } from './PublishProductModal';
 import { ProductDetailDrawer } from './ProductDetailDrawer';
 import { MarketplacePage } from './MarketplacePage';
 import { PriceComparisonModal } from './PriceComparisonModal';
 import { XianyuConnectionControl } from './XianyuConnectionControl';
 import { CatalogSyncPage } from './CatalogSyncPage';
+import { BrandPublishPage } from './BrandPublishDrawer';
+import { PriceHistoryPage } from './PriceHistoryPage';
 import { fetchMarketplaceListings, syncMarketplaceListings } from './xianyuApi';
 import type {
   MarketplaceListing,
   ProductDetail,
   BrandOption,
+  BrandCategory,
   ProductSearchState,
   ProductSku,
   ProductSummary,
@@ -43,10 +46,23 @@ const PRIMARY_NAV_ITEMS = ['全部货源', '我的商品库', '秒杀专区', '�
 type SortMode = 'default' | 'priceAsc' | 'priceDesc' | 'discount' | 'xianyuLast';
 
 /** 商品列表展示模式。 */
-type CatalogMode = 'standard' | 'seckill' | 'marketplace' | 'sync';
+type CatalogMode = 'standard' | 'seckill' | 'marketplace' | 'sync' | 'batchPublish' | 'priceHistory';
 
 /** 商品数据来源。 */
 type CatalogDataSource = 'live' | 'local';
+
+/** 批量发布页面路由参数。 */
+interface PublishBatchRoute {
+  routeKey: string;
+  batchId?: string;
+  brandStoreId?: string;
+  brandName?: string;
+}
+
+/** 价格走势页面路由参数。 */
+interface PriceHistoryRoute {
+  offerId: string;
+}
 
 /** 返回指定数据来源可用的排序项。 */
 function getCatalogSortOptions(dataSource: CatalogDataSource): Array<{ value: SortMode; label: string }> {
@@ -189,6 +205,33 @@ function isCatalogSyncPageRoute(): boolean {
 /** 判断当前地址是否为本地商品库页面。 */
 function isLocalCatalogPageRoute(): boolean {
   return window.location.hash === '#/library';
+}
+
+/** 解析批量发布新建页或进度页路由。 */
+function getPublishBatchRoute(): PublishBatchRoute | null {
+  const routeValue = window.location.hash.replace(/^#/, '');
+  if (!routeValue.startsWith('/publish-batches/')) {
+    return null;
+  }
+  const [routePath, queryString = ''] = routeValue.split('?', 2);
+  const routeID = decodeURIComponent(routePath.replace('/publish-batches/', ''));
+  if (routeID === 'new') {
+    const query = new URLSearchParams(queryString);
+    const brandStoreId = query.get('brandStoreId')?.trim() ?? '';
+    const brandName = query.get('brandName')?.trim() ?? '';
+    return { routeKey: `${routeID}:${brandStoreId}`, brandStoreId, brandName };
+  }
+  return routeID ? { routeKey: routeID, batchId: routeID } : null;
+}
+
+/** 解析商品价格走势页面路由。 */
+function getPriceHistoryRoute(): PriceHistoryRoute | null {
+  const routeValue = window.location.hash.replace(/^#/, '');
+  if (!routeValue.startsWith('/price-history/')) {
+    return null;
+  }
+  const offerId = decodeURIComponent(routeValue.replace('/price-history/', '').split('?', 1)[0]).trim();
+  return offerId ? { offerId } : null;
 }
 
 /** 标准化跨系统货号。 */
@@ -408,6 +451,16 @@ export function App() {
   const [brandId, setBrandId] = useState('all');
   // 当前地区品牌列表。
   const [brandOptions, setBrandOptions] = useState<BrandOption[]>([]);
+  // 当前品牌可筛选的品类。
+  const [brandCategories, setBrandCategories] = useState<BrandCategory[]>([]);
+  // 当前选中的品牌品类 ID。
+  const [brandCategoryId, setBrandCategoryId] = useState('');
+  // 品牌品类加载状态。
+  const [isBrandCategoryLoading, setIsBrandCategoryLoading] = useState(false);
+  // 当前批量发布页面路由。
+  const [publishBatchRoute, setPublishBatchRoute] = useState<PublishBatchRoute | null>(() => getPublishBatchRoute());
+  // 当前价格走势页面路由。
+  const [priceHistoryRoute, setPriceHistoryRoute] = useState<PriceHistoryRoute | null>(() => getPriceHistoryRoute());
   // 品牌列表加载状态。
   const [isBrandLoading, setIsBrandLoading] = useState(false);
   // 商品搜索状态。
@@ -452,10 +505,14 @@ export function App() {
   const detailRequestSequence = useRef(0);
   // 最新品牌请求序号。
   const brandRequestSequence = useRef(0);
+  // 最新品牌品类请求序号。
+  const brandCategoryRequestSequence = useRef(0);
   // 地址切换时使用的最新地区 ID。
   const currentRegionIdRef = useRef('3');
   // 当前地区配置。
   const currentRegion = REGION_OPTIONS.find((region) => region.id === regionId) ?? REGION_OPTIONS[0];
+  // 当前选择的品牌门店。
+  const selectedBrandOption = brandOptions.find((brandOption) => brandOption.value === brandId);
   // 当前是否处于首页浏览模式。
   const isBrowseMode = query.trim() === '' && (activeCategory === '全部货源' || activeCategory === '我的商品库');
   // 当前结果区标题。
@@ -520,6 +577,7 @@ export function App() {
     recordHistory = true,
     nextBrandId = brandId,
     nextSortMode = sortMode,
+    nextCategoryId = brandCategoryId,
     dataSource = catalogDataSource,
   }: {
     nextQuery: string;
@@ -529,6 +587,7 @@ export function App() {
     recordHistory?: boolean;
     nextBrandId?: string;
     nextSortMode?: SortMode;
+    nextCategoryId?: string;
     dataSource?: CatalogDataSource;
   }) {
     // 清理后的关键词。
@@ -554,11 +613,14 @@ export function App() {
         brandDistributorIds: selectedBrandOption?.distributorIds ?? [],
         goodsSort: getBackendGoodsSort(nextSortMode),
         localSort: dataSource === 'local' ? nextSortMode : undefined,
+        categoryId: nextCategoryId,
       });
 
       if (requestSequence !== searchRequestSequence.current) {
         return;
       }
+
+      void loadMarketplaceStatusesForProducts(result.products);
 
       setSearchState((currentState) => ({
         products: append ? [...currentState.products, ...result.products] : result.products,
@@ -647,6 +709,25 @@ export function App() {
     }
   }
 
+  /** 按当前商品货号增量刷新闲鱼在售状态。 */
+  async function loadMarketplaceStatusesForProducts(products: ProductSummary[]) {
+    // 当前批次需要核对的标准货号。
+    const itemNos = Array.from(new Set(products.map((product) => normalizeMarketplaceItemNo(product?.item_no)).filter(Boolean)));
+    if (itemNos.length === 0) {
+      return;
+    }
+    try {
+      const response = await fetchMarketplaceListings('xianyu', itemNos);
+      const targetItemNos = new Set(itemNos);
+      setMarketplaceListings((currentListings) => [
+        ...currentListings.filter((listing) => !targetItemNos.has(normalizeMarketplaceItemNo(listing.itemNo))),
+        ...(response.list ?? []),
+      ]);
+    } catch {
+      // 增量核对失败时保留已有标签，不阻断商品列表与商详。
+    }
+  }
+
   /** 手动同步闲鱼在售状态并刷新本地列表。 */
   async function handleSyncMarketplaceListings() {
     setIsMarketplaceLoading(true);
@@ -662,21 +743,12 @@ export function App() {
   }
 
 
-  /** 按地区加载品牌门店，优先使用本地缓存。 */
+  /** 按地区实时加载品牌门店。 */
   async function loadBrandOptions(nextRegionId: string, dataSource = catalogDataSource) {
     // 本次品牌请求序号。
     const requestSequence = brandRequestSequence.current + 1;
     brandRequestSequence.current = requestSequence;
-    // 当前地区的品牌缓存。
-    const cachedBrandOptions = dataSource === 'local' ? loadCachedBrandOptions(nextRegionId) : null;
-    if (cachedBrandOptions) {
-      setBrandOptions(cachedBrandOptions.options);
-    }
-    if (cachedBrandOptions?.isFresh && cachedBrandOptions.options.length > 0) {
-      setIsBrandLoading(false);
-      return;
-    }
-    setIsBrandLoading(!cachedBrandOptions);
+    setIsBrandLoading(true);
 
     try {
       // 品牌馆接口返回的当前地区品牌门店。
@@ -687,16 +759,11 @@ export function App() {
         return;
       }
       setBrandOptions(nextBrandOptions);
-      if (dataSource === 'local') {
-        saveCachedBrandOptions(nextRegionId, nextBrandOptions);
-      }
     } catch {
       if (requestSequence !== brandRequestSequence.current) {
         return;
       }
-      if (!cachedBrandOptions) {
-        setBrandOptions([]);
-      }
+      setBrandOptions([]);
     } finally {
       if (requestSequence === brandRequestSequence.current) {
         setIsBrandLoading(false);
@@ -704,9 +771,69 @@ export function App() {
     }
   }
 
+  /** 加载当前品牌在小程序中配置的商品品类。 */
+  async function loadBrandCategories(nextBrandId: string, nextRegionId: string, dataSource = catalogDataSource) {
+    const requestSequence = brandCategoryRequestSequence.current + 1;
+    brandCategoryRequestSequence.current = requestSequence;
+    if (nextBrandId === 'all') {
+      setBrandCategories([]);
+      setIsBrandCategoryLoading(false);
+      return;
+    }
+
+    const nextBrandOption = brandOptions.find((brandOption) => brandOption.value === nextBrandId);
+    if (!nextBrandOption) {
+      setBrandCategories([]);
+      setIsBrandCategoryLoading(false);
+      return;
+    }
+    if (dataSource === 'live' && !nextBrandOption.categoryDistributorId) {
+      setBrandCategories([]);
+      setIsBrandCategoryLoading(false);
+      return;
+    }
+
+    setIsBrandCategoryLoading(true);
+    try {
+      const nextCategories = dataSource === 'live'
+        ? await fetchLiveBrandCategories(nextRegionId, nextBrandOption.categoryDistributorId ?? '')
+        : await fetchLocalBrandCategories(nextBrandOption.value);
+      if (requestSequence === brandCategoryRequestSequence.current) {
+        setBrandCategories(nextCategories);
+      }
+    } catch {
+      if (requestSequence === brandCategoryRequestSequence.current) {
+        setBrandCategories([]);
+      }
+    } finally {
+      if (requestSequence === brandCategoryRequestSequence.current) {
+        setIsBrandCategoryLoading(false);
+      }
+    }
+  }
+
   /** 加载首页默认商品。 */
   function loadInitialProducts() {
+    clearLegacyBrandOptionCache();
     void loadMarketplaceListings();
+    const initialPriceHistoryRoute = getPriceHistoryRoute();
+    if (initialPriceHistoryRoute) {
+      setPriceHistoryRoute(initialPriceHistoryRoute);
+      setCatalogMode('priceHistory');
+      setCatalogDataSource('local');
+      setActiveCategory('我的商品库');
+      return;
+    }
+    const initialPublishBatchRoute = getPublishBatchRoute();
+    if (initialPublishBatchRoute) {
+      setPublishBatchRoute(initialPublishBatchRoute);
+      setCatalogMode('batchPublish');
+      setCatalogDataSource('local');
+      setActiveCategory('我的商品库');
+      setBrandCategories([]);
+      setBrandCategoryId('');
+      return;
+    }
     if (isCatalogSyncPageRoute()) {
       setCatalogMode('sync');
       setActiveCategory('同步配置');
@@ -742,6 +869,26 @@ export function App() {
 
   /** 根据地址切换独立秒杀页或选品主页。 */
   function handleRouteChange() {
+    const nextPriceHistoryRoute = getPriceHistoryRoute();
+    if (nextPriceHistoryRoute) {
+      setPriceHistoryRoute(nextPriceHistoryRoute);
+      setCatalogMode('priceHistory');
+      setCatalogDataSource('local');
+      setActiveCategory('我的商品库');
+      setQuery('');
+      return;
+    }
+    setPriceHistoryRoute(null);
+    const nextPublishBatchRoute = getPublishBatchRoute();
+    if (nextPublishBatchRoute) {
+      setPublishBatchRoute(nextPublishBatchRoute);
+      setCatalogMode('batchPublish');
+      setCatalogDataSource('local');
+      setActiveCategory('我的商品库');
+      setQuery('');
+      return;
+    }
+    setPublishBatchRoute(null);
     if (isCatalogSyncPageRoute()) {
       setCatalogMode('sync');
       setActiveCategory('同步配置');
@@ -755,7 +902,9 @@ export function App() {
       setActiveCategory('我的商品库');
       setQuery('');
       setBrandId('all');
-      void executeSearch({ nextQuery: '', nextRegionId: currentRegionIdRef.current, nextSortMode: 'default', recordHistory: false, dataSource: 'local', nextBrandId: 'all' });
+      setBrandCategories([]);
+      setBrandCategoryId('');
+      void executeSearch({ nextQuery: '', nextRegionId: currentRegionIdRef.current, nextSortMode: 'default', nextCategoryId: '', recordHistory: false, dataSource: 'local', nextBrandId: 'all' });
       void loadBrandOptions(currentRegionIdRef.current, 'local');
       return;
     }
@@ -778,7 +927,10 @@ export function App() {
     setCatalogDataSource('live');
     setSortMode('default');
     setActiveCategory('全部货源');
-    void executeSearch({ nextQuery: '', nextRegionId: currentRegionIdRef.current, nextSortMode: 'default', recordHistory: false, dataSource: 'live' });
+    setBrandId('all');
+    setBrandCategories([]);
+    setBrandCategoryId('');
+    void executeSearch({ nextQuery: '', nextRegionId: currentRegionIdRef.current, nextSortMode: 'default', nextCategoryId: '', recordHistory: false, dataSource: 'live', nextBrandId: 'all' });
     void loadBrandOptions(currentRegionIdRef.current, 'live');
   }
 
@@ -816,6 +968,15 @@ export function App() {
       return;
     }
     window.location.hash = '/library';
+  }
+
+  /** 打开当前品牌的批量发布新建页。 */
+  function handleOpenBrandPublishPage() {
+    if (!selectedBrandOption || brandId === 'all') {
+      return;
+    }
+    const query = new URLSearchParams({ brandStoreId: selectedBrandOption.value, brandName: selectedBrandOption.label });
+    window.location.hash = `/publish-batches/new?${query.toString()}`;
   }
 
   /** 返回选品主页。 */
@@ -865,7 +1026,10 @@ export function App() {
     setActiveCategory(nextActiveCategory);
     setBrandId('all');
     setBrandOptions([]);
+    setBrandCategories([]);
+    setBrandCategoryId('');
     brandRequestSequence.current += 1;
+    brandCategoryRequestSequence.current += 1;
     void loadBrandOptions(nextRegionId, catalogDataSource);
     if (catalogMode === 'seckill') {
       void loadSeckillProducts({ nextRegionId });
@@ -875,7 +1039,7 @@ export function App() {
       return;
     }
 
-    void executeSearch({ nextQuery: '', nextRegionId, nextBrandId: 'all', recordHistory: false, dataSource: catalogDataSource });
+    void executeSearch({ nextQuery: '', nextRegionId, nextBrandId: 'all', nextCategoryId: '', recordHistory: false, dataSource: catalogDataSource });
   }
 
   /** 选择首页快捷分类。 */
@@ -914,10 +1078,27 @@ export function App() {
   /** 切换品牌门店筛选。 */
   function handleChangeBrand(nextBrandId: string) {
     setBrandId(nextBrandId);
+    setBrandCategoryId('');
+    setBrandCategories([]);
+    void loadBrandCategories(nextBrandId, regionId, catalogDataSource);
     void executeSearch({
       nextQuery: query,
       nextRegionId: regionId,
       nextBrandId,
+      nextCategoryId: '',
+      recordHistory: false,
+      dataSource: catalogDataSource,
+    });
+  }
+
+  /** 切换当前品牌品类并重新获取第一页商品。 */
+  function handleChangeBrandCategory(nextCategoryId: string) {
+    setBrandCategoryId(nextCategoryId);
+    void executeSearch({
+      nextQuery: query,
+      nextRegionId: regionId,
+      nextBrandId: brandId,
+      nextCategoryId,
       recordHistory: false,
       dataSource: catalogDataSource,
     });
@@ -985,6 +1166,7 @@ export function App() {
     setDetailErrorMessage('');
     setIsDetailLoading(true);
     setIsDetailOpen(true);
+    void loadMarketplaceStatusesForProducts([product]);
 
     try {
       // 商品自身仓库 ID；“全部”模式下商详仍必须指定具体仓库。
@@ -1041,6 +1223,15 @@ export function App() {
   /** 关闭一键比价弹窗。 */
   function handleCloseComparison() {
     setComparisonProduct(null);
+  }
+
+  /** 打开当前本地商品的 SKU 价格走势页面。 */
+  function handleOpenPriceHistory(product: ProductDetail) {
+    if (!product.catalog_offer_id) {
+      return;
+    }
+    setIsDetailOpen(false);
+    window.location.hash = `/price-history/${encodeURIComponent(product.catalog_offer_id)}`;
   }
 
   /** 刷新当前本地商品并重新读取详情。 */
@@ -1100,7 +1291,11 @@ export function App() {
         </div>
       </nav>
 
-      {catalogMode === 'sync' ? (
+      {catalogMode === 'batchPublish' && publishBatchRoute ? (
+        <BrandPublishPage key={publishBatchRoute.routeKey} batchId={publishBatchRoute.batchId} brandStoreId={publishBatchRoute.brandStoreId} brandName={publishBatchRoute.brandName} onBack={() => { window.location.hash = '/library'; }} />
+      ) : catalogMode === 'priceHistory' && priceHistoryRoute ? (
+        <PriceHistoryPage offerId={priceHistoryRoute.offerId} onBack={() => { window.location.hash = '/library'; }} />
+      ) : catalogMode === 'sync' ? (
         <CatalogSyncPage onBack={handleReturnToStorefront} />
       ) : catalogMode === 'marketplace' ? (
         <MarketplacePage
@@ -1173,12 +1368,26 @@ export function App() {
                   <p>共找到 {searchState.total.toLocaleString('zh-CN')} 件商品</p>
                 </div>
                 <div className="catalog-controls">
+                  {catalogDataSource === 'local' ? <button type="button" className="brand-publish-button" disabled={brandId === 'all' || !selectedBrandOption} onClick={handleOpenBrandPublishPage}>发布当前品牌</button> : null}
                   <Select className="brand-select" value={brandId} onChange={handleChangeBrand} loading={isBrandLoading} showSearch optionFilterProp="label" popupMatchSelectWidth={260} options={[{ value: 'all', label: '全部品牌' }, ...brandOptions]} aria-label="品牌筛选" />
                   <label className="stock-toggle"><Switch size="small" checked={stockOnly} onChange={setStockOnly} /><span>只看有货</span></label>
                   <Select className="sort-select" value={sortMode} onChange={handleChangeSort} options={getCatalogSortOptions(catalogDataSource)} aria-label="商品排序" />
                   <button type="button" className="refresh-button" onClick={handleRefreshProducts} disabled={searchState.isLoading}><RefreshIcon /><span>{searchState.updatedAt || '刷新'}</span></button>
                 </div>
               </div>
+              {brandId !== 'all' && (isBrandCategoryLoading || brandCategories.length > 0) ? (
+                <div className="brand-category-strip" aria-label="当前品牌商品品类">
+                  <button type="button" className={brandCategoryId === '' ? 'brand-category-card brand-category-card--active' : 'brand-category-card'} onClick={() => handleChangeBrandCategory('')}>
+                    <span className="brand-category-card__all">ALL</span><strong>全部商品</strong>
+                  </button>
+                  {brandCategories.map((category) => (
+                    <button type="button" className={brandCategoryId === category.id ? 'brand-category-card brand-category-card--active' : 'brand-category-card'} key={category.id} onClick={() => handleChangeBrandCategory(category.id)}>
+                      {category.imageUrl ? <img src={category.imageUrl} alt="" /> : <span>{category.name.slice(0, 1)}</span>}<strong>{category.name}</strong>
+                    </button>
+                  ))}
+                  {isBrandCategoryLoading ? <div className="brand-category-strip__loading"><Spin size="small" /><span>正在读取品牌品类</span></div> : null}
+                </div>
+              ) : null}
               {searchState.isLoading ? <div className="catalog-loading-indicator"><Spin size="small" /><span>{catalogDataSource === 'live' ? '正在获取小程序实时商品…' : '正在读取本地商品库…'}</span></div> : null}
               {searchState.errorMessage ? <div className="notice notice--error">{searchState.errorMessage}</div> : null}
               {searchState.isLoading && searchState.products.length === 0 ? <ProductGridSkeleton /> : null}
@@ -1202,6 +1411,7 @@ export function App() {
           onRefresh={handleRefreshSelectedProduct}
           onPublish={handleOpenPublish}
           onCompare={handleCompareProduct}
+          onPriceHistory={handleOpenPriceHistory}
         />
       ) : null}
       {publishProduct ? (

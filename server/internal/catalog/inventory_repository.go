@@ -68,6 +68,26 @@ type CatalogOffer struct {
 	InactiveAt      *time.Time     `bson:"inactiveAt,omitempty" json:"inactiveAt,omitempty"`
 }
 
+// SKUPriceSnapshot 保存一个商品 SKU 在某次同步观察到的价格。
+type SKUPriceSnapshot struct {
+	ID                 string    `bson:"_id" json:"id"`
+	OfferID            string    `bson:"offerId" json:"offerId"`
+	ProductID          string    `bson:"productId" json:"productId"`
+	BrandStoreID       string    `bson:"brandStoreId" json:"brandStoreId"`
+	RegionID           string    `bson:"regionId" json:"regionId"`
+	ItemNo             string    `bson:"itemNo" json:"itemNo"`
+	SKUID              string    `bson:"skuId" json:"skuId"`
+	SKUCode            string    `bson:"skuCode,omitempty" json:"skuCode,omitempty"`
+	VariantLabel       string    `bson:"variantLabel" json:"variantLabel"`
+	PriceCents         int64     `bson:"priceCents" json:"priceCents"`
+	SourcePriceCents   int64     `bson:"sourcePriceCents" json:"sourcePriceCents"`
+	ActivityPriceCents int64     `bson:"activityPriceCents" json:"activityPriceCents"`
+	MarketPriceCents   int64     `bson:"marketPriceCents" json:"marketPriceCents"`
+	Stock              int64     `bson:"stock" json:"stock"`
+	SyncRunID          string    `bson:"syncRunId,omitempty" json:"syncRunId,omitempty"`
+	ObservedAt         time.Time `bson:"observedAt" json:"observedAt"`
+}
+
 // SyncRun 是一次品牌或单商品同步的审计记录。
 type SyncRun struct {
 	ID             string    `bson:"_id" json:"id"`
@@ -87,21 +107,23 @@ type SyncRun struct {
 
 // InventoryRepository 管理本地商品库的集合与索引。
 type InventoryRepository struct {
-	regions     *mongo.Collection
-	brands      *mongo.Collection
-	brandStores *mongo.Collection
-	offers      *mongo.Collection
-	syncRuns    *mongo.Collection
+	regions      *mongo.Collection
+	brands       *mongo.Collection
+	brandStores  *mongo.Collection
+	offers       *mongo.Collection
+	syncRuns     *mongo.Collection
+	priceHistory *mongo.Collection
 }
 
 // NewInventoryRepository 创建本地商品库仓储。
 func NewInventoryRepository(database *mongo.Database) *InventoryRepository {
 	return &InventoryRepository{
-		regions:     database.Collection("catalog_regions"),
-		brands:      database.Collection("catalog_brands"),
-		brandStores: database.Collection("catalog_brand_stores"),
-		offers:      database.Collection("catalog_offers"),
-		syncRuns:    database.Collection("catalog_sync_runs"),
+		regions:      database.Collection("catalog_regions"),
+		brands:       database.Collection("catalog_brands"),
+		brandStores:  database.Collection("catalog_brand_stores"),
+		offers:       database.Collection("catalog_offers"),
+		syncRuns:     database.Collection("catalog_sync_runs"),
+		priceHistory: database.Collection("catalog_sku_price_history"),
 	}
 }
 
@@ -116,6 +138,7 @@ func (repository *InventoryRepository) EnsureIndexes(ctx context.Context) error 
 		{repository.brandStores, []mongo.IndexModel{{Keys: bson.D{{Key: "regionId", Value: 1}, {Key: "distributorId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "syncEnabled", Value: 1}, {Key: "regionId", Value: 1}}}}},
 		{repository.offers, []mongo.IndexModel{{Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "sourceItemId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "regionId", Value: 1}, {Key: "itemNo", Value: 1}}}, {Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "lastSeenAt", Value: -1}}}}},
 		{repository.syncRuns, []mongo.IndexModel{{Keys: bson.D{{Key: "startedAt", Value: -1}}}, {Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "startedAt", Value: -1}}}}},
+		{repository.priceHistory, []mongo.IndexModel{{Keys: bson.D{{Key: "offerId", Value: 1}, {Key: "skuId", Value: 1}, {Key: "observedAt", Value: 1}}}, {Keys: bson.D{{Key: "itemNo", Value: 1}, {Key: "observedAt", Value: -1}}}}},
 	}
 	for _, indexGroup := range indexGroups {
 		if _, err := indexGroup.collection.Indexes().CreateMany(ctx, indexGroup.models); err != nil {
@@ -123,4 +146,37 @@ func (repository *InventoryRepository) EnsureIndexes(ctx context.Context) error 
 		}
 	}
 	return nil
+}
+
+// HasPriceHistory 判断商品是否已经建立价格历史基线。
+func (repository *InventoryRepository) HasPriceHistory(ctx context.Context, offerID string) (bool, error) {
+	count, err := repository.priceHistory.CountDocuments(ctx, bson.M{"offerId": offerID}, options.Count().SetLimit(1))
+	return count > 0, err
+}
+
+// InsertPriceSnapshots 批量保存价格快照。
+func (repository *InventoryRepository) InsertPriceSnapshots(ctx context.Context, snapshots []SKUPriceSnapshot) error {
+	if len(snapshots) == 0 {
+		return nil
+	}
+	documents := make([]any, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		documents = append(documents, snapshot)
+	}
+	_, err := repository.priceHistory.InsertMany(ctx, documents, options.InsertMany().SetOrdered(false))
+	return err
+}
+
+// ListPriceHistory 返回商品按时间正序排列的全部 SKU 价格快照。
+func (repository *InventoryRepository) ListPriceHistory(ctx context.Context, offerID string) ([]SKUPriceSnapshot, error) {
+	cursor, err := repository.priceHistory.Find(ctx, bson.M{"offerId": offerID}, options.Find().SetSort(bson.D{{Key: "observedAt", Value: 1}, {Key: "skuId", Value: 1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	snapshots := make([]SKUPriceSnapshot, 0)
+	if err := cursor.All(ctx, &snapshots); err != nil {
+		return nil, err
+	}
+	return snapshots, nil
 }

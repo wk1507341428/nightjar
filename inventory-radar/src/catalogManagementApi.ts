@@ -1,5 +1,5 @@
 import { SIDEJOB_API_BASE_URL } from './constants';
-import type { CatalogBrandStore, CatalogBrandStoreCandidate, CatalogSyncRun } from './types';
+import type { CatalogBrandStore, CatalogBrandStoreCandidate, CatalogSyncRun, OfferPriceHistory } from './types';
 
 /** 请求本地商品库管理接口。 */
 async function requestCatalogManagement<ResponseType>(path: string, init?: RequestInit): Promise<ResponseType> {
@@ -47,4 +47,9 @@ export function fetchCatalogSyncRun(runId: string): Promise<CatalogSyncRun> {
 /** 刷新本地库中的一件商品。 */
 export function refreshCatalogOffer(offerId: string): Promise<CatalogSyncRun> {
   return requestCatalogManagement<CatalogSyncRun>(`/catalog/offers/${encodeURIComponent(offerId)}/refresh`, { method: 'POST' });
+}
+
+/** 查询一件本地商品的 SKU 价格历史。 */
+export function fetchCatalogOfferPriceHistory(offerId: string): Promise<OfferPriceHistory> {
+  return requestCatalogManagement<OfferPriceHistory>(`/catalog/offers/${encodeURIComponent(offerId)}/price-history`);
 }

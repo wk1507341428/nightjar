@@ -51,7 +51,8 @@ func (service *Service) SyncXianyu(ctx context.Context) (int, error) {
 	service.syncMutex.Lock()
 	defer service.syncMutex.Unlock()
 
-	remoteItems, err := service.xianyuService.ListOnSaleItems(ctx)
+	// 在售商品属于卖家工作台能力，必须使用卖家工作台凭证；普通闲鱼凭证只负责发布和市场搜索。
+	remoteItems, err := service.sellerXianyuService.ListOnSaleItems(ctx)
 	if err != nil {
 		return 0, err
 	}

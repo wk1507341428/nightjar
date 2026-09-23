@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,8 +23,12 @@ import (
 )
 
 const (
-	maxImageCount = 9
-	maxImageBytes = 15 << 20
+	maxImageCount                 = 9
+	maxImageBytes                 = 15 << 20
+	defaultMinPublishDelaySeconds = 4
+	defaultMaxPublishDelaySeconds = 7
+	publishQueueCapacity          = 1000
+	publishRecoveryLimit          = 1000
 )
 
 // Service 串行消费闲鱼发布任务，避免账号接口并发触发风控。
@@ -52,10 +57,29 @@ func NewService(
 				return validatePublicImageURL(request.URL.String())
 			},
 		},
-		queue: make(chan string, 100),
+		queue: make(chan string, publishQueueCapacity),
 	}
+	service.restoreQueue(runtimeContext)
 	go service.run(runtimeContext)
 	return service
+}
+
+// restoreQueue 恢复服务重启前尚未开始的排队任务。
+func (service *Service) restoreQueue(runtimeContext context.Context) {
+	if err := service.repository.FailInterruptedTasks(runtimeContext); err != nil {
+		logx.Errorf("mark interrupted publish tasks failed: %v", err)
+	}
+	tasks, err := service.repository.ListQueued(runtimeContext, publishRecoveryLimit)
+	if err != nil {
+		logx.Errorf("load queued publish tasks: %v", err)
+		return
+	}
+	for _, task := range tasks {
+		if err := service.Enqueue(task.ID); err != nil {
+			logx.Errorf("restore publish task %s: %v", task.ID, err)
+			return
+		}
+	}
 }
 
 // Enqueue 将已持久化的任务加入发布队列。
@@ -75,21 +99,50 @@ func (service *Service) run(runtimeContext context.Context) {
 		case <-runtimeContext.Done():
 			return
 		case taskID := <-service.queue:
-			service.processTask(runtimeContext, taskID)
+			task, err := service.repository.Get(runtimeContext, taskID)
+			if err != nil {
+				logx.Errorf("load publish task %s: %v", taskID, err)
+				continue
+			}
+			service.processTask(runtimeContext, task)
+			if !waitForNextPublish(runtimeContext, task.MinDelaySeconds, task.MaxDelaySeconds) {
+				return
+			}
 		}
 	}
 }
 
-// processTask 完成图片暂存、表单填写和结果持久化。
-func (service *Service) processTask(runtimeContext context.Context, taskID string) {
-	task, err := service.repository.Get(runtimeContext, taskID)
-	if err != nil {
-		logx.Errorf("load publish task %s: %v", taskID, err)
-		return
+// waitForNextPublish 在任务之间随机冷却，降低连续发布触发风控的概率。
+func waitForNextPublish(runtimeContext context.Context, minDelaySeconds, maxDelaySeconds int) bool {
+	delay := nextPublishDelay(minDelaySeconds, maxDelaySeconds)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-runtimeContext.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
+}
 
-	if err := service.repository.UpdateStatus(runtimeContext, taskID, model.PublishTaskPreparing, "", "", ""); err != nil {
-		logx.Errorf("mark publish task %s preparing: %v", taskID, err)
+// nextPublishDelay 返回任务之间的随机安全间隔。
+func nextPublishDelay(minDelaySeconds, maxDelaySeconds int) time.Duration {
+	if minDelaySeconds <= 0 {
+		minDelaySeconds = defaultMinPublishDelaySeconds
+	}
+	if maxDelaySeconds < minDelaySeconds {
+		maxDelaySeconds = max(minDelaySeconds, defaultMaxPublishDelaySeconds)
+	}
+	minDelay := time.Duration(minDelaySeconds) * time.Second
+	maxDelay := time.Duration(maxDelaySeconds) * time.Second
+	delayRange := maxDelay - minDelay
+	return minDelay + time.Duration(rand.Int63n(int64(delayRange)+1))
+}
+
+// processTask 完成图片暂存、表单填写和结果持久化。
+func (service *Service) processTask(runtimeContext context.Context, task model.PublishTask) {
+	if err := service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskPreparing, "", "", ""); err != nil {
+		logx.Errorf("mark publish task %s preparing: %v", task.ID, err)
 		return
 	}
 
@@ -98,12 +151,12 @@ func (service *Service) processTask(runtimeContext context.Context, taskID strin
 		defer os.RemoveAll(temporaryDirectory)
 	}
 	if err != nil {
-		service.failTask(runtimeContext, taskID, fmt.Sprintf("准备商品图片失败：%v", err))
+		service.failTask(runtimeContext, task.ID, fmt.Sprintf("准备商品图片失败：%v", err))
 		return
 	}
 
-	if err := service.repository.UpdateStatus(runtimeContext, taskID, model.PublishTaskPublishing, "", "", ""); err != nil {
-		logx.Errorf("mark publish task %s publishing: %v", taskID, err)
+	if err := service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskPublishing, "", "", ""); err != nil {
+		logx.Errorf("mark publish task %s publishing: %v", task.ID, err)
 		return
 	}
 
@@ -121,22 +174,22 @@ func (service *Service) processTask(runtimeContext context.Context, taskID strin
 	})
 	if err != nil {
 		if errors.Is(err, xianyu.ErrSessionExpired) {
-			_ = service.repository.UpdateStatus(runtimeContext, taskID, model.PublishTaskNeedsLogin, err.Error(), "", "")
+			_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskNeedsLogin, err.Error(), "", "")
 			return
 		}
-		service.failTask(runtimeContext, taskID, fmt.Sprintf("闲鱼发布失败：%v", err))
+		service.failTask(runtimeContext, task.ID, fmt.Sprintf("闲鱼发布失败：%v", err))
 		return
 	}
 
 	if err := service.repository.UpdateStatus(
 		runtimeContext,
-		taskID,
+		task.ID,
 		model.PublishTaskSucceeded,
 		"",
 		publishResult.ItemID,
 		publishResult.URL,
 	); err != nil {
-		logx.Errorf("save publish task %s result: %v", taskID, err)
+		logx.Errorf("save publish task %s result: %v", task.ID, err)
 	}
 	if err := service.marketplace.MarkXianyuPublished(runtimeContext, task, publishResult); err != nil {
 		logx.Errorf("mark xianyu listing %s: %v", publishResult.ItemID, err)

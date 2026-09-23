@@ -1,5 +1,5 @@
 import { SIDEJOB_API_BASE_URL } from './constants';
-import type { CreatePriceComparisonRequest, CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceOfflineResponse, MarketplaceSyncResponse, PinduoduoCredential, PlatformConnection, PriceComparisonResponse, PublishTask, XianyuConnection } from './types';
+import type { CreatePriceComparisonRequest, CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceOfflineResponse, MarketplaceSyncResponse, PinduoduoCredential, PlatformConnection, PriceComparisonResponse, PublishBatch, PublishBatchPreview, PublishBatchSettings, PublishTask, XianyuConnection } from './types';
 
 /** 解析本地服务 JSON 响应并提取错误信息。 */
 async function requestSideJob<ResponseType>(path: string, init?: RequestInit): Promise<ResponseType> {
@@ -100,10 +100,35 @@ export function retryPublishTask(taskId: string): Promise<PublishTask> {
   });
 }
 
+/** 预览当前品牌的批量发布计划。 */
+export function previewPublishBatch(brandStoreId: string, settings: PublishBatchSettings): Promise<PublishBatchPreview> {
+  return requestSideJob<PublishBatchPreview>('/xianyu/publish-batches/preview', {
+    method: 'POST',
+    body: JSON.stringify({ brandStoreId, ...settings }),
+  });
+}
+
+/** 确认创建当前品牌的串行发布任务。 */
+export function createPublishBatch(brandStoreId: string, settings: PublishBatchSettings): Promise<PublishBatch> {
+  return requestSideJob<PublishBatch>('/xianyu/publish-batches', {
+    method: 'POST',
+    body: JSON.stringify({ brandStoreId, ...settings }),
+  });
+}
+
+/** 查询批量发布任务实时进度。 */
+export function fetchPublishBatch(batchId: string): Promise<PublishBatch> {
+  return requestSideJob<PublishBatch>(`/xianyu/publish-batches/${encodeURIComponent(batchId)}`);
+}
+
 /** 查询指定渠道当前在售商品。 */
-export function fetchMarketplaceListings(platform = 'xianyu'): Promise<MarketplaceListingListResponse> {
+export function fetchMarketplaceListings(platform = 'xianyu', itemNos: string[] = []): Promise<MarketplaceListingListResponse> {
+  const query = new URLSearchParams({ platform });
+  if (itemNos.length > 0) {
+    query.set('itemNos', itemNos.join(','));
+  }
   return requestSideJob<MarketplaceListingListResponse>(
-    `/marketplace/listings?platform=${encodeURIComponent(platform)}`,
+    `/marketplace/listings?${query.toString()}`,
   );
 }
 

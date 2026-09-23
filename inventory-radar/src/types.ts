@@ -38,6 +38,14 @@ export interface DistributorInfo {
   regionauth_id?: string;
 }
 
+/** 商品所属的平台类目节点。 */
+export interface ProductCategoryNode {
+	category_id?: string;
+	category_name?: string;
+	category_level?: string | number;
+	parent_id?: string;
+}
+
 /** 商品搜索结果。 */
 export interface ProductSummary {
   catalog_offer_id?: string;
@@ -67,6 +75,14 @@ export interface ProductSummary {
   pics?: string[];
   distributor_info?: DistributorInfo;
   spec_items?: ProductSku[];
+  item_category_main?: ProductCategoryNode[];
+}
+
+/** 品牌门店可筛选的商品品类。 */
+export interface BrandCategory {
+	id: string;
+	name: string;
+	imageUrl?: string;
 }
 
 /** 品牌门店筛选项。 */
@@ -74,6 +90,7 @@ export interface BrandOption {
   value: string;
   label: string;
   shopCode?: string;
+  categoryDistributorId?: string;
   distributorIdsByRegion?: Record<string, string>;
   distributorIds?: string[];
 }
@@ -90,6 +107,32 @@ export interface ProductDetail extends ProductSummary {
     tagName?: string;
     tagDesc?: string;
   }>;
+}
+
+/** SKU 的一次价格观察记录。 */
+export interface SKUPriceSnapshot {
+	id: string;
+	skuId: string;
+	skuCode?: string;
+	variantLabel: string;
+	priceCents: number;
+	sourcePriceCents: number;
+	activityPriceCents: number;
+	marketPriceCents: number;
+	stock: number;
+	observedAt: string;
+}
+
+/** 商品 SKU 价格历史接口响应。 */
+export interface OfferPriceHistory {
+	offerId: string;
+	itemNo: string;
+	name: string;
+	brandName: string;
+	regionId: string;
+	imageUrl?: string;
+	lastSyncedAt: string;
+	snapshots: SKUPriceSnapshot[];
 }
 
 /** 秒杀活动场次。 */
@@ -301,6 +344,7 @@ export interface PriceComparisonPlatformResult {
 export interface PriceComparisonResponse {
 	id: string;
 	status: string;
+	errorMessage?: string;
 	product: PriceComparisonProduct;
 	platformResults: PriceComparisonPlatformResult[];
 	createdAt: string;
@@ -343,4 +387,54 @@ export interface PublishTask {
 	errorMessage?: string;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** 批量发布中自动跳过的商品。 */
+export interface PublishBatchSkip {
+	itemNo: string;
+	title: string;
+	reason: string;
+}
+
+/** 当前品牌批量发布预览。 */
+export interface PublishBatchPreview {
+	brandStoreId: string;
+	brandName: string;
+	categoryIds?: string[];
+	categoryNames?: string[];
+	total: number;
+	publishable: number;
+	selected: number;
+	skipped: PublishBatchSkip[];
+}
+
+/** 当前品牌批量发布进度。 */
+export interface PublishBatch {
+	id: string;
+	brandName: string;
+	categoryIds?: string[];
+	categoryNames?: string[];
+	status: string;
+	errorMessage?: string;
+	limit: number;
+	minDelaySeconds: number;
+	maxDelaySeconds: number;
+	total: number;
+	queued: number;
+	running: number;
+	succeeded: number;
+	failed: number;
+	needsLogin: number;
+	skipped: PublishBatchSkip[];
+	tasks: PublishTask[];
+	createdAt: string;
+}
+
+/** 品牌批量发布的筛选与节奏配置。 */
+export interface PublishBatchSettings {
+	limit: number;
+	minDelaySeconds: number;
+	maxDelaySeconds: number;
+	categoryIds?: string[];
+	categoryNames?: string[];
 }

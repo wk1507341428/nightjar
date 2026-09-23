@@ -2,6 +2,14 @@ package xianyu
 
 import "testing"
 
+// TestParseSellerReservePrice 验证卖家工作台售价字段按人民币转换为分。
+func TestParseSellerReservePrice(t *testing.T) {
+	priceCents := parseSearchPriceCents(map[string]any{"reservePrice": "229.00"})
+	if priceCents != 22900 {
+		t.Fatalf("parse seller reserve price = %d, want 22900", priceCents)
+	}
+}
+
 // TestExtractCategoryFallback 验证分类预测为空时使用已选分类卡片。
 func TestExtractCategoryFallback(t *testing.T) {
 	response := map[string]any{

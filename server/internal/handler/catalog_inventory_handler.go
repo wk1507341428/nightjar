@@ -2,8 +2,10 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/zeromicro/go-zero/core/logx"
 
@@ -47,6 +49,19 @@ func listCatalogBrandStoresHandler(serviceContext *svc.ServiceContext) http.Hand
 	}
 }
 
+// listCatalogBrandCategoriesHandler 返回一家本地品牌门店的小程序品类。
+func listCatalogBrandCategoriesHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
+	return func(responseWriter http.ResponseWriter, request *http.Request) {
+		categories, err := serviceContext.CatalogService.ListBrandCategories(request.Context(), catalogRouteID(request, "/api/catalog/brand-stores/", "/categories"))
+		if err != nil {
+			logx.Errorf("list catalog brand categories: %v", err)
+			writeError(responseWriter, http.StatusBadGateway, "品牌品类暂时无法读取")
+			return
+		}
+		writeJSON(responseWriter, http.StatusOK, categories)
+	}
+}
+
 // saveCatalogBrandStoreHandler 保存一项品牌门店同步开关。
 func saveCatalogBrandStoreHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
@@ -74,7 +89,7 @@ func saveCatalogBrandStoreHandler(serviceContext *svc.ServiceContext) http.Handl
 func listCatalogOffersHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
 		query := request.URL.Query()
-		result, err := serviceContext.CatalogService.ListOffers(request.Context(), strings.TrimSpace(query.Get("regionId")), strings.TrimSpace(query.Get("brandStoreId")), strings.TrimSpace(query.Get("keyword")), parsePositiveInt(query.Get("page"), 1), parsePositiveInt(query.Get("pageSize"), 24), query.Get("stockOnly") != "false", strings.TrimSpace(query.Get("sort")))
+		result, err := serviceContext.CatalogService.ListOffers(request.Context(), strings.TrimSpace(query.Get("regionId")), strings.TrimSpace(query.Get("brandStoreId")), strings.TrimSpace(query.Get("categoryId")), strings.TrimSpace(query.Get("keyword")), parsePositiveInt(query.Get("page"), 1), parsePositiveInt(query.Get("pageSize"), 24), query.Get("stockOnly") != "false", strings.TrimSpace(query.Get("sort")))
 		if err != nil {
 			logx.Errorf("list catalog offers: %v", err)
 			writeError(responseWriter, http.StatusInternalServerError, "读取本地商品库失败")
@@ -93,6 +108,23 @@ func getCatalogOfferHandler(serviceContext *svc.ServiceContext) http.HandlerFunc
 			return
 		}
 		writeJSON(responseWriter, http.StatusOK, product)
+	}
+}
+
+// getCatalogOfferPriceHistoryHandler 返回一件商品的 SKU 价格走势。
+func getCatalogOfferPriceHistoryHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
+	return func(responseWriter http.ResponseWriter, request *http.Request) {
+		offer, snapshots, err := serviceContext.CatalogService.GetOfferPriceHistory(request.Context(), catalogRouteID(request, "/api/catalog/offers/", "/price-history"))
+		if err != nil {
+			logx.Errorf("get catalog offer price history: %v", err)
+			writeError(responseWriter, http.StatusNotFound, "商品价格历史不存在")
+			return
+		}
+		responses := make([]types.CatalogSKUPriceSnapshotResponse, 0, len(snapshots))
+		for _, snapshot := range snapshots {
+			responses = append(responses, types.CatalogSKUPriceSnapshotResponse{ID: snapshot.ID, SKUID: snapshot.SKUID, SKUCode: snapshot.SKUCode, VariantLabel: snapshot.VariantLabel, PriceCents: snapshot.PriceCents, SourcePriceCents: snapshot.SourcePriceCents, ActivityPriceCents: snapshot.ActivityPriceCents, MarketPriceCents: snapshot.MarketPriceCents, Stock: snapshot.Stock, ObservedAt: snapshot.ObservedAt.Format(time.RFC3339)})
+		}
+		writeJSON(responseWriter, http.StatusOK, types.CatalogOfferPriceHistoryResponse{OfferID: offer.ID, ItemNo: offer.ItemNo, Name: offer.Name, BrandName: offer.BrandName, RegionID: offer.RegionID, ImageURL: strings.TrimSpace(fmt.Sprint(offer.SourceData["main_img"])), LastSyncedAt: offer.LastSyncedAt.Format(time.RFC3339), Snapshots: responses})
 	}
 }
 

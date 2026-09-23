@@ -174,6 +174,7 @@ export function ProductDetailDrawer({
   onRefresh,
   onPublish,
   onCompare,
+  onPriceHistory,
 }: {
   product: ProductDetail | null;
   isLoading: boolean;
@@ -184,6 +185,7 @@ export function ProductDetailDrawer({
   onRefresh: (product: ProductDetail) => void;
   onPublish: (product: ProductDetail) => void;
   onCompare: (product: ProductDetail) => void;
+  onPriceHistory: (product: ProductDetail) => void;
 }) {
   // 在售 SKU 列表。
   const onSaleSkus = product?.spec_items?.filter((sku) => sku?.approve_status === 'onsale') ?? [];
@@ -226,6 +228,7 @@ export function ProductDetailDrawer({
   const drawerFooter = !isLoading && !errorMessage && product ? (
     <div className="detail-drawer-actions">
       {isLocalCatalog ? <Button onClick={() => onRefresh(product)}>刷新商品</Button> : null}
+      {isLocalCatalog ? <Button onClick={() => onPriceHistory(product)}>价格走势</Button> : null}
       <Button onClick={() => onCompare(product)}>一键比价</Button>
       <Button type="primary" onClick={() => onPublish(product)}>发布到闲鱼</Button>
     </div>

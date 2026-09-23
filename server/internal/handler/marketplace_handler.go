@@ -53,7 +53,14 @@ func listMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.Han
 			platform = "all"
 		}
 
-		listings, err := serviceContext.ListingRepository.List(request.Context(), platform, 1000)
+		itemNos := uniqueStrings(strings.Split(request.URL.Query().Get("itemNos"), ","))
+		var listings []model.MarketplaceListing
+		var err error
+		if len(itemNos) > 0 {
+			listings, err = serviceContext.ListingRepository.ListByItemNos(request.Context(), platform, itemNos)
+		} else {
+			listings, err = serviceContext.ListingRepository.List(request.Context(), platform, 5000)
+		}
 		if err != nil {
 			logx.Errorf("list marketplace listings: %v", err)
 			writeError(responseWriter, http.StatusInternalServerError, "读取渠道在售商品失败")

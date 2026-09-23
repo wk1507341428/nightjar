@@ -33,6 +33,13 @@ type OfferListResult struct {
 	Total int64            `json:"total"`
 }
 
+// BrandCategory 是品牌门店用于商品筛选的平台类目。
+type BrandCategory struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	ImageURL string `json:"imageUrl,omitempty"`
+}
+
 // SyncResult 是一次同步的结果摘要。
 type SyncResult struct {
 	Run SyncRun `json:"run"`
@@ -95,6 +102,48 @@ func (service *Service) ListBrandStores(ctx context.Context, regionID string) ([
 	return brandStores, nil
 }
 
+// GetBrandStore 返回一家本地品牌门店配置。
+func (service *Service) GetBrandStore(ctx context.Context, brandStoreID string) (BrandStore, error) {
+	var brandStore BrandStore
+	err := service.inventoryRepository.brandStores.FindOne(ctx, bson.M{"_id": brandStoreID}).Decode(&brandStore)
+	return brandStore, err
+}
+
+// ListBrandCategories 读取一家品牌门店在小程序中展示的品类。
+func (service *Service) ListBrandCategories(ctx context.Context, brandStoreID string) ([]BrandCategory, error) {
+	brandStore, err := service.GetBrandStore(ctx, brandStoreID)
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Data []struct {
+			CategoryID   string `json:"category_id"`
+			CategoryName string `json:"category_name"`
+			ImageURL     string `json:"image_url"`
+		} `json:"data"`
+	}
+	if err := service.getJSON(ctx, "/goods/shopcategory", url.Values{
+		"regionauth_id":         {brandStore.RegionID},
+		"distributor_id":        {brandStore.DistributorID},
+		"is_marketing_category": {"1"},
+	}, &response); err != nil {
+		return nil, err
+	}
+	categories := make([]BrandCategory, 0, len(response.Data))
+	for _, category := range response.Data {
+		if strings.TrimSpace(category.CategoryID) == "" || strings.TrimSpace(category.CategoryName) == "" {
+			continue
+		}
+		categories = append(categories, BrandCategory{ID: strings.TrimSpace(category.CategoryID), Name: strings.TrimSpace(category.CategoryName), ImageURL: strings.TrimSpace(category.ImageURL)})
+	}
+	return categories, nil
+}
+
+// GetLiveProductDetail 从小程序读取一件商品的最新商详。
+func (service *Service) GetLiveProductDetail(ctx context.Context, sourceProduct map[string]any, regionID string) (map[string]any, error) {
+	return service.fetchProductDetail(ctx, sourceProduct, regionID)
+}
+
 // SaveBrandStore 保存品牌门店同步开关。
 func (service *Service) SaveBrandStore(ctx context.Context, candidate BrandStoreCandidate, syncEnabled bool) (BrandStore, error) {
 	now := time.Now()
@@ -139,7 +188,7 @@ func (service *Service) SaveBrandStore(ctx context.Context, candidate BrandStore
 }
 
 // ListOffers 查询本地商品库，供首页和品牌筛选使用。
-func (service *Service) ListOffers(ctx context.Context, regionID, brandStoreID, keyword string, page, pageSize int, stockOnly bool, sortMode string) (OfferListResult, error) {
+func (service *Service) ListOffers(ctx context.Context, regionID, brandStoreID, categoryID, keyword string, page, pageSize int, stockOnly bool, sortMode string) (OfferListResult, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -175,6 +224,11 @@ func (service *Service) ListOffers(ctx context.Context, regionID, brandStoreID, 
 	}
 	if stockOnly {
 		filter["stock"] = bson.M{"$gt": 0}
+	}
+	if categoryIDs := splitCategoryIDs(categoryID); len(categoryIDs) == 1 {
+		filter["sourceData.item_category_main.category_id"] = categoryIDs[0]
+	} else if len(categoryIDs) > 1 {
+		filter["sourceData.item_category_main.category_id"] = bson.M{"$in": categoryIDs}
 	}
 	if trimmedKeyword := strings.TrimSpace(keyword); trimmedKeyword != "" {
 		filter["$or"] = bson.A{
@@ -240,6 +294,29 @@ func (service *Service) GetOffer(ctx context.Context, offerID string) (map[strin
 		return nil, err
 	}
 	return offerToProductMap(offer), nil
+}
+
+// GetOfferPriceHistory 返回商品档案和已保存的 SKU 价格历史。
+func (service *Service) GetOfferPriceHistory(ctx context.Context, offerID string) (CatalogOffer, []SKUPriceSnapshot, error) {
+	var offer CatalogOffer
+	if err := service.inventoryRepository.offers.FindOne(ctx, bson.M{"_id": offerID}).Decode(&offer); err != nil {
+		return CatalogOffer{}, nil, err
+	}
+	hasHistory, err := service.inventoryRepository.HasPriceHistory(ctx, offerID)
+	if err != nil {
+		return CatalogOffer{}, nil, err
+	}
+	if !hasHistory {
+		observedAt := offer.LastSyncedAt
+		if observedAt.IsZero() {
+			observedAt = time.Now()
+		}
+		if err := service.inventoryRepository.InsertPriceSnapshots(ctx, buildSKUPriceSnapshots(offer, offer.SourceData, "", observedAt)); err != nil {
+			return CatalogOffer{}, nil, err
+		}
+	}
+	snapshots, err := service.inventoryRepository.ListPriceHistory(ctx, offerID)
+	return offer, snapshots, err
 }
 
 // SyncBrandStore 全量同步一家启用品牌门店的商品列表。
@@ -513,6 +590,9 @@ func (service *Service) upsertOffer(ctx context.Context, brandStoreID, regionID,
 		LastSeenAt:      seenAt,
 		LastSyncedAt:    seenAt,
 	}
+	if err := service.recordPriceHistory(ctx, offer, existingOffer, isCreated, syncRunID, seenAt); err != nil {
+		return false, err
+	}
 	if isCreated {
 		offer.FirstSeenAt = seenAt
 	} else {
@@ -523,6 +603,115 @@ func (service *Service) upsertOffer(ctx context.Context, brandStoreID, regionID,
 		return false, err
 	}
 	return isCreated, nil
+}
+
+// recordPriceHistory 保存首次价格，并仅为发生价格变化的 SKU 追加快照。
+func (service *Service) recordPriceHistory(ctx context.Context, nextOffer, existingOffer CatalogOffer, isCreated bool, syncRunID string, observedAt time.Time) error {
+	nextSnapshots := buildSKUPriceSnapshots(nextOffer, nextOffer.SourceData, syncRunID, observedAt)
+	if isCreated {
+		return service.inventoryRepository.InsertPriceSnapshots(ctx, nextSnapshots)
+	}
+	hasHistory, err := service.inventoryRepository.HasPriceHistory(ctx, nextOffer.ID)
+	if err != nil {
+		return err
+	}
+	previousObservedAt := existingOffer.LastSyncedAt
+	if previousObservedAt.IsZero() {
+		previousObservedAt = observedAt
+	}
+	previousSnapshots := buildSKUPriceSnapshots(existingOffer, existingOffer.SourceData, syncRunID, previousObservedAt)
+	if !hasHistory {
+		if err := service.inventoryRepository.InsertPriceSnapshots(ctx, previousSnapshots); err != nil {
+			return err
+		}
+	}
+	previousBySKU := make(map[string]SKUPriceSnapshot, len(previousSnapshots))
+	for _, snapshot := range previousSnapshots {
+		previousBySKU[snapshot.SKUID] = snapshot
+	}
+	changedSnapshots := make([]SKUPriceSnapshot, 0)
+	for _, snapshot := range nextSnapshots {
+		previous, exists := previousBySKU[snapshot.SKUID]
+		if !exists || snapshot.PriceCents != previous.PriceCents || snapshot.SourcePriceCents != previous.SourcePriceCents || snapshot.ActivityPriceCents != previous.ActivityPriceCents || snapshot.MarketPriceCents != previous.MarketPriceCents {
+			changedSnapshots = append(changedSnapshots, snapshot)
+		}
+	}
+	return service.inventoryRepository.InsertPriceSnapshots(ctx, changedSnapshots)
+}
+
+// buildSKUPriceSnapshots 将商品或 SKU 当前价格转换为可持久化快照。
+func buildSKUPriceSnapshots(offer CatalogOffer, source map[string]any, syncRunID string, observedAt time.Time) []SKUPriceSnapshot {
+	baseSnapshot := SKUPriceSnapshot{OfferID: offer.ID, ProductID: offer.ProductID, BrandStoreID: offer.BrandStoreID, RegionID: offer.RegionID, ItemNo: offer.ItemNo, SyncRunID: syncRunID, ObservedAt: observedAt}
+	specItems := anySlice(source["spec_items"])
+	if len(specItems) == 0 {
+		baseSnapshot.ID = uuid.NewString()
+		baseSnapshot.SKUID = firstNonEmpty(offer.SourceDefaultID, offer.SourceItemID, offer.ID)
+		baseSnapshot.VariantLabel = "默认规格"
+		baseSnapshot.SourcePriceCents = mapInt64(source, "price")
+		baseSnapshot.ActivityPriceCents = firstPositive(mapInt64(source, "activity_price"), mapInt64(source, "act_price"))
+		baseSnapshot.MarketPriceCents = mapInt64(source, "market_price")
+		baseSnapshot.PriceCents = firstPositive(baseSnapshot.ActivityPriceCents, baseSnapshot.SourcePriceCents)
+		baseSnapshot.Stock = productStock(source)
+		return []SKUPriceSnapshot{baseSnapshot}
+	}
+	snapshots := make([]SKUPriceSnapshot, 0, len(specItems))
+	for _, rawSKU := range specItems {
+		sku := anyMap(rawSKU)
+		if len(sku) == 0 {
+			continue
+		}
+		snapshot := baseSnapshot
+		snapshot.ID = uuid.NewString()
+		snapshot.SKUID = firstNonEmpty(mapString(sku, "item_id"), mapString(sku, "erp_sku_code"), mapString(sku, "custom_spec_id"))
+		if snapshot.SKUID == "" {
+			continue
+		}
+		snapshot.SKUCode = mapString(sku, "erp_sku_code")
+		snapshot.VariantLabel = firstNonEmpty(mapString(sku, "custom_spec_name"), variantLabel(sku))
+		snapshot.SourcePriceCents = mapInt64(sku, "price")
+		snapshot.ActivityPriceCents = firstPositive(mapInt64(sku, "activity_price"), mapInt64(sku, "act_price"))
+		snapshot.MarketPriceCents = mapInt64(sku, "market_price")
+		snapshot.PriceCents = firstPositive(snapshot.ActivityPriceCents, snapshot.SourcePriceCents)
+		snapshot.Stock = mapInt64(sku, "store")
+		snapshots = append(snapshots, snapshot)
+	}
+	return snapshots
+}
+
+// variantLabel 将 SKU 规格整理成易读标签。
+func variantLabel(sku map[string]any) string {
+	labels := make([]string, 0)
+	for _, rawSpec := range anySlice(sku["item_spec"]) {
+		spec := anyMap(rawSpec)
+		if value := mapString(spec, "spec_value_name"); value != "" {
+			labels = append(labels, value)
+		}
+	}
+	return strings.Join(labels, " / ")
+}
+
+// anySlice 兼容 JSON 与 BSON 解码后的数组。
+func anySlice(value any) []any {
+	switch values := value.(type) {
+	case []any:
+		return values
+	case bson.A:
+		return []any(values)
+	default:
+		return nil
+	}
+}
+
+// anyMap 兼容 JSON 与 BSON 解码后的对象。
+func anyMap(value any) map[string]any {
+	switch values := value.(type) {
+	case map[string]any:
+		return values
+	case bson.M:
+		return map[string]any(values)
+	default:
+		return nil
+	}
 }
 
 // reconcileMissingOffers 将完整同步中缺失的商品先标为疑似下架，连续两次才正式下架。
@@ -576,6 +765,24 @@ func offerToProductMap(offer CatalogOffer) map[string]any {
 	product["approve_status"] = offer.SaleStatus
 	product["last_synced_at"] = offer.LastSyncedAt.Format(time.RFC3339)
 	return product
+}
+
+// splitCategoryIDs 清理逗号分隔的一个或多个品类 ID。
+func splitCategoryIDs(categoryFilter string) []string {
+	categoryIDs := make([]string, 0)
+	seenCategoryIDs := make(map[string]struct{})
+	for _, categoryID := range strings.Split(categoryFilter, ",") {
+		trimmedCategoryID := strings.TrimSpace(categoryID)
+		if trimmedCategoryID == "" {
+			continue
+		}
+		if _, exists := seenCategoryIDs[trimmedCategoryID]; exists {
+			continue
+		}
+		seenCategoryIDs[trimmedCategoryID] = struct{}{}
+		categoryIDs = append(categoryIDs, trimmedCategoryID)
+	}
+	return categoryIDs
 }
 
 func normalizeBrandID(brandName string) string {

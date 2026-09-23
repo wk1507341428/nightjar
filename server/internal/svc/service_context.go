@@ -25,6 +25,7 @@ type ServiceContext struct {
 	Config                  config.Config
 	MongoClient             *mongo.Client
 	PublishRepository       *repository.PublishTaskRepository
+	PublishBatchRepository  *repository.PublishBatchRepository
 	SessionRepository       *repository.SessionRepository
 	SellerSessionRepository *repository.SessionRepository
 	PinduoduoRepository     *repository.PinduoduoSessionRepository
@@ -58,6 +59,11 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 	if err := publishRepository.EnsureIndexes(databaseContext); err != nil {
 		_ = mongoClient.Disconnect(context.Background())
 		return nil, fmt.Errorf("ensure publish task indexes: %w", err)
+	}
+	publishBatchRepository := repository.NewPublishBatchRepository(mongoClient.Database(serviceConfig.Mongo.Database))
+	if err := publishBatchRepository.EnsureIndexes(databaseContext); err != nil {
+		_ = mongoClient.Disconnect(context.Background())
+		return nil, fmt.Errorf("ensure publish batch indexes: %w", err)
 	}
 	listingRepository := repository.NewMarketplaceListingRepository(mongoClient.Database(serviceConfig.Mongo.Database))
 	if err := listingRepository.EnsureIndexes(databaseContext); err != nil {
@@ -93,6 +99,7 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 		Config:                  serviceConfig,
 		MongoClient:             mongoClient,
 		PublishRepository:       publishRepository,
+		PublishBatchRepository:  publishBatchRepository,
 		SessionRepository:       sessionRepository,
 		SellerSessionRepository: sellerSessionRepository,
 		PinduoduoRepository:     pinduoduoRepository,

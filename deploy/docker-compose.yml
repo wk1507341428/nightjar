@@ -28,6 +28,10 @@ services:
     restart: unless-stopped
     expose:
       - "9800"
+    # 固定公共 DNS，避免笔记本切换公司/家庭网络后 Docker DNS 无法解析外部平台域名。
+    dns:
+      - 223.5.5.5
+      - 119.29.29.29
     environment:
       SIDEJOB_HOST: 0.0.0.0
       SIDEJOB_PORT: "9800"

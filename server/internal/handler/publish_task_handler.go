@@ -102,6 +102,30 @@ func retryPublishTaskHandler(serviceContext *svc.ServiceContext) http.HandlerFun
 			writeError(responseWriter, http.StatusConflict, "当前任务状态不能重试")
 			return
 		}
+		if task.BatchID != "" {
+			batch, batchErr := serviceContext.PublishBatchRepository.Get(request.Context(), task.BatchID)
+			if batchErr != nil {
+				writeError(responseWriter, http.StatusInternalServerError, "读取批量发布计划失败")
+				return
+			}
+			sourceProduct := map[string]any{"default_item_id": task.SourceItemID, "item_no": task.ItemNo, "item_name": strings.TrimPrefix(task.Title, "【全新】"), "goods_brand": task.Brand}
+			detailProduct, detailErr := serviceContext.CatalogService.GetLiveProductDetail(request.Context(), sourceProduct, task.RegionID)
+			if detailErr != nil {
+				writeError(responseWriter, http.StatusBadGateway, "重试前读取实时商品详情失败")
+				return
+			}
+			rebuiltTask, rebuildErr := buildBatchPublishTask(task.BatchID, publishBatchPlan{BrandStoreID: batch.BrandStoreID, BrandName: batch.BrandName, RegionID: batch.RegionID, CategoryIDs: batch.CategoryIDs, CategoryNames: batch.CategoryNames, MinDelaySeconds: batch.MinDelaySeconds, MaxDelaySeconds: batch.MaxDelaySeconds}, detailProduct, task.CreatedAt)
+			if rebuildErr != nil {
+				writeError(responseWriter, http.StatusBadGateway, rebuildErr.Error())
+				return
+			}
+			rebuiltTask.ID = task.ID
+			if err := serviceContext.PublishRepository.UpdateContent(request.Context(), rebuiltTask); err != nil {
+				writeError(responseWriter, http.StatusInternalServerError, "更新批量发布任务内容失败")
+				return
+			}
+			task = rebuiltTask
+		}
 
 		now := time.Now()
 		if err := serviceContext.PublishRepository.UpdateStatus(request.Context(), taskID, model.PublishTaskQueued, "", "", ""); err != nil {

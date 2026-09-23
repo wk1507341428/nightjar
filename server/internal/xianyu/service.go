@@ -151,6 +151,9 @@ func (service *Service) ListOnSaleItems(ctx context.Context) ([]OnSaleItem, erro
 		defer cancel()
 		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName)
 	}()
+	if service.sellerWorkbench {
+		return listSellerWorkbenchOnSaleItems(ctx, client)
+	}
 
 	// 聚合后的当前在卖商品。
 	items := make([]OnSaleItem, 0)
@@ -178,6 +181,48 @@ func (service *Service) ListOnSaleItems(ctx context.Context) ([]OnSaleItem, erro
 		}
 
 		if !boolValue(pageResponse["nextPage"]) {
+			break
+		}
+	}
+	return items, nil
+}
+
+// listSellerWorkbenchOnSaleItems 使用卖家工作台接口分页读取当前在售商品。
+func listSellerWorkbenchOnSaleItems(ctx context.Context, client *Client) ([]OnSaleItem, error) {
+	items := make([]OnSaleItem, 0)
+	const pageSize = 50
+	for pageNumber := 1; pageNumber <= 100; pageNumber++ {
+		var response map[string]any
+		if err := client.Call(ctx, "mtop.alibaba.idle.seller.pc.common.item.search", "1.0", map[string]any{
+			"pageNo":        pageNumber,
+			"pageSize":      pageSize,
+			"bizType":       "commonPro",
+			"searchRequest": "{}",
+			"itemStatus":    "0",
+		}, &response); err != nil {
+			return nil, fmt.Errorf("获取闲鱼卖家在售商品失败：%w", err)
+		}
+		payload := mapValue(response["data"])
+		if len(payload) == 0 {
+			payload = response
+		}
+		pageItems := sliceValue(payload["itemSearchResponseList"])
+		for _, itemValue := range pageItems {
+			item := mapValue(itemValue)
+			itemID := firstNonEmptyString(item, "itemId", "id", "item_id")
+			if itemID == "" {
+				continue
+			}
+			items = append(items, OnSaleItem{
+				ItemID:     itemID,
+				Title:      firstNonEmptyString(item, "itemTitle", "title", "itemName"),
+				PriceCents: parseSearchPriceCents(item),
+				ImageURL:   firstNonEmptyString(item, "mainPicUrl", "picUrl", "imageUrl"),
+				CategoryID: firstNonEmptyString(item, "categoryId", "catId"),
+			})
+		}
+		total, _ := strconv.Atoi(stringValue(payload["total"]))
+		if len(pageItems) == 0 || total == 0 || pageNumber*pageSize >= total {
 			break
 		}
 	}
@@ -385,7 +430,7 @@ func firstNonEmptyString(values map[string]any, keys ...string) string {
 
 // parseSearchPriceCents 兼容闲鱼搜索卡片中不同的价格字段。
 func parseSearchPriceCents(result map[string]any) int64 {
-	for _, key := range []string{"price", "priceText", "itemPrice"} {
+	for _, key := range []string{"price", "priceText", "itemPrice", "reservePrice", "currentPrice"} {
 		if priceCents := parseYuanPriceCents(firstNonEmptyString(result, key)); priceCents > 0 {
 			return priceCents
 		}

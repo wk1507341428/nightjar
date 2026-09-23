@@ -14,6 +14,7 @@ const (
 // PublishTask 保存一次闲鱼发布任务及其结果，不包含任何登录凭证。
 type PublishTask struct {
 	ID                 string    `bson:"_id" json:"id"`
+	BatchID            string    `bson:"batchId,omitempty" json:"batchId,omitempty"`
 	SourceItemID       string    `bson:"sourceItemId" json:"sourceItemId"`
 	ItemNo             string    `bson:"itemNo" json:"itemNo"`
 	Title              string    `bson:"title" json:"title"`
@@ -26,6 +27,8 @@ type PublishTask struct {
 	Condition          string    `bson:"condition,omitempty" json:"condition,omitempty"`
 	AvailableSizes     []string  `bson:"availableSizes,omitempty" json:"availableSizes,omitempty"`
 	IsFootwear         bool      `bson:"isFootwear" json:"isFootwear"`
+	MinDelaySeconds    int       `bson:"minDelaySeconds,omitempty" json:"minDelaySeconds,omitempty"`
+	MaxDelaySeconds    int       `bson:"maxDelaySeconds,omitempty" json:"maxDelaySeconds,omitempty"`
 	Status             string    `bson:"status" json:"status"`
 	XianyuItemID       string    `bson:"xianyuItemId,omitempty" json:"xianyuItemId,omitempty"`
 	XianyuURL          string    `bson:"xianyuUrl,omitempty" json:"xianyuUrl,omitempty"`
