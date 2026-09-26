@@ -3,6 +3,8 @@ package marketplace
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -23,6 +25,8 @@ type Service struct {
 	xianyuService       *xianyu.Service
 	sellerXianyuService *xianyu.Service
 	syncMutex           sync.Mutex
+	lastFullSync        time.Time
+	lastFullSyncCount   int
 }
 
 // OfflineResult 是渠道下架后的逐商品处理结果。
@@ -48,9 +52,36 @@ func NewService(
 
 // SyncXianyu 使用闲鱼当前在卖商品替换本地闲鱼在售快照。
 func (service *Service) SyncXianyu(ctx context.Context) (int, error) {
+	return service.ensureRetrySnapshot(ctx, true, func() (int, error) { return service.syncXianyuSnapshot(ctx) })
+}
+
+// EnsureRetrySnapshot 同一会话内复用60秒的成功全量快照；不确定结果强制刷新。
+func (service *Service) EnsureRetrySnapshot(ctx context.Context, force bool) error {
+	_, err := service.ensureRetrySnapshot(ctx, force, func() (int, error) { return service.syncXianyuSnapshot(ctx) })
+	return err
+}
+
+func (service *Service) ensureRetrySnapshot(ctx context.Context, force bool, refresh func() (int, error)) (int, error) {
 	service.syncMutex.Lock()
 	defer service.syncMutex.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if !force && !service.lastFullSync.IsZero() && time.Since(service.lastFullSync) < 60*time.Second {
+		return service.lastFullSyncCount, nil
+	}
+	started := time.Now()
+	count, err := refresh()
+	if err != nil {
+		return 0, err
+	}
+	service.lastFullSync = started
+	service.lastFullSyncCount = count
+	return count, nil
+}
 
+// syncXianyuSnapshot 必须在 syncMutex 内执行；仅完整同步成功才允许更新时间戳。
+func (service *Service) syncXianyuSnapshot(ctx context.Context) (int, error) {
 	// 在售商品属于卖家工作台能力，必须使用卖家工作台凭证；普通闲鱼凭证只负责发布和市场搜索。
 	remoteItems, err := service.sellerXianyuService.ListOnSaleItems(ctx)
 	if err != nil {
@@ -87,17 +118,24 @@ func (service *Service) SyncXianyu(ctx context.Context) (int, error) {
 			listedAt = syncedAt
 		}
 		listings = append(listings, model.MarketplaceListing{
-			ID:             model.XianyuPlatform + ":" + remoteItem.ItemID,
-			Platform:       model.XianyuPlatform,
-			PlatformItemID: remoteItem.ItemID,
-			SourceItemID:   task.SourceItemID,
-			ItemNo:         itemNo,
-			Title:          remoteItem.Title,
-			PriceCents:     remoteItem.PriceCents,
-			ImageURL:       remoteItem.ImageURL,
-			ItemURL:        "https://www.goofish.com/item?id=" + remoteItem.ItemID,
-			ListedAt:       listedAt,
-			LastSyncedAt:   syncedAt,
+			ID:              model.XianyuPlatform + ":" + remoteItem.ItemID,
+			Platform:        model.XianyuPlatform,
+			PlatformItemID:  remoteItem.ItemID,
+			SourceItemID:    task.SourceItemID,
+			ItemNo:          itemNo,
+			Title:           remoteItem.Title,
+			PriceCents:      remoteItem.PriceCents,
+			ImageURL:        remoteItem.ImageURL,
+			ItemURL:         "https://www.goofish.com/item?id=" + remoteItem.ItemID,
+			ListedAt:        listedAt,
+			LastSyncedAt:    syncedAt,
+			LastSeenAt:      syncedAt,
+			SaleStatus:      "onsale",
+			BrandProfileID:  task.BrandProfileID,
+			SourceType:      task.SourceType,
+			SourceRegions:   task.SourceRegions,
+			SourceMemberIDs: task.SourceMemberIDs,
+			SourceItemIDs:   task.SourceItemIDs,
 		})
 	}
 
@@ -113,23 +151,32 @@ func (service *Service) MarkXianyuPublished(
 	task model.PublishTask,
 	result xianyu.PublishResult,
 ) error {
+	service.syncMutex.Lock()
+	defer service.syncMutex.Unlock()
 	now := time.Now()
 	imageURL := ""
 	if len(task.ImageURLs) > 0 {
 		imageURL = task.ImageURLs[0]
 	}
 	return service.listingRepository.Upsert(ctx, model.MarketplaceListing{
-		ID:             model.XianyuPlatform + ":" + result.ItemID,
-		Platform:       model.XianyuPlatform,
-		PlatformItemID: result.ItemID,
-		SourceItemID:   task.SourceItemID,
-		ItemNo:         normalizeItemNo(task.ItemNo),
-		Title:          task.Title,
-		PriceCents:     task.PriceCents,
-		ImageURL:       imageURL,
-		ItemURL:        result.URL,
-		ListedAt:       now,
-		LastSyncedAt:   now,
+		ID:              model.XianyuPlatform + ":" + result.ItemID,
+		Platform:        model.XianyuPlatform,
+		PlatformItemID:  result.ItemID,
+		SourceItemID:    task.SourceItemID,
+		ItemNo:          normalizeItemNo(task.ItemNo),
+		Title:           task.Title,
+		PriceCents:      task.PriceCents,
+		ImageURL:        imageURL,
+		ItemURL:         result.URL,
+		ListedAt:        now,
+		LastSyncedAt:    now,
+		LastSeenAt:      now,
+		SaleStatus:      "onsale",
+		BrandProfileID:  task.BrandProfileID,
+		SourceType:      task.SourceType,
+		SourceRegions:   task.SourceRegions,
+		SourceMemberIDs: task.SourceMemberIDs,
+		SourceItemIDs:   task.SourceItemIDs,
 	})
 }
 
@@ -140,7 +187,14 @@ func (service *Service) OfflineXianyuListings(ctx context.Context, itemIDs []str
 
 	xianyuResult, err := service.sellerXianyuService.OfflineItems(ctx, itemIDs)
 	if err != nil {
-		return OfflineResult{}, err
+		if !errors.Is(err, xianyu.ErrSessionExpired) {
+			return OfflineResult{}, err
+		}
+		// 卖家工作台 Cookie 失效时，尝试复用仍有效的普通闲鱼会话。
+		xianyuResult, err = service.xianyuService.OfflineItems(ctx, itemIDs)
+		if err != nil {
+			return OfflineResult{}, fmt.Errorf("卖家后台登录已失效，普通闲鱼登录回退也失败：%w", err)
+		}
 	}
 	if err := service.listingRepository.DeletePlatformItemIDs(ctx, model.XianyuPlatform, xianyuResult.SucceededItemIDs); err != nil {
 		return OfflineResult{}, err

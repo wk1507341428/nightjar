@@ -83,16 +83,21 @@ export interface BrandCategory {
 	id: string;
 	name: string;
 	imageUrl?: string;
+	sourceIds?: string[];
 }
 
 /** 品牌门店筛选项。 */
 export interface BrandOption {
   value: string;
   label: string;
+  logoUrl?: string;
+  onlineGoodsCount?: number;
+  brandProfileId?: string;
   shopCode?: string;
   categoryDistributorId?: string;
   distributorIdsByRegion?: Record<string, string>;
   distributorIds?: string[];
+  profileMembers?: BrandProfileMember[];
 }
 
 /** 商品详情。 */
@@ -204,14 +209,49 @@ export interface CatalogBrandStore extends CatalogBrandStoreCandidate {
   lastSyncedAt?: string;
 }
 
+/** 品牌档案中的一个地区品牌成员。 */
+export interface BrandProfileMember {
+	regionId: string;
+	distributorId: string;
+	sourceName: string;
+}
+
+/** 单品牌或合并品牌档案。 */
+export interface BrandProfile {
+	id: string;
+	name: string;
+	defaultRegionId?: string;
+	members: BrandProfileMember[];
+	updatedAt: string;
+}
+
+/** 品牌维护页的一条实时地区品牌。 */
+export interface BrandMaintenanceSource {
+	regionId: string;
+	distributorId: string;
+	name: string;
+	logoUrl?: string;
+	onlineGoodsCount: number;
+	profileId?: string;
+}
+
+/** 品牌维护页完整数据。 */
+export interface BrandMaintenanceResponse {
+	profiles: BrandProfile[];
+	sources: BrandMaintenanceSource[];
+}
+
 /** 本地商品库同步任务摘要。 */
 export interface CatalogSyncRun {
   id: string;
   scopeType: string;
   brandStoreId?: string;
+  brandName?: string;
+  regionId?: string;
   offerId?: string;
   status: string;
   totalCount: number;
+  processedCount: number;
   createdCount: number;
   updatedCount: number;
   inactiveCount: number;
@@ -219,6 +259,47 @@ export interface CatalogSyncRun {
   errorMessage?: string;
   startedAt: string;
   finishedAt?: string;
+}
+
+/** SKU 同步变更前后的关键值。 */
+export interface CatalogSyncChangeValue {
+	priceCents: number;
+	sourcePriceCents: number;
+	activityPriceCents: number;
+	marketPriceCents: number;
+	stock: number;
+	status?: string;
+}
+
+/** 一条可审计的 SKU 同步变更。 */
+export interface CatalogSyncChange {
+	id: string;
+	runId: string;
+	offerId: string;
+	itemNo: string;
+	productName: string;
+	imageUrl?: string;
+	skuId: string;
+	skuCode?: string;
+	variantLabel: string;
+	changeType: string;
+	before: CatalogSyncChangeValue;
+	after: CatalogSyncChangeValue;
+	changedAt: string;
+	xianyuListings: MarketplaceListing[];
+}
+
+/** 同步历史分页数据。 */
+export interface CatalogSyncRunListResponse {
+	list: CatalogSyncRun[];
+	total: number;
+}
+
+/** 一次同步的变更详情分页数据。 */
+export interface CatalogSyncChangeListResponse {
+	run: CatalogSyncRun;
+	list: CatalogSyncChange[];
+	total: number;
 }
 
 /** 搜索结果状态。 */
@@ -289,8 +370,8 @@ export interface MarketplaceSyncResponse {
 
 /** 渠道商品下架结果。 */
 export interface MarketplaceOfflineResponse {
-	succeededItemIds: string[];
-	failedItemIds: string[];
+	succeededItemIds: string[] | null;
+	failedItemIds: string[] | null;
 }
 
 /** 比价来源商品。 */
@@ -372,15 +453,25 @@ export interface CreatePublishTaskRequest {
 	brand: string;
 	condition: string;
 	availableSizes: string[];
+	variants?: Array<{
+		priceCents: number;
+		quantity: number;
+		properties: Array<{ name: string; value: string }>;
+	}>;
 	isFootwear: boolean;
+	brandProfileId?: string;
+	sourceRegions?: string[];
 }
 
 /** 闲鱼发布任务。 */
 export interface PublishTask {
+	action?: 'publish' | 'update' | 'offline';
+	changeReasons?: string[];
 	id: string;
 	status: PublishTaskStatus;
 	itemNo: string;
 	title: string;
+	brand?: string;
 	priceCents: number;
 	xianyuItemId?: string;
 	xianyuUrl?: string;
@@ -398,6 +489,9 @@ export interface PublishBatchSkip {
 
 /** 当前品牌批量发布预览。 */
 export interface PublishBatchPreview {
+	previewId?: string;
+	unchanged?: number;
+	updates?: Array<PublishTask & { before?: { price?: string; quantity?: string }; variants?: Array<{ quantity: number; priceCents: number; properties: Array<{ name: string; value: string }> }> }>;
 	brandStoreId: string;
 	brandName: string;
 	categoryIds?: string[];
@@ -406,6 +500,7 @@ export interface PublishBatchPreview {
 	publishable: number;
 	selected: number;
 	skipped: PublishBatchSkip[];
+	offlineCandidates: Array<{ platformItemId: string; itemNo: string; title: string; priceCents: number; itemUrl?: string }>;
 }
 
 /** 当前品牌批量发布进度。 */
@@ -426,15 +521,46 @@ export interface PublishBatch {
 	failed: number;
 	needsLogin: number;
 	skipped: PublishBatchSkip[];
+	skippedCount: number;
 	tasks: PublishTask[];
 	createdAt: string;
+	segments: PublishOperationSegment[];
+	offlineRequested: number;
+	offlineSucceeded: number;
+	offlineFailed: number;
+}
+
+/** 发布操作中一次追加的品牌范围。 */
+export interface PublishOperationSegment {
+	id: string;
+	sourceType: 'live' | 'local' | string;
+	brandStoreId?: string;
+	distributorId?: string;
+	brandName: string;
+	brandProfileId?: string;
+	regionId: string;
+	requested: number;
+	addedAt: string;
+}
+
+/** 发布中心操作记录列表。 */
+export interface PublishOperationListResponse {
+	list: PublishBatch[];
+	total: number;
 }
 
 /** 品牌批量发布的筛选与节奏配置。 */
 export interface PublishBatchSettings {
+	previewId?: string;
 	limit: number;
 	minDelaySeconds: number;
 	maxDelaySeconds: number;
 	categoryIds?: string[];
 	categoryNames?: string[];
+	sourceType?: 'live' | 'local';
+	distributorId?: string;
+	brandName?: string;
+	regionId?: string;
+	brandProfileId?: string;
+	itemNos?: string[];
 }

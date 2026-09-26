@@ -34,8 +34,14 @@ func offlineMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.
 		result, err := serviceContext.MarketplaceService.OfflineXianyuListings(request.Context(), body.ItemIDs)
 		if err != nil {
 			logx.Errorf("offline xianyu listings: %v", err)
-			writeError(responseWriter, http.StatusBadGateway, "闲鱼商品下架失败，请检查登录状态后重试")
+			writeError(responseWriter, http.StatusBadGateway, "闲鱼商品下架失败："+err.Error())
 			return
+		}
+		if result.SucceededItemIDs == nil {
+			result.SucceededItemIDs = []string{}
+		}
+		if result.FailedItemIDs == nil {
+			result.FailedItemIDs = []string{}
 		}
 		writeJSON(responseWriter, http.StatusOK, types.MarketplaceOfflineResponse{
 			SucceededItemIDs: result.SucceededItemIDs,

@@ -237,7 +237,6 @@ export function PublishProductModal({
   ];
   // 发布描述默认内容行。
   const defaultDescriptionLines = [
-    `全新 ${product?.item_name ?? ''}`,
     `货号：${product?.item_no ?? '—'}`,
     inStockVariantText,
     `发货地区：${shippingRegionName}`,

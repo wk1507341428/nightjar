@@ -18,6 +18,7 @@ import (
 
 // PublishInput 是闲鱼 API 发布所需商品信息。
 type PublishInput struct {
+	Quantity           int64
 	Title              string
 	Description        string
 	PriceCents         int64
@@ -27,7 +28,21 @@ type PublishInput struct {
 	Brand              string
 	Condition          string
 	AvailableSizes     []string
+	Variants           []PublishVariant
 	IsFootwear         bool
+}
+
+// PublishVariant 是卖家工作台发布接口的一条可售规格。
+type PublishVariant struct {
+	PriceCents int64
+	Quantity   int64
+	Properties []PublishVariantProperty
+}
+
+// PublishVariantProperty 是一条规格属性，例如“鞋码：42”。
+type PublishVariantProperty struct {
+	Name  string
+	Value string
 }
 
 // PublishResult 是闲鱼发布成功结果。
@@ -108,6 +123,12 @@ func (service *Service) Connect(ctx context.Context, rawCredential string) (stri
 	if err != nil {
 		return "", false, err
 	}
+	client.SetSellerWorkbenchMode(service.sellerWorkbench)
+	if service.sellerWorkbench {
+		if err := validateSellerWorkbenchSession(ctx, client); err != nil {
+			return "", false, fmt.Errorf("闲鱼卖家后台凭证校验失败：%w", err)
+		}
+	}
 
 	// 用户资料接口只用于补充昵称；部分可搜索的静默会话无法访问该接口，不阻断凭证保存。
 	var navigationResponse map[string]any
@@ -132,7 +153,23 @@ func (service *Service) Connect(ctx context.Context, rawCredential string) (stri
 
 // Connection 返回本地是否保存了闲鱼会话。
 func (service *Service) Connection(ctx context.Context) (model.XianyuSession, error) {
-	return service.sessionRepository.Get(ctx)
+	session, err := service.sessionRepository.Get(ctx)
+	if err != nil || !service.sellerWorkbench {
+		return session, err
+	}
+	rawCookie, err := service.sessionCipher.Decrypt(session.EncryptedCookie)
+	if err != nil {
+		return model.XianyuSession{}, err
+	}
+	client, err := NewClient(service.config, rawCookie)
+	if err != nil {
+		return model.XianyuSession{}, err
+	}
+	client.SetSellerWorkbenchMode(true)
+	if err := validateSellerWorkbenchSession(ctx, client); err != nil {
+		return model.XianyuSession{}, err
+	}
+	return session, nil
 }
 
 // Disconnect 删除本地保存的闲鱼会话。
@@ -229,6 +266,17 @@ func listSellerWorkbenchOnSaleItems(ctx context.Context, client *Client) ([]OnSa
 	return items, nil
 }
 
+// validateSellerWorkbenchSession 使用轻量查询实时确认卖家后台 Cookie 是否有效。
+func validateSellerWorkbenchSession(ctx context.Context, client *Client) error {
+	var response map[string]any
+	if err := client.Call(ctx, "mtop.alibaba.idle.seller.pc.common.item.search", "1.0", map[string]any{
+		"pageNo": 1, "pageSize": 1, "bizType": "commonPro", "searchRequest": "{}", "itemStatus": "0",
+	}, &response); err != nil {
+		return err
+	}
+	return nil
+}
+
 // OfflineItems 下架一个或多个当前在售的闲鱼商品。
 func (service *Service) OfflineItems(ctx context.Context, itemIDs []string) (OfflineResult, error) {
 	// 去重后的待下架商品 ID。
@@ -258,31 +306,26 @@ func (service *Service) OfflineItems(ctx context.Context, itemIDs []string) (Off
 		return OfflineResult{SucceededItemIDs: []string{itemID}}, nil
 	}
 
-	var response struct {
-		Data struct {
-			ItemProcessResultList []struct {
-				ItemID  string `json:"itemId"`
-				Success bool   `json:"success"`
-			} `json:"itemProcessResultList"`
-		} `json:"data"`
-	}
+	var response map[string]any
 	if err := client.Call(ctx, "mtop.alibaba.idle.seller.pc.item.batch.offline", "1.0", map[string]any{"itemIds": strings.Join(normalizedItemIDs, ",")}, &response); err != nil {
 		return OfflineResult{}, fmt.Errorf("批量下架闲鱼商品失败：%w", err)
 	}
-	if len(response.Data.ItemProcessResultList) == 0 {
+	processResults := sliceValue(mapValue(response["data"])["itemProcessResultList"])
+	if len(processResults) == 0 {
 		return OfflineResult{}, errors.New("闲鱼未返回批量下架结果")
 	}
 
 	// 批量下架的逐商品执行结果。
 	result := OfflineResult{}
-	processedItemIDs := make(map[string]struct{}, len(response.Data.ItemProcessResultList))
-	for _, itemResult := range response.Data.ItemProcessResultList {
-		itemID := strings.TrimSpace(itemResult.ItemID)
+	processedItemIDs := make(map[string]struct{}, len(processResults))
+	for _, rawResult := range processResults {
+		itemResult := mapValue(rawResult)
+		itemID := strings.TrimSpace(stringValue(itemResult["itemId"]))
 		if itemID == "" {
 			continue
 		}
 		processedItemIDs[itemID] = struct{}{}
-		if itemResult.Success {
+		if boolValue(itemResult["success"]) {
 			result.SucceededItemIDs = append(result.SucceededItemIDs, itemID)
 		} else {
 			result.FailedItemIDs = append(result.FailedItemIDs, itemID)
@@ -486,9 +529,18 @@ func (service *Service) Publish(ctx context.Context, input PublishInput) (Publis
 		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName)
 	}()
 
+	pregetAPI := "mtop.idle.pc.idleitem.preget"
+	pregetRequest := map[string]any{}
+	if service.sellerWorkbench {
+		pregetAPI = "mtop.idle.pc.backend.idleitem.preget"
+		pregetRequest["publishScene"] = "pcBackendPublish"
+	}
 	var pregetResponse map[string]any
-	if err := client.Call(ctx, "mtop.idle.pc.idleitem.preget", "1.0", map[string]any{}, &pregetResponse); err != nil {
+	if err := client.Call(ctx, pregetAPI, "1.0", pregetRequest, &pregetResponse); err != nil {
 		return PublishResult{}, fmt.Errorf("获取闲鱼发布配置失败：%w", err)
+	}
+	if service.sellerWorkbench && len(input.Variants) > 0 && !boolValue(pregetResponse["supportSkuOrInventory"]) {
+		return PublishResult{}, errors.New("当前闲鱼卖家账号不支持多规格库存发布")
 	}
 
 	uploadedImages := make([]UploadedImage, 0, len(input.ImagePaths))
@@ -503,7 +555,7 @@ func (service *Service) Publish(ctx context.Context, input PublishInput) (Publis
 
 	recommendRequest := map[string]any{
 		"description":     input.Description,
-		"title":           input.Description,
+		"title":           input.Title,
 		"imageInfos":      imageInfos,
 		"currentCardList": []any{},
 		"selectedList":    []any{},
@@ -511,13 +563,19 @@ func (service *Service) Publish(ctx context.Context, input PublishInput) (Publis
 		"catName":         "",
 		"channelCatId":    "",
 		"lockCpv":         false,
-		"multiSKU":        false,
+		"multiSKU":        len(input.Variants) > 0,
 		"publishScene":    "mainPublish",
 		"scene":           "newPublishChoice",
 		"uniqueCode":      uniqueCode(),
 	}
+	recommendAPI := "mtop.taobao.idle.kgraph.property.recommend"
+	if service.sellerWorkbench {
+		recommendAPI = "mtop.taobao.idle.kgraph.pc.property.recommend"
+		recommendRequest["publishScene"] = "pcBackendPublish"
+		recommendRequest["scene"] = "shopPcPublish"
+	}
 	var recommendResponse map[string]any
-	if err := client.Call(ctx, "mtop.taobao.idle.kgraph.property.recommend", "2.0", recommendRequest, &recommendResponse); err != nil {
+	if err := client.Call(ctx, recommendAPI, "2.0", recommendRequest, &recommendResponse); err != nil {
 		return PublishResult{}, fmt.Errorf("识别闲鱼商品属性失败：%w", err)
 	}
 
@@ -534,8 +592,12 @@ func (service *Service) Publish(ctx context.Context, input PublishInput) (Publis
 		"itemInfoJson": mustJSON(payload),
 		"param":        `{"multiSkuEditingMode":"false","settingsPreferences":null,"supportDefaultOpen":true}`,
 	}
+	serviceAPI := "mtop.idle.item.publish.service.cards.list"
+	if service.sellerWorkbench {
+		serviceAPI = "mtop.idle.pc.backend.publish.service.cards.list"
+	}
 	var serviceResponse map[string]any
-	if err := client.Call(ctx, "mtop.idle.item.publish.service.cards.list", "1.0", serviceRequest, &serviceResponse); err != nil {
+	if err := client.Call(ctx, serviceAPI, "1.0", serviceRequest, &serviceResponse); err != nil {
 		return PublishResult{}, fmt.Errorf("获取闲鱼发布服务失败：%w", err)
 	}
 	payload["userRightsProtocols"] = extractServiceProtocols(serviceResponse)
@@ -543,11 +605,20 @@ func (service *Service) Publish(ctx context.Context, input PublishInput) (Publis
 	payload["sourceId"] = "pcMainPublish"
 	payload["bizcode"] = "pcMainPublish"
 	payload["publishScene"] = "pcMainPublish"
+	if service.sellerWorkbench {
+		payload["publishScene"] = "pcBackendPublish"
+	}
 
 	var publishResponse struct {
 		ItemID any `json:"itemId"`
 	}
-	if err := client.Call(ctx, "mtop.idle.pc.idleitem.publish", "1.0", payload, &publishResponse); err != nil {
+	publishAPI := "mtop.idle.pc.idleitem.publish"
+	publishRequest := any(payload)
+	if service.sellerWorkbench {
+		publishAPI = "mtop.idle.pc.backend.idleitem.publish"
+		publishRequest = map[string]any{"inputJson": mustJSON(payload)}
+	}
+	if err := client.Call(ctx, publishAPI, "1.0", publishRequest, &publishResponse); err != nil {
 		return PublishResult{}, fmt.Errorf("闲鱼发布接口失败：%w", err)
 	}
 	itemID := stringValue(publishResponse.ItemID)
@@ -902,16 +973,16 @@ func buildPublishPayload(
 	if stringValue(itemAddress["divisionId"]) == "" {
 		itemAddress = defaultAddressForRegion(input.RegionID)
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"freebies":        false,
 		"itemTypeStr":     "b",
-		"quantity":        "1",
+		"quantity":        publishQuantity(input.Variants),
 		"simpleItem":      "true",
 		"imageInfoDOList": imageInfos,
 		"itemTextDTO": map[string]any{
 			"desc":              input.Description,
-			"title":             input.Description,
-			"titleDescSeparate": false,
+			"title":             input.Title,
+			"titleDescSeparate": true,
 		},
 		"itemPriceDTO": map[string]any{
 			"priceInCent":     strconv.FormatInt(input.PriceCents, 10),
@@ -929,8 +1000,8 @@ func buildPublishPayload(
 		"itemTopicParams":   map[string]any{"topicInfos": []any{}},
 		"topics":            []any{},
 		"itemGroupDTO":      map[string]any{"groupId": ""},
-		"itemProperties":    []any{},
-		"itemSkuList":       nil,
+		"itemProperties":    buildPublishProperties(input.Variants),
+		"itemSkuList":       buildPublishSKUList(input.Variants),
 		"propertyImageList": nil,
 		"defaultPrice":      false,
 		"aiHostUsed":        false,
@@ -939,6 +1010,110 @@ func buildPublishPayload(
 		"asyncSecurityInfo": map[string]any{"securityStrategyHitResult": map[string]any{"FORBIDDEN": []any{}, "WARN": []any{}}},
 		"yhbItemInfoDTO":    map[string]any{"idleAppraiseScene": "", "settingsPreferences": map[string]string{"assumeRule": "", "tradeRule": ""}, "useYhbService": false},
 	}
+	return payload
+}
+
+// publishQuantity 汇总所有规格库存；普通商品保持一件库存。
+func publishQuantity(variants []PublishVariant) string {
+	if len(variants) == 0 {
+		return "1"
+	}
+	var quantity int64
+	for _, variant := range variants {
+		if variant.Quantity > 0 {
+			quantity += variant.Quantity
+		}
+	}
+	if quantity <= 0 {
+		return "1"
+	}
+	return strconv.FormatInt(quantity, 10)
+}
+
+// buildPublishSKUList 生成卖家工作台要求的逐规格价格和库存。
+func buildPublishSKUList(variants []PublishVariant) any {
+	if len(variants) == 0 {
+		return nil
+	}
+	items := make([]any, 0, len(variants))
+	for _, variant := range variants {
+		if variant.Quantity <= 0 || variant.PriceCents <= 0 || len(variant.Properties) == 0 {
+			continue
+		}
+		properties := make([]map[string]string, 0, len(variant.Properties))
+		for _, property := range variant.Properties {
+			name := strings.TrimSpace(property.Name)
+			value := strings.TrimSpace(property.Value)
+			if name == "" || value == "" {
+				continue
+			}
+			properties = append(properties, map[string]string{"propertyText": name, "valueText": value})
+		}
+		if len(properties) == 0 {
+			continue
+		}
+		items = append(items, map[string]any{
+			"priceInCent":  strconv.FormatInt(variant.PriceCents, 10),
+			"quantity":     variant.Quantity,
+			"propertyList": properties,
+		})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return items
+}
+
+// buildPublishProperties 汇总多规格表头和值列表。
+func buildPublishProperties(variants []PublishVariant) any {
+	if len(variants) == 0 {
+		return nil
+	}
+	propertyOrder := make([]string, 0, 2)
+	propertyValues := make(map[string][]string)
+	for _, variant := range variants {
+		for _, property := range variant.Properties {
+			name := strings.TrimSpace(property.Name)
+			value := strings.TrimSpace(property.Value)
+			if name == "" || value == "" {
+				continue
+			}
+			if _, exists := propertyValues[name]; !exists {
+				propertyOrder = append(propertyOrder, name)
+			}
+			propertyValues[name] = appendUniqueString(propertyValues[name], value)
+		}
+	}
+	properties := make([]any, 0, len(propertyOrder))
+	for _, propertyName := range propertyOrder {
+		values := propertyValues[propertyName]
+		if len(values) == 0 {
+			continue
+		}
+		propertyValueList := make([]any, 0, len(values))
+		for _, propertyValue := range values {
+			propertyValueList = append(propertyValueList, map[string]any{"propertyValue": propertyValue})
+		}
+		properties = append(properties, map[string]any{
+			"propertyName":   propertyName,
+			"supportImage":   false,
+			"propertyValues": propertyValueList,
+		})
+	}
+	if len(properties) == 0 {
+		return nil
+	}
+	return properties
+}
+
+// appendUniqueString 追加未出现的非空字符串。
+func appendUniqueString(values []string, value string) []string {
+	for _, currentValue := range values {
+		if currentValue == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 // defaultAddressForRegion 将奥莱地区转换为闲鱼发布所需行政区信息。

@@ -76,6 +76,21 @@ func (repository *PublishTaskRepository) Create(ctx context.Context, task model.
 }
 
 // Get 按任务 ID 查询发布任务。
+// ClaimRetry 原子领取失败任务，避免重复点击或单件与批量重试造成重复入队。
+func (repository *PublishTaskRepository) ClaimRetry(ctx context.Context, taskID string) (bool, error) {
+	result, err := repository.collection.UpdateOne(ctx, bson.M{"_id": taskID, "status": bson.M{"$in": bson.A{model.PublishTaskFailed, model.PublishTaskNeedsLogin}}, "cancelledAt": bson.M{"$exists": false}}, bson.M{"$set": bson.M{"status": model.PublishTaskQueued, "retryRequested": true, "updatedAt": time.Now()}, "$inc": bson.M{"retryCount": 1}})
+	if err != nil {
+		return false, err
+	}
+	return result.ModifiedCount == 1, nil
+}
+
+// FinishRetryPreparation 保存重新核对后的基线并清除重试标记。
+func (repository *PublishTaskRepository) FinishRetryPreparation(ctx context.Context, task model.PublishTask) error {
+	_, err := repository.collection.UpdateOne(ctx, bson.M{"_id": task.ID}, bson.M{"$set": bson.M{"before": task.Before, "retryRequested": false, "errorMessage": "", "updatedAt": time.Now()}})
+	return err
+}
+
 func (repository *PublishTaskRepository) Get(ctx context.Context, taskID string) (model.PublishTask, error) {
 	var task model.PublishTask
 	err := repository.collection.FindOne(ctx, bson.M{"_id": taskID}).Decode(&task)
@@ -146,6 +161,20 @@ func (repository *PublishTaskRepository) FindByXianyuItemIDs(
 	return tasks, nil
 }
 
+// ListSucceededByRegions 返回指定地区可追溯的成功发布任务。
+func (repository *PublishTaskRepository) ListSucceededByRegions(ctx context.Context, regionIDs []string) ([]model.PublishTask, error) {
+	cursor, err := repository.collection.Find(ctx, bson.M{"status": model.PublishTaskSucceeded, "regionId": bson.M{"$in": regionIDs}, "xianyuItemId": bson.M{"$exists": true, "$ne": ""}})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	tasks := make([]model.PublishTask, 0)
+	if err := cursor.All(ctx, &tasks); err != nil {
+		return nil, err
+	}
+	return tasks, nil
+}
+
 // UpdateStatus 更新任务状态和可选结果。
 func (repository *PublishTaskRepository) UpdateStatus(
 	ctx context.Context,
@@ -191,6 +220,11 @@ func (repository *PublishTaskRepository) UpdateContent(ctx context.Context, task
 		"brand":              task.Brand,
 		"condition":          task.Condition,
 		"availableSizes":     task.AvailableSizes,
+		"variants":           task.Variants,
+		"quantity":           task.Quantity,
+		"sourceRegions":      task.SourceRegions,
+		"sourceMemberIds":    task.SourceMemberIDs,
+		"sourceItemIds":      task.SourceItemIDs,
 		"isFootwear":         task.IsFootwear,
 		"updatedAt":          time.Now(),
 	}})

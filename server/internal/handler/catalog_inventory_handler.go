@@ -153,6 +153,85 @@ func getCatalogSyncRunHandler(serviceContext *svc.ServiceContext) http.HandlerFu
 	}
 }
 
+// listCatalogSyncRunsHandler 返回可回看的品牌同步历史。
+func listCatalogSyncRunsHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
+	return func(responseWriter http.ResponseWriter, request *http.Request) {
+		query := request.URL.Query()
+		page := parsePositiveInt(query.Get("page"), 1)
+		pageSize := parsePositiveInt(query.Get("pageSize"), 20)
+		if pageSize > 100 {
+			pageSize = 100
+		}
+		runs, total, err := serviceContext.InventoryRepository.ListSyncRuns(request.Context(), strings.TrimSpace(query.Get("brandStoreId")), strings.TrimSpace(query.Get("regionId")), page, pageSize)
+		if err != nil {
+			logx.Errorf("list catalog sync runs: %v", err)
+			writeError(responseWriter, http.StatusInternalServerError, "读取同步历史失败")
+			return
+		}
+		responses := make([]types.CatalogSyncResponse, 0, len(runs))
+		for _, run := range runs {
+			if run.BrandName == "" && run.BrandStoreID != "" {
+				if brandStore, brandStoreErr := serviceContext.CatalogService.GetBrandStore(request.Context(), run.BrandStoreID); brandStoreErr == nil {
+					run.BrandName = brandStore.BrandName
+					run.RegionID = brandStore.RegionID
+				}
+			}
+			responses = append(responses, syncResponse(run))
+		}
+		writeJSON(responseWriter, http.StatusOK, types.CatalogSyncRunListResponse{List: responses, Total: total})
+	}
+}
+
+// listCatalogSyncChangesHandler 返回一次同步的 SKU 变更和闲鱼在售关联。
+func listCatalogSyncChangesHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
+	return func(responseWriter http.ResponseWriter, request *http.Request) {
+		runID := catalogRouteID(request, "/api/catalog/sync-runs/", "/changes")
+		run, err := serviceContext.CatalogService.GetSyncRun(request.Context(), runID)
+		if err != nil {
+			writeError(responseWriter, http.StatusNotFound, "同步任务不存在")
+			return
+		}
+		if run.BrandName == "" && run.BrandStoreID != "" {
+			if brandStore, brandStoreErr := serviceContext.CatalogService.GetBrandStore(request.Context(), run.BrandStoreID); brandStoreErr == nil {
+				run.BrandName = brandStore.BrandName
+				run.RegionID = brandStore.RegionID
+			}
+		}
+		query := request.URL.Query()
+		page := parsePositiveInt(query.Get("page"), 1)
+		pageSize := parsePositiveInt(query.Get("pageSize"), 50)
+		if pageSize > 100 {
+			pageSize = 100
+		}
+		changes, total, err := serviceContext.InventoryRepository.ListSyncChanges(request.Context(), runID, strings.TrimSpace(query.Get("type")), strings.TrimSpace(query.Get("keyword")), page, pageSize)
+		if err != nil {
+			logx.Errorf("list catalog sync changes: %v", err)
+			writeError(responseWriter, http.StatusInternalServerError, "读取同步变更明细失败")
+			return
+		}
+		itemNos := make([]string, 0, len(changes))
+		for _, change := range changes {
+			itemNos = append(itemNos, change.ItemNo)
+		}
+		listings, err := serviceContext.ListingRepository.ListByItemNos(request.Context(), "xianyu", itemNos)
+		if err != nil {
+			logx.Errorf("list xianyu listings for sync changes: %v", err)
+			writeError(responseWriter, http.StatusInternalServerError, "读取闲鱼在售状态失败")
+			return
+		}
+		listingsByItemNo := make(map[string][]types.MarketplaceListingResponse)
+		for _, listing := range listings {
+			normalizedItemNo := strings.ToUpper(strings.TrimSpace(listing.ItemNo))
+			listingsByItemNo[normalizedItemNo] = append(listingsByItemNo[normalizedItemNo], marketplaceListingToResponse(listing))
+		}
+		responses := make([]types.CatalogSyncChangeResponse, 0, len(changes))
+		for _, change := range changes {
+			responses = append(responses, syncChangeResponse(change, listingsByItemNo[strings.ToUpper(strings.TrimSpace(change.ItemNo))]))
+		}
+		writeJSON(responseWriter, http.StatusOK, types.CatalogSyncChangeListResponse{Run: syncResponse(run), List: responses, Total: total})
+	}
+}
+
 // refreshCatalogOfferHandler 实时刷新本地的一件商品。
 func refreshCatalogOfferHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
@@ -170,7 +249,18 @@ func brandStoreResponse(brandStore catalog.BrandStore) types.CatalogBrandStoreRe
 	return types.CatalogBrandStoreResponse{ID: brandStore.ID, RegionID: brandStore.RegionID, DistributorID: brandStore.DistributorID, BrandID: brandStore.BrandID, BrandName: brandStore.BrandName, ShopCode: brandStore.ShopCode, StoreName: brandStore.StoreName, SyncEnabled: brandStore.SyncEnabled, LastSyncedAt: brandStore.LastSyncedAt.Format("2006-01-02T15:04:05Z07:00")}
 }
 func syncResponse(run catalog.SyncRun) types.CatalogSyncResponse {
-	return types.CatalogSyncResponse{ID: run.ID, ScopeType: run.ScopeType, BrandStoreID: run.BrandStoreID, OfferID: run.OfferID, Status: run.Status, TotalCount: run.TotalCount, CreatedCount: run.CreatedCount, UpdatedCount: run.UpdatedCount, InactiveCount: run.InactiveCount, SuspectedCount: run.SuspectedCount, ErrorMessage: run.ErrorMessage, StartedAt: run.StartedAt.Format("2006-01-02T15:04:05Z07:00"), FinishedAt: run.FinishedAt.Format("2006-01-02T15:04:05Z07:00")}
+	return types.CatalogSyncResponse{ID: run.ID, ScopeType: run.ScopeType, BrandStoreID: run.BrandStoreID, BrandName: run.BrandName, RegionID: run.RegionID, OfferID: run.OfferID, Status: run.Status, TotalCount: run.TotalCount, ProcessedCount: run.ProcessedCount, CreatedCount: run.CreatedCount, UpdatedCount: run.UpdatedCount, InactiveCount: run.InactiveCount, SuspectedCount: run.SuspectedCount, ErrorMessage: run.ErrorMessage, StartedAt: run.StartedAt.Format("2006-01-02T15:04:05Z07:00"), FinishedAt: run.FinishedAt.Format("2006-01-02T15:04:05Z07:00")}
+}
+
+// syncChangeResponse 转换同步变更并附带当前闲鱼在售商品。
+func syncChangeResponse(change catalog.SyncChange, listings []types.MarketplaceListingResponse) types.CatalogSyncChangeResponse {
+	return types.CatalogSyncChangeResponse{
+		ID: change.ID, RunID: change.RunID, OfferID: change.OfferID, ItemNo: change.ItemNo, ProductName: change.ProductName, ImageURL: change.ImageURL,
+		SKUID: change.SKUID, SKUCode: change.SKUCode, VariantLabel: change.VariantLabel, ChangeType: change.ChangeType,
+		Before:    types.CatalogSyncChangeValueResponse{PriceCents: change.Before.PriceCents, SourcePriceCents: change.Before.SourcePriceCents, ActivityPriceCents: change.Before.ActivityPriceCents, MarketPriceCents: change.Before.MarketPriceCents, Stock: change.Before.Stock, Status: change.Before.Status},
+		After:     types.CatalogSyncChangeValueResponse{PriceCents: change.After.PriceCents, SourcePriceCents: change.After.SourcePriceCents, ActivityPriceCents: change.After.ActivityPriceCents, MarketPriceCents: change.After.MarketPriceCents, Stock: change.After.Stock, Status: change.After.Status},
+		ChangedAt: change.ChangedAt.Format(time.RFC3339), XianyuListings: listings,
+	}
 }
 
 // catalogRouteID 提取 GoZero 路由末尾的资源 ID。

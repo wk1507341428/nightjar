@@ -50,7 +50,7 @@ func getXianyuSellerConnectionHandler(serviceContext *svc.ServiceContext) http.H
 			return
 		}
 		if err != nil {
-			writeError(responseWriter, http.StatusInternalServerError, "读取闲鱼卖家后台连接状态失败")
+			writeJSON(responseWriter, http.StatusOK, types.ConnectionResponse{Platform: model.XianyuSellerPlatform, Status: "expired", Authenticated: false, Message: "闲鱼卖家后台登录已失效，请重新连接：" + err.Error()})
 			return
 		}
 		writeJSON(responseWriter, http.StatusOK, types.ConnectionResponse{Platform: model.XianyuSellerPlatform, Status: "connected", Authenticated: true, LastVerifiedAt: session.UpdatedAt.Format(time.RFC3339), Message: "已连接 " + session.DisplayName})

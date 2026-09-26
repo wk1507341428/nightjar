@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Button, Input, Select, Spin, Switch } from 'antd';
-import { discoverCatalogBrandStores, fetchCatalogBrandStores, fetchCatalogSyncRun, saveCatalogBrandStore, syncCatalogBrandStore } from './catalogManagementApi';
+import { discoverCatalogBrandStores, fetchCatalogBrandStores, saveCatalogBrandStore, syncCatalogBrandStore } from './catalogManagementApi';
 import { REGION_OPTIONS } from './constants';
-import type { CatalogBrandStore, CatalogBrandStoreCandidate, CatalogSyncRun } from './types';
+import type { CatalogBrandStore, CatalogBrandStoreCandidate } from './types';
 
 /** 同步配置页的品牌门店视图数据。 */
 interface BrandStoreView extends CatalogBrandStoreCandidate {
@@ -33,25 +33,6 @@ function getBrandStorePriority(brandStore: BrandStoreView): number {
   return 2;
 }
 
-/** 返回同步任务对应的展示文案与样式。 */
-function getSyncRunPresentation(run: CatalogSyncRun): { className: string; label: string } {
-  if (run.status === 'completed') {
-    return { className: 'catalog-sync-run catalog-sync-run--success', label: '同步完成' };
-  }
-  if (run.status === 'running') {
-    const processedCount = run.createdCount + run.updatedCount;
-    const totalLabel = run.totalCount > 0 ? String(run.totalCount) : '…';
-    return { className: 'catalog-sync-run catalog-sync-run--running', label: `同步中 · 已完成 ${processedCount} / ${totalLabel}` };
-  }
-  if (run.status === 'suspicious_empty') {
-    return { className: 'catalog-sync-run catalog-sync-run--warning', label: '上游空结果，已保护本地商品' };
-  }
-  if (run.status === 'suspicious_incomplete') {
-    return { className: 'catalog-sync-run catalog-sync-run--warning', label: '上游分页异常，已保护本地商品' };
-  }
-  return { className: 'catalog-sync-run', label: '同步失败' };
-}
-
 /** CatalogSyncPage 是本地商品库的品牌同步配置工作台。 */
 export function CatalogSyncPage({ onBack }: { onBack: () => void }) {
   // 当前配置地区。
@@ -64,8 +45,6 @@ export function CatalogSyncPage({ onBack }: { onBack: () => void }) {
   const [savingBrandStoreId, setSavingBrandStoreId] = useState('');
   // 正在全量同步的门店 ID。
   const [syncingBrandStoreId, setSyncingBrandStoreId] = useState('');
-  // 最近一次同步任务。
-  const [latestRun, setLatestRun] = useState<CatalogSyncRun | null>(null);
   // 页面错误提示。
   const [errorMessage, setErrorMessage] = useState('');
   // 品牌门店关键词。
@@ -97,7 +76,6 @@ export function CatalogSyncPage({ onBack }: { onBack: () => void }) {
   function handleChangeRegion(nextRegionId: string) {
     setRegionId(nextRegionId);
     setBrandKeyword('');
-    setLatestRun(null);
     void loadBrandStoreWorkspace(nextRegionId);
   }
 
@@ -128,24 +106,12 @@ export function CatalogSyncPage({ onBack }: { onBack: () => void }) {
     setErrorMessage('');
     try {
       const run = await syncCatalogBrandStore(configurationId);
-      setLatestRun(run);
-      await pollSyncRun(run, configurationId);
+      window.location.hash = `/sync-runs/${encodeURIComponent(run.id)}`;
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '品牌同步失败');
     } finally {
       setSyncingBrandStoreId('');
     }
-  }
-
-  /** 轮询后台同步任务，完成后刷新品牌门店状态。 */
-  async function pollSyncRun(initialRun: CatalogSyncRun, brandStoreId: string) {
-    let currentRun = initialRun;
-    while (currentRun.status === 'running') {
-      await new Promise((resolve) => window.setTimeout(resolve, 1500));
-      currentRun = await fetchCatalogSyncRun(currentRun.id);
-      setLatestRun(currentRun);
-    }
-    await loadBrandStoreWorkspace(regionId);
   }
 
   useEffect(() => {
@@ -179,21 +145,17 @@ export function CatalogSyncPage({ onBack }: { onBack: () => void }) {
     }
     return firstBrandStore.brandName.localeCompare(secondBrandStore.brandName, 'zh-CN');
   });
-  // 最近同步任务展示状态。
-  const latestRunPresentation = latestRun ? getSyncRunPresentation(latestRun) : null;
-
   return (
     <main className="catalog-sync-page">
       <section className="catalog-sync-hero">
         <button type="button" className="catalog-sync-hero__back" onClick={onBack}>← 返回本地商品库</button>
-        <div className="catalog-sync-hero__copy"><small>CATALOG CONTROL ROOM</small><h1>品牌同步配置</h1><p>决定哪些品牌门店进入本地商品库。启用后可手动同步；自动任务将在服务器部署后启用。</p></div>
+        <div className="catalog-sync-hero__copy"><small>CATALOG CONTROL ROOM</small><h1>品牌同步控制台</h1><p>配置同步范围，启动后进入独立任务页核对 SKU 价格、库存、上下架和闲鱼在售状态。</p><Button className="catalog-sync-hero__history" onClick={() => { window.location.hash = '/sync-history'; }}>查看同步历史 →</Button></div>
         <div className="catalog-sync-hero__meter"><span>已启用</span><strong>{enabledBrandStoreCount}</strong><small>/ {brandStores.length || '—'} 品牌门店</small></div>
       </section>
 
       <section className="catalog-sync-workspace">
         <header className="catalog-sync-toolbar"><div><small>WAREHOUSE SCOPE</small><h2>{regionName}</h2></div><div className="catalog-sync-toolbar__controls"><Input value={brandKeyword} onChange={(event) => setBrandKeyword(event.target.value)} placeholder="搜索品牌、中文名或店铺代码" allowClear /><Select value={regionId} onChange={handleChangeRegion} options={REGION_OPTIONS.map((region) => ({ value: region.id, label: region.name }))} /></div></header>
         {errorMessage ? <div className="notice notice--error">{errorMessage}</div> : null}
-        {latestRun && latestRunPresentation ? <div className={latestRunPresentation.className}><span>最近同步</span><strong>{latestRunPresentation.label}</strong><p>新增 {latestRun.createdCount} · 更新 {latestRun.updatedCount} · 疑似下架 {latestRun.suspectedCount} · 下架 {latestRun.inactiveCount}</p></div> : null}
         {isLoading ? <div className="catalog-sync-loading"><Spin /><span>正在读取品牌门店配置…</span></div> : null}
         {!isLoading && visibleBrandStores.length === 0 ? <div className="empty-state"><strong>没有找到匹配的品牌门店</strong><p>试试输入英文品牌名、中文名或店铺代码。</p></div> : null}
         {!isLoading && visibleBrandStores.length > 0 ? <div className="catalog-brand-store-grid">{visibleBrandStores.map((brandStore) => {

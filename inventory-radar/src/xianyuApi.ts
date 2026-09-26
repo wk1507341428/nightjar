@@ -1,5 +1,5 @@
 import { SIDEJOB_API_BASE_URL } from './constants';
-import type { CreatePriceComparisonRequest, CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceOfflineResponse, MarketplaceSyncResponse, PinduoduoCredential, PlatformConnection, PriceComparisonResponse, PublishBatch, PublishBatchPreview, PublishBatchSettings, PublishTask, XianyuConnection } from './types';
+import type { CreatePriceComparisonRequest, CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceOfflineResponse, MarketplaceSyncResponse, PinduoduoCredential, PlatformConnection, PriceComparisonResponse, PublishBatch, PublishBatchPreview, PublishBatchSettings, PublishOperationListResponse, PublishTask, XianyuConnection } from './types';
 
 /** 解析本地服务 JSON 响应并提取错误信息。 */
 async function requestSideJob<ResponseType>(path: string, init?: RequestInit): Promise<ResponseType> {
@@ -100,12 +100,14 @@ export function retryPublishTask(taskId: string): Promise<PublishTask> {
   });
 }
 
+/** 仅重新入队当前操作中确认选择的失败任务。 */
+export function retryFailedOperation(operationId: string, taskIds: string[], action = '') {
+  return requestSideJob<{ queued: string[]; rejected: Array<{ itemNo: string; reason: string }> }>(`/xianyu/publish-operations/${encodeURIComponent(operationId)}/retry-failed`, { method: 'POST', body: JSON.stringify({ taskIds, action }) });
+}
+
 /** 预览当前品牌的批量发布计划。 */
 export function previewPublishBatch(brandStoreId: string, settings: PublishBatchSettings): Promise<PublishBatchPreview> {
-  return requestSideJob<PublishBatchPreview>('/xianyu/publish-batches/preview', {
-    method: 'POST',
-    body: JSON.stringify({ brandStoreId, ...settings }),
-  });
+  return previewPublishOperation(brandStoreId, settings);
 }
 
 /** 确认创建当前品牌的串行发布任务。 */
@@ -120,6 +122,41 @@ export function createPublishBatch(brandStoreId: string, settings: PublishBatchS
 export function fetchPublishBatch(batchId: string): Promise<PublishBatch> {
   return requestSideJob<PublishBatch>(`/xianyu/publish-batches/${encodeURIComponent(batchId)}`);
 }
+
+/** 读取发布中心操作记录。 */
+export function fetchPublishOperations(page = 1, pageSize = 20): Promise<PublishOperationListResponse> {
+  return requestSideJob<PublishOperationListResponse>(`/xianyu/publish-operations?page=${page}&pageSize=${pageSize}`);
+}
+
+/** 读取一条发布操作及任务明细。 */
+export function fetchPublishOperation(operationId: string): Promise<PublishBatch> {
+  return requestSideJob<PublishBatch>(`/xianyu/publish-operations/${encodeURIComponent(operationId)}`);
+}
+
+/** 预览准备追加到发布中心的品牌任务。 */
+export async function previewPublishOperation(brandStoreId: string, settings: PublishBatchSettings): Promise<PublishBatchPreview> {
+  // 逐件核对由后端执行，浏览器仅读取进度，避免长请求超时。
+  let result = await requestSideJob<PublishBatchPreview & { status?: string }>('/xianyu/publish-operations/preview', { method: 'POST', body: JSON.stringify({ brandStoreId, ...settings, previewId: undefined }) });
+  while (result.status === 'preparing') {
+    await new Promise((resolve) => window.setTimeout(resolve, 2000));
+    result = await requestSideJob<PublishBatchPreview & { status?: string }>('/xianyu/publish-operations/preview', { method: 'POST', body: JSON.stringify({ previewId: result.previewId }) });
+  }
+  return result;
+}
+
+/** 创建发布操作或追加到当前运行队列。 */
+export function appendPublishOperation(brandStoreId: string, settings: PublishBatchSettings): Promise<PublishBatch> {
+  return requestSideJob<PublishBatch>('/xianyu/publish-operations', { method: 'POST', body: JSON.stringify({ brandStoreId, ...settings }) });
+}
+
+/** 同步后自动对账的历史记录。 */
+export interface ReconcilePlanRecord { id: string; status: string; brandName: string; error?: string; updates: number; offline: number; createdAt: string; request: PublishBatchSettings }
+
+/** 读取同步后生成的待确认对账记录。 */
+export async function fetchReconcileOverview() {
+  return requestSideJob<ReconcilePlanRecord[]>('/xianyu/reconcile-plans');
+}
+
 
 /** 查询指定渠道当前在售商品。 */
 export function fetchMarketplaceListings(platform = 'xianyu', itemNos: string[] = []): Promise<MarketplaceListingListResponse> {

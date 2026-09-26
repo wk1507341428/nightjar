@@ -27,9 +27,9 @@ export function BrandPublishPage({ batchId, brandStoreId, brandName, onBack }: {
   // 本次最多创建的任务数量。
   const [publishLimit, setPublishLimit] = useState(20);
   // 相邻商品发布的最小间隔秒数。
-  const [minDelaySeconds, setMinDelaySeconds] = useState(4);
+  const [minDelaySeconds, setMinDelaySeconds] = useState(1);
   // 相邻商品发布的最大间隔秒数。
-  const [maxDelaySeconds, setMaxDelaySeconds] = useState(7);
+  const [maxDelaySeconds, setMaxDelaySeconds] = useState(2);
   // 当前品牌在小程序中的可选品类。
   const [brandCategories, setBrandCategories] = useState<BrandCategory[]>([]);
   // 本批次选择的品牌品类 ID。
@@ -81,7 +81,7 @@ export function BrandPublishPage({ batchId, brandStoreId, brandName, onBack }: {
     setIsLoading(true);
     setErrorMessage('');
     try {
-      const nextBatch = await createPublishBatch(brandStoreId, getPublishBatchSettings());
+      const nextBatch = await createPublishBatch(brandStoreId, { ...getPublishBatchSettings(), previewId: preview?.previewId });
       setBatch(nextBatch);
       messageApi.success(`已创建 ${nextBatch.tasks.length} 个串行发布任务`);
       window.location.hash = `/publish-batches/${nextBatch.id}`;
@@ -188,8 +188,8 @@ export function BrandPublishPage({ batchId, brandStoreId, brandName, onBack }: {
           <div><small>CURRENT BRAND</small><h2>{batch?.brandName ?? preview?.brandName ?? brandName ?? '正在读取品牌'}</h2><p>每件商品依次发布；确认前不会创建任何闲鱼任务。</p></div>
           {!batch ? <div className="brand-publish-settings">
             <label><span>发布商品品类</span><Select mode="multiple" allowClear maxTagCount="responsive" value={categoryIds} placeholder="全部品类" loading={isCategoryLoading} onChange={(values) => updatePublishSetting(() => setCategoryIds(values))} options={brandCategories.map((category) => ({ value: category.id, label: category.name }))} /></label>
-            <label><span>本次最多发布</span><InputNumber min={1} max={500} value={publishLimit} onChange={(value) => updatePublishSetting(() => setPublishLimit(Number(value ?? 20)))} addonAfter="件" /></label>
-            <label><span>发布安全间隔</span><div className="brand-publish-delay-range"><InputNumber min={1} max={60} value={minDelaySeconds} onChange={(value) => updatePublishSetting(() => setMinDelaySeconds(Number(value ?? 4)))} addonAfter="秒" /><b>至</b><InputNumber min={1} max={60} value={maxDelaySeconds} onChange={(value) => updatePublishSetting(() => setMaxDelaySeconds(Number(value ?? 7)))} addonAfter="秒" /></div></label>
+            <label><span>本次最多发布</span><InputNumber min={1} max={3000} value={publishLimit} onChange={(value) => updatePublishSetting(() => setPublishLimit(Number(value ?? 20)))} addonAfter="件" /></label>
+            <label><span>发布安全间隔</span><div className="brand-publish-delay-range"><InputNumber min={1} max={60} value={minDelaySeconds} onChange={(value) => updatePublishSetting(() => setMinDelaySeconds(Number(value ?? 1)))} addonAfter="秒" /><b>至</b><InputNumber min={1} max={60} value={maxDelaySeconds} onChange={(value) => updatePublishSetting(() => setMaxDelaySeconds(Number(value ?? 2)))} addonAfter="秒" /></div></label>
             <Button type="primary" onClick={() => void loadPreview()} disabled={isLoading || isCategoryLoading || minDelaySeconds > maxDelaySeconds}>{preview ? '重新生成预览' : '生成发布预览'}</Button>
           </div> : null}
         </section>

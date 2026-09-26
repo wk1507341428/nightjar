@@ -22,8 +22,10 @@ var allRegionIDs = []string{"2", "3", "4", "5", "6", "7"}
 
 // Service 提供活动商品查询能力。
 type Service struct {
+	OnSynced            func(BrandStore)
 	config              config.CatalogConfig
 	httpClient          *http.Client
+	liveOfferSemaphore  chan struct{}
 	inventoryRepository *InventoryRepository
 	listingRepository   *repository.MarketplaceListingRepository
 }
@@ -94,6 +96,7 @@ func NewService(serviceConfig config.CatalogConfig, inventoryRepository *Invento
 
 	return &Service{
 		config:              serviceConfig,
+		liveOfferSemaphore:  make(chan struct{}, 12),
 		inventoryRepository: inventoryRepository,
 		listingRepository:   listingRepository,
 		httpClient: &http.Client{

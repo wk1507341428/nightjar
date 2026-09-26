@@ -1,6 +1,8 @@
 package publish
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zeromicro/go-zero/core/logx"
@@ -24,23 +27,27 @@ import (
 
 const (
 	maxImageCount                 = 9
-	maxImageBytes                 = 15 << 20
-	defaultMinPublishDelaySeconds = 4
-	defaultMaxPublishDelaySeconds = 7
-	publishQueueCapacity          = 1000
-	publishRecoveryLimit          = 1000
+	maxImageBytes                 = 10 << 20
+	defaultMinPublishDelaySeconds = 1
+	defaultMaxPublishDelaySeconds = 2
+	publishQueueCapacity          = 3000
+	publishRecoveryLimit          = 3000
 )
 
 // Service 串行消费闲鱼发布任务，避免账号接口并发触发风控。
 type Service struct {
-	repository    *repository.PublishTaskRepository
-	xianyuService *xianyu.Service
-	marketplace   *marketplace.Service
-	httpClient    *http.Client
-	queue         chan string
+	PrepareRetry     func(context.Context, model.PublishTask) (model.PublishTask, error)
+	RefreshReconcile func(context.Context, model.PublishTask) (model.PublishTask, error)
+	repository       *repository.PublishTaskRepository
+	xianyuService    *xianyu.Service
+	marketplace      *marketplace.Service
+	httpClient       *http.Client
+	queue            chan string
+	startOnce        sync.Once
+	runtimeContext   context.Context
 }
 
-// NewService 创建发布任务服务并启动单消费者 Worker。
+// NewService 创建发布任务服务并恢复排队记录，依赖就绪后由 Start 启动消费。
 func NewService(
 	runtimeContext context.Context,
 	taskRepository *repository.PublishTaskRepository,
@@ -48,9 +55,10 @@ func NewService(
 	marketplaceService *marketplace.Service,
 ) *Service {
 	service := &Service{
-		repository:    taskRepository,
-		xianyuService: xianyuService,
-		marketplace:   marketplaceService,
+		runtimeContext: runtimeContext,
+		repository:     taskRepository,
+		xianyuService:  xianyuService,
+		marketplace:    marketplaceService,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(request *http.Request, _ []*http.Request) error {
@@ -60,8 +68,12 @@ func NewService(
 		queue: make(chan string, publishQueueCapacity),
 	}
 	service.restoreQueue(runtimeContext)
-	go service.run(runtimeContext)
 	return service
+}
+
+// Start 在处理依赖完成注册后才启动消费，避免恢复任务早于对账回调就绪。
+func (service *Service) Start() {
+	service.startOnce.Do(func() { go service.run(service.runtimeContext) })
 }
 
 // restoreQueue 恢复服务重启前尚未开始的排队任务。
@@ -141,6 +153,30 @@ func nextPublishDelay(minDelaySeconds, maxDelaySeconds int) time.Duration {
 
 // processTask 完成图片暂存、表单填写和结果持久化。
 func (service *Service) processTask(runtimeContext context.Context, task model.PublishTask) {
+	if task.RetryRequested {
+		if service.PrepareRetry == nil {
+			service.failTask(runtimeContext, task.ID, "重试服务未就绪")
+			return
+		}
+		_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskPreparing, "", "", "")
+		prepared, err := service.PrepareRetry(runtimeContext, task)
+		if err != nil {
+			service.failTask(runtimeContext, task.ID, err.Error())
+			return
+		}
+		task = prepared
+		if err = service.repository.UpdateContent(runtimeContext, task); err == nil {
+			err = service.repository.FinishRetryPreparation(runtimeContext, task)
+		}
+		if err != nil {
+			service.failTask(runtimeContext, task.ID, err.Error())
+			return
+		}
+	}
+	if task.Action == "update" || task.Action == "offline" {
+		service.processReconcileTask(runtimeContext, task)
+		return
+	}
 	if err := service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskPreparing, "", "", ""); err != nil {
 		logx.Errorf("mark publish task %s preparing: %v", task.ID, err)
 		return
@@ -170,11 +206,12 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 		Brand:              task.Brand,
 		Condition:          task.Condition,
 		AvailableSizes:     task.AvailableSizes,
+		Variants:           xianyuPublishVariants(task.Variants),
 		IsFootwear:         task.IsFootwear,
 	})
 	if err != nil {
 		if errors.Is(err, xianyu.ErrSessionExpired) {
-			_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskNeedsLogin, err.Error(), "", "")
+			service.failTask(runtimeContext, task.ID, "闲鱼登录已失效，发布队列任务失败")
 			return
 		}
 		service.failTask(runtimeContext, task.ID, fmt.Sprintf("闲鱼发布失败：%v", err))
@@ -194,6 +231,19 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 	if err := service.marketplace.MarkXianyuPublished(runtimeContext, task, publishResult); err != nil {
 		logx.Errorf("mark xianyu listing %s: %v", publishResult.ItemID, err)
 	}
+}
+
+// xianyuPublishVariants 将持久化规格转换为闲鱼发布接口参数。
+func xianyuPublishVariants(variants []model.PublishVariant) []xianyu.PublishVariant {
+	result := make([]xianyu.PublishVariant, 0, len(variants))
+	for _, variant := range variants {
+		properties := make([]xianyu.PublishVariantProperty, 0, len(variant.Properties))
+		for _, property := range variant.Properties {
+			properties = append(properties, xianyu.PublishVariantProperty{Name: property.Name, Value: property.Value})
+		}
+		result = append(result, xianyu.PublishVariant{PriceCents: variant.PriceCents, Quantity: variant.Quantity, Properties: properties})
+	}
+	return result
 }
 
 // failTask 将任务标记为失败并保留用户可读原因。
@@ -218,12 +268,20 @@ func (service *Service) downloadImages(ctx context.Context, imageURLs []string) 
 	}
 
 	imagePaths := make([]string, 0, len(imageURLs))
+	var lastDownloadError error
 	for imageIndex, imageURL := range imageURLs {
 		imagePath, downloadErr := service.downloadImage(ctx, temporaryDirectory, imageIndex, imageURL)
 		if downloadErr != nil {
-			return temporaryDirectory, nil, downloadErr
+			lastDownloadError = downloadErr
+			continue
 		}
 		imagePaths = append(imagePaths, imagePath)
+	}
+	if len(imagePaths) == 0 {
+		if lastDownloadError == nil {
+			lastDownloadError = errors.New("没有可用的商品图片")
+		}
+		return temporaryDirectory, nil, lastDownloadError
 	}
 	return temporaryDirectory, imagePaths, nil
 }
@@ -254,9 +312,20 @@ func (service *Service) downloadImage(
 		return "", fmt.Errorf("图片接口返回 HTTP %d", response.StatusCode)
 	}
 
-	contentType := response.Header.Get("Content-Type")
-	if contentType != "" && !strings.HasPrefix(strings.ToLower(contentType), "image/") {
+	responseReader := bufio.NewReader(response.Body)
+	fileHead, peekErr := responseReader.Peek(512)
+	if peekErr != nil && !errors.Is(peekErr, io.EOF) {
+		return "", fmt.Errorf("读取商品图片文件头失败：%w", peekErr)
+	}
+	if len(fileHead) == 0 {
 		return "", errors.New("商品图片接口没有返回图片内容")
+	}
+	contentType := http.DetectContentType(fileHead)
+	if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
+		return "", errors.New("商品图片接口没有返回图片内容")
+	}
+	if strings.Contains(strings.ToLower(contentType), "gif") || isAnimatedWebP(fileHead) {
+		return "", errors.New("闲鱼不支持动态商品图片")
 	}
 	extension := imageExtension(contentType, imageURL)
 	imagePath := filepath.Join(temporaryDirectory, fmt.Sprintf("image-%02d%s", imageIndex+1, extension))
@@ -266,14 +335,22 @@ func (service *Service) downloadImage(
 	}
 	defer imageFile.Close()
 
-	writtenBytes, err := io.Copy(imageFile, io.LimitReader(response.Body, maxImageBytes+1))
+	writtenBytes, err := io.Copy(imageFile, io.LimitReader(responseReader, maxImageBytes+1))
 	if err != nil {
 		return "", err
 	}
 	if writtenBytes > maxImageBytes {
-		return "", errors.New("单张商品图片不能超过 15MB")
+		return "", errors.New("单张商品图片不能超过 10MB")
 	}
 	return imagePath, nil
+}
+
+// isAnimatedWebP 判断 WebP 文件头是否声明动画帧。
+func isAnimatedWebP(fileHead []byte) bool {
+	if len(fileHead) < 12 || string(fileHead[:4]) != "RIFF" || string(fileHead[8:12]) != "WEBP" {
+		return false
+	}
+	return bytes.Contains(fileHead, []byte("ANIM")) || bytes.Contains(fileHead, []byte("ANMF"))
 }
 
 // validatePublicImageURL 拒绝本地地址，避免远程图片字段被用于 SSRF。

@@ -18,7 +18,7 @@ func TestDecodePublishBatchRequestKeepsCategory(t *testing.T) {
 	if body.BrandStoreID != "store-1" || strings.Join(body.CategoryIDs, ",") != "2,27" || strings.Join(body.CategoryNames, ",") != "运动服饰,运动鞋靴" {
 		t.Fatalf("unexpected category request: %#v", body)
 	}
-	if body.MinDelaySeconds != 4 || body.MaxDelaySeconds != 7 {
+	if body.MinDelaySeconds != 1 || body.MaxDelaySeconds != 2 {
 		t.Fatalf("unexpected default delay: %d-%d", body.MinDelaySeconds, body.MaxDelaySeconds)
 	}
 }
@@ -43,7 +43,7 @@ func TestBuildBatchPublishTaskMatchesSingleDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build batch task: %v", err)
 	}
-	if task.Title != "【全新】NIKE耐克 男子拉链卫衣开衫夹克薄外套运动休闲DM6822-410" {
+	if len([]rune(task.Title)) > 30 || !strings.HasPrefix(task.Title, "全新 ") || !strings.HasSuffix(task.Title, " DM6822-410") {
 		t.Fatalf("unexpected title: %s", task.Title)
 	}
 	if task.PriceCents != 31490 {
@@ -62,5 +62,23 @@ func TestBuildBatchPublishTaskMatchesSingleDefaults(t *testing.T) {
 	}
 	if task.MinDelaySeconds != 5 || task.MaxDelaySeconds != 9 {
 		t.Fatalf("unexpected delay range: %d-%d", task.MinDelaySeconds, task.MaxDelaySeconds)
+	}
+	if len(task.Variants) != 2 || task.Variants[0].Properties[0].Name != "尺码" {
+		t.Fatalf("unexpected publish variants: %#v", task.Variants)
+	}
+}
+
+// TestProductPublishVariantsMergesFootwearSpecs 验证鞋类 SKU 转为买家可选鞋码及真实库存。
+func TestProductPublishVariantsMergesFootwearSpecs(t *testing.T) {
+	product := map[string]any{"spec_items": []any{
+		map[string]any{"store": "8", "price": "38440", "approve_status": "onsale", "item_spec": []any{map[string]any{"spec_name": "尺码", "spec_value_name": "42"}, map[string]any{"spec_name": "颜色", "spec_value_name": "黑色"}}},
+		map[string]any{"store": "3", "price": "38440", "approve_status": "onsale", "item_spec": []any{map[string]any{"spec_name": "尺码", "spec_value_name": "43"}, map[string]any{"spec_name": "颜色", "spec_value_name": "黑色"}}},
+	}}
+	variants := productPublishVariants(product, true, 42490)
+	if len(variants) != 2 || variants[0].Quantity != 8 || variants[0].PriceCents != 42490 {
+		t.Fatalf("unexpected footwear variants: %#v", variants)
+	}
+	if len(variants[0].Properties) != 1 || variants[0].Properties[0].Name != "鞋码" || variants[0].Properties[0].Value != "42" {
+		t.Fatalf("unexpected footwear property: %#v", variants[0].Properties)
 	}
 }

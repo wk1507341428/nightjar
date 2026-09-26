@@ -48,3 +48,28 @@ func TestAttributeValueMatches(t *testing.T) {
 		t.Fatal("different shoe sizes should not match")
 	}
 }
+
+// TestBuildPublishPayloadIncludesSellerVariants 验证卖家工作台发布载荷包含买家可选规格。
+func TestBuildPublishPayloadIncludesSellerVariants(t *testing.T) {
+	input := PublishInput{
+		Title:       "【全新】343846-002 NIKE运动鞋",
+		Description: "商品描述",
+		PriceCents:  42490,
+		Variants: []PublishVariant{
+			{PriceCents: 42490, Quantity: 8, Properties: []PublishVariantProperty{{Name: "鞋码", Value: "42"}}},
+			{PriceCents: 42490, Quantity: 3, Properties: []PublishVariantProperty{{Name: "鞋码", Value: "43"}}},
+		},
+	}
+	payload := buildPublishPayload(input, map[string]any{}, nil, map[string]any{"catId": "123"}, nil)
+	if stringValue(payload["quantity"]) != "11" {
+		t.Fatalf("unexpected total quantity: %#v", payload["quantity"])
+	}
+	skus := sliceValue(payload["itemSkuList"])
+	if len(skus) != 2 || stringValue(mapValue(skus[0])["priceInCent"]) != "42490" {
+		t.Fatalf("unexpected sku payload: %#v", payload["itemSkuList"])
+	}
+	properties := sliceValue(payload["itemProperties"])
+	if len(properties) != 1 || stringValue(mapValue(properties[0])["propertyName"]) != "鞋码" {
+		t.Fatalf("unexpected property payload: %#v", payload["itemProperties"])
+	}
+}

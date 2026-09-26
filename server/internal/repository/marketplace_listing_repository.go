@@ -37,6 +37,12 @@ func (repository *MarketplaceListingRepository) EnsureIndexes(ctx context.Contex
 
 // Upsert 写入一个当前在售渠道商品。
 func (repository *MarketplaceListingRepository) Upsert(ctx context.Context, listing model.MarketplaceListing) error {
+	if listing.SaleStatus == "" {
+		listing.SaleStatus = "onsale"
+	}
+	if listing.LastSeenAt.IsZero() {
+		listing.LastSeenAt = listing.LastSyncedAt
+	}
 	_, err := repository.collection.UpdateOne(
 		ctx,
 		bson.M{"platform": listing.Platform, "platformItemId": listing.PlatformItemID},
@@ -58,10 +64,13 @@ func (repository *MarketplaceListingRepository) ReplacePlatformSnapshot(
 	writes := make([]mongo.WriteModel, 0, len(listings))
 
 	for _, listing := range listings {
+		listing.SaleStatus = "onsale"
+		listing.LastSeenAt = listing.LastSyncedAt
+		listing.OffShelfAt = nil
 		platformItemIDs = append(platformItemIDs, listing.PlatformItemID)
 		writes = append(writes, mongo.NewUpdateOneModel().
 			SetFilter(bson.M{"platform": platform, "platformItemId": listing.PlatformItemID}).
-			SetUpdate(bson.M{"$set": listing}).
+			SetUpdate(bson.M{"$set": listing, "$unset": bson.M{"offShelfAt": ""}}).
 			SetUpsert(true))
 	}
 
@@ -71,12 +80,13 @@ func (repository *MarketplaceListingRepository) ReplacePlatformSnapshot(
 		}
 	}
 
-	// 只有完整快照写入成功后才清理远程已不存在的商品。
-	deleteFilter := bson.M{"platform": platform}
+	// 完整快照写入成功后，把远程已不存在的商品保留为下架档案。
+	offShelfFilter := bson.M{"platform": platform, "saleStatus": bson.M{"$ne": "off_shelf"}}
 	if len(platformItemIDs) > 0 {
-		deleteFilter["platformItemId"] = bson.M{"$nin": platformItemIDs}
+		offShelfFilter["platformItemId"] = bson.M{"$nin": platformItemIDs}
 	}
-	_, err := repository.collection.DeleteMany(ctx, deleteFilter)
+	now := time.Now()
+	_, err := repository.collection.UpdateMany(ctx, offShelfFilter, bson.M{"$set": bson.M{"saleStatus": "off_shelf", "offShelfAt": now, "lastSyncedAt": now}})
 	return err
 }
 
@@ -86,7 +96,7 @@ func (repository *MarketplaceListingRepository) List(
 	platform string,
 	limit int64,
 ) ([]model.MarketplaceListing, error) {
-	filter := bson.M{}
+	filter := bson.M{"$or": bson.A{bson.M{"saleStatus": "onsale"}, bson.M{"saleStatus": bson.M{"$exists": false}}}}
 	if platform != "" && platform != "all" {
 		filter["platform"] = platform
 	}
@@ -119,7 +129,7 @@ func (repository *MarketplaceListingRepository) ListByItemNos(ctx context.Contex
 	if len(normalizedItemNos) == 0 {
 		return []model.MarketplaceListing{}, nil
 	}
-	filter := bson.M{"itemNo": bson.M{"$in": normalizedItemNos}}
+	filter := bson.M{"itemNo": bson.M{"$in": normalizedItemNos}, "$or": bson.A{bson.M{"saleStatus": "onsale"}, bson.M{"saleStatus": bson.M{"$exists": false}}}}
 	if platform != "" && platform != "all" {
 		filter["platform"] = platform
 	}
@@ -135,9 +145,33 @@ func (repository *MarketplaceListingRepository) ListByItemNos(ctx context.Contex
 	return listings, nil
 }
 
+// ListByBrandProfileID 返回一个品牌档案当前在售的渠道商品。
+func (repository *MarketplaceListingRepository) ListByBrandProfileID(ctx context.Context, platform, brandProfileID string) ([]model.MarketplaceListing, error) {
+	filter := bson.M{"brandProfileId": brandProfileID, "$or": bson.A{bson.M{"saleStatus": "onsale"}, bson.M{"saleStatus": bson.M{"$exists": false}}}}
+	if platform != "" && platform != "all" {
+		filter["platform"] = platform
+	}
+	cursor, err := repository.collection.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "lastSyncedAt", Value: -1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	listings := make([]model.MarketplaceListing, 0)
+	if err := cursor.All(ctx, &listings); err != nil {
+		return nil, err
+	}
+	return listings, nil
+}
+
+// BindBrandProfile 为已有闲鱼商品补齐品牌档案和来源链路。
+func (repository *MarketplaceListingRepository) BindBrandProfile(ctx context.Context, platformItemID, brandProfileID, sourceType string, regions, memberIDs, sourceItemIDs []string) error {
+	_, err := repository.collection.UpdateOne(ctx, bson.M{"platform": model.XianyuPlatform, "platformItemId": platformItemID}, bson.M{"$set": bson.M{"brandProfileId": brandProfileID, "sourceType": sourceType, "sourceRegions": regions, "sourceMemberIds": memberIDs, "sourceItemIds": sourceItemIDs}})
+	return err
+}
+
 // ListNormalizedItemNos 返回一个渠道全部在售商品的标准化货号。
 func (repository *MarketplaceListingRepository) ListNormalizedItemNos(ctx context.Context, platform string) ([]string, error) {
-	filter := bson.M{}
+	filter := bson.M{"$or": bson.A{bson.M{"saleStatus": "onsale"}, bson.M{"saleStatus": bson.M{"$exists": false}}}}
 	if platform != "" && platform != "all" {
 		filter["platform"] = platform
 	}
@@ -167,15 +201,16 @@ func (repository *MarketplaceListingRepository) ListNormalizedItemNos(ctx contex
 	return itemNos, nil
 }
 
-// DeletePlatformItemIDs 删除已确认下架的渠道在售快照。
+// DeletePlatformItemIDs 将已确认下架的商品保留为渠道档案。
 func (repository *MarketplaceListingRepository) DeletePlatformItemIDs(ctx context.Context, platform string, itemIDs []string) error {
 	if len(itemIDs) == 0 {
 		return nil
 	}
-	_, err := repository.collection.DeleteMany(ctx, bson.M{
+	now := time.Now()
+	_, err := repository.collection.UpdateMany(ctx, bson.M{
 		"platform":       platform,
 		"platformItemId": bson.M{"$in": itemIDs},
-	})
+	}, bson.M{"$set": bson.M{"saleStatus": "off_shelf", "offShelfAt": now, "lastSyncedAt": now}})
 	return err
 }
 

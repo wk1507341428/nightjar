@@ -92,7 +92,7 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 	priceCompareService := pricecompare.NewService(xianyuService, pinduoduoService)
 
 	runtimeContext, runtimeCancel := context.WithCancel(context.Background())
-	publishService := publish.NewService(runtimeContext, publishRepository, xianyuService, marketplaceService)
+	publishService := publish.NewService(runtimeContext, publishRepository, sellerXianyuService, marketplaceService)
 	go syncXianyuListings(runtimeContext, marketplaceService)
 
 	return &ServiceContext{

@@ -162,8 +162,8 @@ export async function fetchLiveBrandOptions(regionId: string): Promise<BrandOpti
   requestUrl.searchParams.set('page', '1');
   requestUrl.searchParams.set('pageSize', '1000');
   requestUrl.searchParams.set('sort_type', '5');
-  const response = await requestJson<{ data?: { list?: Array<{ distributor_id?: string; name?: string; shop_code?: string }> } }>(requestUrl);
-  return (response?.data?.list ?? []).filter((brandStore) => Boolean(brandStore?.distributor_id) && Boolean(brandStore?.name)).map((brandStore) => ({ value: `live:${brandStore.distributor_id}`, label: brandStore.name?.trim() ?? '', shopCode: brandStore.shop_code, categoryDistributorId: brandStore.distributor_id, distributorIds: brandStore.distributor_id ? [brandStore.distributor_id] : [] })).sort((firstBrand, secondBrand) => firstBrand.label.localeCompare(secondBrand.label, 'zh-CN'));
+  const response = await requestJson<{ data?: { list?: Array<{ distributor_id?: string; name?: string; logo?: string; online_goods_num?: string | number; shop_code?: string }> } }>(requestUrl);
+  return (response?.data?.list ?? []).filter((brandStore) => Boolean(brandStore?.distributor_id) && Boolean(brandStore?.name)).map((brandStore) => ({ value: `live:${brandStore.distributor_id}`, label: brandStore.name?.trim() ?? '', logoUrl: brandStore.logo?.trim(), onlineGoodsCount: Number(brandStore.online_goods_num ?? 0), shopCode: brandStore.shop_code, categoryDistributorId: brandStore.distributor_id, distributorIds: brandStore.distributor_id ? [brandStore.distributor_id] : [] })).sort((firstBrand, secondBrand) => firstBrand.label.localeCompare(secondBrand.label, 'zh-CN'));
 }
 
 /** 读取小程序为品牌门店配置的商品品类。 */

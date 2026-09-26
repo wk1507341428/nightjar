@@ -31,19 +31,38 @@ func createPublishTaskHandler(serviceContext *svc.ServiceContext) http.HandlerFu
 		}
 
 		now := time.Now()
+		itemNo := strings.TrimSpace(requestBody.ItemNo)
+		sourceTitle := cleanPublishSourceTitle(requestBody.Title, itemNo)
+		availableSizes := uniqueStrings(requestBody.AvailableSizes)
+		sourceRegions := uniqueStrings(requestBody.SourceRegions)
+		regionName := publishRegionName(strings.TrimSpace(requestBody.RegionID))
+		if len(sourceRegions) > 0 {
+			regionNames := make([]string, 0, len(sourceRegions))
+			for _, sourceRegion := range sourceRegions {
+				regionNames = appendUniqueText(regionNames, publishRegionName(sourceRegion))
+			}
+			regionName = strings.Join(regionNames, "、")
+		}
+		variants := publishVariantsFromRequest(requestBody.Variants)
+		if len(variants) == 0 {
+			variants = publishVariantsFromSizes(availableSizes, requestBody.PriceCents, requestBody.IsFootwear)
+		}
 		task := model.PublishTask{
 			ID:                 primitive.NewObjectID().Hex(),
 			SourceItemID:       strings.TrimSpace(requestBody.SourceItemID),
-			ItemNo:             strings.TrimSpace(requestBody.ItemNo),
-			Title:              strings.TrimSpace(requestBody.Title),
-			Description:        strings.TrimSpace(requestBody.Description),
+			ItemNo:             itemNo,
+			Title:              buildPublishTitle(sourceTitle, itemNo),
+			Description:        buildPublishDescription(sourceTitle, itemNo, availableSizes, regionName),
 			PriceCents:         requestBody.PriceCents,
 			OriginalPriceCents: requestBody.OriginalPriceCents,
 			ImageURLs:          uniqueImageURLs(requestBody.ImageURLs),
 			RegionID:           strings.TrimSpace(requestBody.RegionID),
 			Brand:              strings.TrimSpace(requestBody.Brand),
+			BrandProfileID:     strings.TrimSpace(requestBody.BrandProfileID),
+			SourceRegions:      sourceRegions,
 			Condition:          strings.TrimSpace(requestBody.Condition),
-			AvailableSizes:     uniqueStrings(requestBody.AvailableSizes),
+			AvailableSizes:     availableSizes,
+			Variants:           variants,
 			IsFootwear:         requestBody.IsFootwear,
 			Status:             model.PublishTaskQueued,
 			CreatedAt:          now,
@@ -63,6 +82,45 @@ func createPublishTaskHandler(serviceContext *svc.ServiceContext) http.HandlerFu
 
 		writeJSON(responseWriter, http.StatusAccepted, publishTaskToResponse(task))
 	}
+}
+
+// publishVariantsFromRequest 清理 API 传入的逐规格库存和价格。
+func publishVariantsFromRequest(requestVariants []types.CreatePublishVariantRequest) []model.PublishVariant {
+	variants := make([]model.PublishVariant, 0, len(requestVariants))
+	for _, requestVariant := range requestVariants {
+		if requestVariant.PriceCents <= 0 || requestVariant.Quantity <= 0 {
+			continue
+		}
+		properties := make([]model.PublishVariantProperty, 0, len(requestVariant.Properties))
+		for _, requestProperty := range requestVariant.Properties {
+			name := strings.TrimSpace(requestProperty.Name)
+			value := strings.TrimSpace(requestProperty.Value)
+			if name == "" || value == "" {
+				continue
+			}
+			properties = append(properties, model.PublishVariantProperty{Name: name, Value: value})
+		}
+		if len(properties) == 0 {
+			continue
+		}
+		variants = append(variants, model.PublishVariant{PriceCents: requestVariant.PriceCents, Quantity: requestVariant.Quantity, Properties: properties})
+	}
+	if len(variants) < 2 {
+		return nil
+	}
+	return variants
+}
+
+// publishVariantsFromSizes 为单件发布生成基础鞋码规格；批量发布会使用实时库存覆盖。
+func publishVariantsFromSizes(sizes []string, priceCents int64, isFootwear bool) []model.PublishVariant {
+	if !isFootwear || len(sizes) < 2 {
+		return nil
+	}
+	variants := make([]model.PublishVariant, 0, len(sizes))
+	for _, size := range sizes {
+		variants = append(variants, model.PublishVariant{PriceCents: priceCents, Quantity: 1, Properties: []model.PublishVariantProperty{{Name: "鞋码", Value: size}}})
+	}
+	return variants
 }
 
 // getPublishTaskHandler 查询单个发布任务状态。
@@ -102,46 +160,15 @@ func retryPublishTaskHandler(serviceContext *svc.ServiceContext) http.HandlerFun
 			writeError(responseWriter, http.StatusConflict, "当前任务状态不能重试")
 			return
 		}
-		if task.BatchID != "" {
-			batch, batchErr := serviceContext.PublishBatchRepository.Get(request.Context(), task.BatchID)
-			if batchErr != nil {
-				writeError(responseWriter, http.StatusInternalServerError, "读取批量发布计划失败")
-				return
-			}
-			sourceProduct := map[string]any{"default_item_id": task.SourceItemID, "item_no": task.ItemNo, "item_name": strings.TrimPrefix(task.Title, "【全新】"), "goods_brand": task.Brand}
-			detailProduct, detailErr := serviceContext.CatalogService.GetLiveProductDetail(request.Context(), sourceProduct, task.RegionID)
-			if detailErr != nil {
-				writeError(responseWriter, http.StatusBadGateway, "重试前读取实时商品详情失败")
-				return
-			}
-			rebuiltTask, rebuildErr := buildBatchPublishTask(task.BatchID, publishBatchPlan{BrandStoreID: batch.BrandStoreID, BrandName: batch.BrandName, RegionID: batch.RegionID, CategoryIDs: batch.CategoryIDs, CategoryNames: batch.CategoryNames, MinDelaySeconds: batch.MinDelaySeconds, MaxDelaySeconds: batch.MaxDelaySeconds}, detailProduct, task.CreatedAt)
-			if rebuildErr != nil {
-				writeError(responseWriter, http.StatusBadGateway, rebuildErr.Error())
-				return
-			}
-			rebuiltTask.ID = task.ID
-			if err := serviceContext.PublishRepository.UpdateContent(request.Context(), rebuiltTask); err != nil {
-				writeError(responseWriter, http.StatusInternalServerError, "更新批量发布任务内容失败")
-				return
-			}
-			task = rebuiltTask
-		}
 
-		now := time.Now()
-		if err := serviceContext.PublishRepository.UpdateStatus(request.Context(), taskID, model.PublishTaskQueued, "", "", ""); err != nil {
-			logx.Errorf("queue publish task %s for retry: %v", taskID, err)
-			writeError(responseWriter, http.StatusInternalServerError, "重新排队失败")
+		if err := queueFailedTask(request.Context(), serviceContext, task); err != nil {
+			writeError(responseWriter, http.StatusConflict, err.Error())
 			return
 		}
-		if err := serviceContext.PublishService.Enqueue(taskID); err != nil {
-			_ = serviceContext.PublishRepository.UpdateStatus(request.Context(), taskID, model.PublishTaskFailed, "发布队列已满", "", "")
-			writeError(responseWriter, http.StatusServiceUnavailable, "发布队列繁忙，请稍后重试")
-			return
-		}
-
 		task.Status = model.PublishTaskQueued
 		task.ErrorMessage = ""
-		task.UpdatedAt = now
+		task.UpdatedAt = time.Now()
+
 		writeJSON(responseWriter, http.StatusAccepted, publishTaskToResponse(task))
 	}
 }
@@ -230,15 +257,18 @@ func uniqueImageURLs(imageURLs []string) []string {
 // publishTaskToResponse 将数据库任务转换为精简响应。
 func publishTaskToResponse(task model.PublishTask) types.PublishTaskResponse {
 	return types.PublishTaskResponse{
-		ID:           task.ID,
-		Status:       task.Status,
-		ItemNo:       task.ItemNo,
-		Title:        task.Title,
-		PriceCents:   task.PriceCents,
-		XianyuItemID: task.XianyuItemID,
-		XianyuURL:    task.XianyuURL,
-		ErrorMessage: task.ErrorMessage,
-		CreatedAt:    task.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:    task.UpdatedAt.Format(time.RFC3339),
+		Action:        task.Action,
+		ChangeReasons: task.ChangeReasons,
+		ID:            task.ID,
+		Status:        task.Status,
+		ItemNo:        task.ItemNo,
+		Title:         task.Title,
+		Brand:         task.Brand,
+		PriceCents:    task.PriceCents,
+		XianyuItemID:  task.XianyuItemID,
+		XianyuURL:     task.XianyuURL,
+		ErrorMessage:  task.ErrorMessage,
+		CreatedAt:     task.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:     task.UpdatedAt.Format(time.RFC3339),
 	}
 }

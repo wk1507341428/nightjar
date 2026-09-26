@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,11 +21,13 @@ import (
 
 // BrandStoreCandidate 是上游品牌馆发现的一家门店。
 type BrandStoreCandidate struct {
-	RegionID      string `json:"regionId"`
-	DistributorID string `json:"distributorId"`
-	BrandName     string `json:"brandName"`
-	ShopCode      string `json:"shopCode,omitempty"`
-	StoreName     string `json:"storeName,omitempty"`
+	RegionID         string `json:"regionId"`
+	DistributorID    string `json:"distributorId"`
+	BrandName        string `json:"brandName"`
+	ShopCode         string `json:"shopCode,omitempty"`
+	StoreName        string `json:"storeName,omitempty"`
+	LogoURL          string `json:"logoUrl,omitempty"`
+	OnlineGoodsCount int    `json:"onlineGoodsCount"`
 }
 
 // OfferListResult 是本地商品列表结果。
@@ -40,6 +43,77 @@ type BrandCategory struct {
 	ImageURL string `json:"imageUrl,omitempty"`
 }
 
+// ListLiveBrandOffers 读取小程序某地区品牌门店的全部实时商品。
+func (service *Service) ListLiveBrandOffers(ctx context.Context, regionID, distributorID string, categoryIDs []string) ([]map[string]any, error) {
+	categoryFilter := strings.Join(categoryIDs, ",")
+	type pageResult struct {
+		products   []map[string]any
+		totalCount int
+		err        error
+	}
+	fetchPage := func(page int) pageResult {
+		select {
+		case service.liveOfferSemaphore <- struct{}{}:
+			defer func() { <-service.liveOfferSemaphore }()
+		case <-ctx.Done():
+			return pageResult{err: ctx.Err()}
+		}
+		var response struct {
+			Data struct {
+				List       []map[string]any `json:"list"`
+				TotalCount *int             `json:"total_count"`
+			} `json:"data"`
+		}
+		query := url.Values{"regionauth_id": {regionID}, "distributor_id": {distributorID}, "page": {strconv.Itoa(page)}, "pageSize": {"50"}, "keywords": {""}, "approve_status": {"onsale,only_show"}, "item_type": {"normal"}, "is_point": {"false"}}
+		if categoryFilter != "" {
+			query.Set("main_category", categoryFilter)
+		}
+		if err := service.getJSON(ctx, "/goods/items", query, &response); err != nil {
+			return pageResult{err: err}
+		}
+		if response.Data.TotalCount == nil {
+			return pageResult{err: fmt.Errorf("门店%s返回不完整数据，停止对账", distributorID)}
+		}
+		return pageResult{products: response.Data.List, totalCount: *response.Data.TotalCount}
+	}
+
+	firstPage := fetchPage(1)
+	if firstPage.err != nil {
+		return nil, firstPage.err
+	}
+	products := append([]map[string]any{}, firstPage.products...)
+	pageCount := (firstPage.totalCount + 49) / 50
+	if firstPage.totalCount > 0 && len(firstPage.products) == 0 {
+		return nil, fmt.Errorf("门店%s商品列表为空但总数非零", distributorID)
+	}
+	if pageCount <= 1 {
+		return products, nil
+	}
+	if pageCount > 200 {
+		return nil, fmt.Errorf("品牌数据超过完整读取上限，停止对账")
+	}
+	pageResults := make([]pageResult, pageCount+1)
+	var pageWaitGroup sync.WaitGroup
+	for page := 2; page <= pageCount; page++ {
+		pageWaitGroup.Add(1)
+		go func(pageNumber int) {
+			defer pageWaitGroup.Done()
+			pageResults[pageNumber] = fetchPage(pageNumber)
+		}(page)
+	}
+	pageWaitGroup.Wait()
+	for page := 2; page <= pageCount; page++ {
+		if pageResults[page].err != nil {
+			return nil, pageResults[page].err
+		}
+		products = append(products, pageResults[page].products...)
+	}
+	if len(products) != firstPage.totalCount {
+		return nil, fmt.Errorf("门店%s分页数量不一致，请重新同步", distributorID)
+	}
+	return products, nil
+}
+
 // SyncResult 是一次同步的结果摘要。
 type SyncResult struct {
 	Run SyncRun `json:"run"`
@@ -50,10 +124,12 @@ func (service *Service) DiscoverBrandStores(ctx context.Context, regionID string
 	var response struct {
 		Data struct {
 			List []struct {
-				DistributorID string `json:"distributor_id"`
-				Name          string `json:"name"`
-				ShopCode      string `json:"shop_code"`
-				UnitNumber    string `json:"unit_number"`
+				DistributorID  string `json:"distributor_id"`
+				Name           string `json:"name"`
+				ShopCode       string `json:"shop_code"`
+				UnitNumber     string `json:"unit_number"`
+				Logo           string `json:"logo"`
+				OnlineGoodsNum any    `json:"online_goods_num"`
 			} `json:"list"`
 		} `json:"data"`
 	}
@@ -71,11 +147,13 @@ func (service *Service) DiscoverBrandStores(ctx context.Context, regionID string
 			continue
 		}
 		candidates = append(candidates, BrandStoreCandidate{
-			RegionID:      regionID,
-			DistributorID: strings.TrimSpace(distributor.DistributorID),
-			BrandName:     strings.TrimSpace(distributor.Name),
-			ShopCode:      strings.TrimSpace(distributor.ShopCode),
-			StoreName:     strings.TrimSpace(distributor.UnitNumber),
+			RegionID:         regionID,
+			DistributorID:    strings.TrimSpace(distributor.DistributorID),
+			BrandName:        strings.TrimSpace(distributor.Name),
+			ShopCode:         strings.TrimSpace(distributor.ShopCode),
+			StoreName:        strings.TrimSpace(distributor.UnitNumber),
+			LogoURL:          strings.TrimSpace(distributor.Logo),
+			OnlineGoodsCount: int(anyInt64(distributor.OnlineGoodsNum)),
 		})
 	}
 	sort.Slice(candidates, func(leftIndex, rightIndex int) bool {
@@ -106,6 +184,13 @@ func (service *Service) ListBrandStores(ctx context.Context, regionID string) ([
 func (service *Service) GetBrandStore(ctx context.Context, brandStoreID string) (BrandStore, error) {
 	var brandStore BrandStore
 	err := service.inventoryRepository.brandStores.FindOne(ctx, bson.M{"_id": brandStoreID}).Decode(&brandStore)
+	return brandStore, err
+}
+
+// GetBrandStoreBySource 按地区与上游门店查询本地品牌配置。
+func (service *Service) GetBrandStoreBySource(ctx context.Context, regionID, distributorID string) (BrandStore, error) {
+	var brandStore BrandStore
+	err := service.inventoryRepository.brandStores.FindOne(ctx, bson.M{"regionId": regionID, "distributorId": distributorID}).Decode(&brandStore)
 	return brandStore, err
 }
 
@@ -325,7 +410,7 @@ func (service *Service) SyncBrandStore(ctx context.Context, brandStoreID string)
 	if err := service.inventoryRepository.brandStores.FindOne(ctx, bson.M{"_id": brandStoreID}).Decode(&brandStore); err != nil {
 		return SyncResult{}, err
 	}
-	run := SyncRun{ID: uuid.NewString(), ScopeType: "brand_store", BrandStoreID: brandStore.ID, Status: "running", StartedAt: time.Now()}
+	run := SyncRun{ID: uuid.NewString(), ScopeType: "brand_store", BrandStoreID: brandStore.ID, BrandName: brandStore.BrandName, RegionID: brandStore.RegionID, Status: "running", StartedAt: time.Now()}
 	if _, err := service.inventoryRepository.syncRuns.InsertOne(ctx, run); err != nil {
 		return SyncResult{}, err
 	}
@@ -356,7 +441,7 @@ func (service *Service) StartBrandStoreSync(ctx context.Context, brandStoreID st
 	if err := service.inventoryRepository.brandStores.FindOne(ctx, bson.M{"_id": brandStoreID}).Decode(&brandStore); err != nil {
 		return SyncResult{}, err
 	}
-	run := SyncRun{ID: uuid.NewString(), ScopeType: "brand_store", BrandStoreID: brandStore.ID, Status: "running", StartedAt: time.Now()}
+	run := SyncRun{ID: uuid.NewString(), ScopeType: "brand_store", BrandStoreID: brandStore.ID, BrandName: brandStore.BrandName, RegionID: brandStore.RegionID, Status: "running", StartedAt: time.Now()}
 	if _, err := service.inventoryRepository.syncRuns.InsertOne(ctx, run); err != nil {
 		return SyncResult{}, err
 	}
@@ -401,7 +486,7 @@ func (service *Service) RefreshOffer(ctx context.Context, offerID string) (SyncR
 	if err := service.inventoryRepository.offers.FindOne(ctx, bson.M{"_id": offerID}).Decode(&offer); err != nil {
 		return SyncResult{}, err
 	}
-	run := SyncRun{ID: uuid.NewString(), ScopeType: "offer", OfferID: offer.ID, BrandStoreID: offer.BrandStoreID, Status: "running", StartedAt: time.Now()}
+	run := SyncRun{ID: uuid.NewString(), ScopeType: "offer", OfferID: offer.ID, BrandStoreID: offer.BrandStoreID, BrandName: offer.BrandName, RegionID: offer.RegionID, Status: "running", StartedAt: time.Now()}
 	if _, err := service.inventoryRepository.syncRuns.InsertOne(ctx, run); err != nil {
 		return SyncResult{}, err
 	}
@@ -413,11 +498,14 @@ func (service *Service) RefreshOffer(ctx context.Context, offerID string) (SyncR
 		} else {
 			detailProduct["purchase_notice"] = purchaseNotice
 			detailProduct["purchase_notice_open"] = purchaseNoticeOpen
-			_, err = service.upsertOffer(ctx, offer.BrandStoreID, offer.RegionID, offer.DistributorID, detailProduct, run.ID, time.Now())
+			_, wasUpdated, upsertErr := service.upsertOffer(ctx, offer.BrandStoreID, offer.RegionID, offer.DistributorID, detailProduct, run.ID, time.Now())
+			err = upsertErr
+			if wasUpdated {
+				run.UpdatedCount = 1
+			}
 		}
 	}
 	run.TotalCount = 1
-	run.UpdatedCount = 1
 	run.FinishedAt = time.Now()
 	run.Status = "completed"
 	if err != nil {
@@ -511,15 +599,16 @@ func (service *Service) syncBrandStore(ctx context.Context, brandStore BrandStor
 			_, _ = service.inventoryRepository.syncRuns.UpdateOne(ctx, bson.M{"_id": run.ID}, bson.M{"$set": run})
 		}
 		for _, sourceProduct := range response.Data.List {
-			wasCreated, upsertErr := service.upsertOffer(ctx, brandStore.ID, brandStore.RegionID, brandStore.DistributorID, sourceProduct, run.ID, syncStartedAt)
+			wasCreated, wasUpdated, upsertErr := service.upsertOffer(ctx, brandStore.ID, brandStore.RegionID, brandStore.DistributorID, sourceProduct, run.ID, syncStartedAt)
 			if upsertErr != nil {
 				return run, upsertErr
 			}
 			if wasCreated {
 				run.CreatedCount++
-			} else {
+			} else if wasUpdated {
 				run.UpdatedCount++
 			}
+			run.ProcessedCount++
 		}
 		// 每页完成即写回任务进度，供前端轮询展示。
 		_, _ = service.inventoryRepository.syncRuns.UpdateOne(ctx, bson.M{"_id": run.ID}, bson.M{"$set": run})
@@ -550,22 +639,25 @@ func (service *Service) syncBrandStore(ctx context.Context, brandStore BrandStor
 		return run, err
 	}
 	_, _ = service.inventoryRepository.brandStores.UpdateOne(ctx, bson.M{"_id": brandStore.ID}, bson.M{"$set": bson.M{"lastSyncedAt": now, "updatedAt": now}})
+	if service.OnSynced != nil {
+		service.OnSynced(brandStore)
+	}
 	return run, nil
 }
 
-func (service *Service) upsertOffer(ctx context.Context, brandStoreID, regionID, distributorID string, sourceProduct map[string]any, syncRunID string, seenAt time.Time) (bool, error) {
+func (service *Service) upsertOffer(ctx context.Context, brandStoreID, regionID, distributorID string, sourceProduct map[string]any, syncRunID string, seenAt time.Time) (bool, bool, error) {
 	itemNo := mapString(sourceProduct, "item_no")
 	brandName := mapString(sourceProduct, "goods_brand")
 	sourceItemID := firstNonEmpty(mapString(sourceProduct, "item_id"), mapString(sourceProduct, "default_item_id"), mapString(sourceProduct, "goods_id"))
 	if sourceItemID == "" {
-		return false, fmt.Errorf("upstream product has no item id")
+		return false, false, fmt.Errorf("upstream product has no item id")
 	}
 	offerID := buildOfferID(brandStoreID, sourceItemID)
 	var existingOffer CatalogOffer
 	findErr := service.inventoryRepository.offers.FindOne(ctx, bson.M{"_id": offerID}).Decode(&existingOffer)
 	isCreated := findErr == mongo.ErrNoDocuments
 	if findErr != nil && !isCreated {
-		return false, findErr
+		return false, false, findErr
 	}
 	offer := CatalogOffer{
 		ID:              offerID,
@@ -591,7 +683,11 @@ func (service *Service) upsertOffer(ctx context.Context, brandStoreID, regionID,
 		LastSyncedAt:    seenAt,
 	}
 	if err := service.recordPriceHistory(ctx, offer, existingOffer, isCreated, syncRunID, seenAt); err != nil {
-		return false, err
+		return false, false, err
+	}
+	changes := buildSyncChanges(offer, existingOffer, isCreated, syncRunID, seenAt)
+	if err := service.inventoryRepository.InsertSyncChanges(ctx, changes); err != nil {
+		return false, false, err
 	}
 	if isCreated {
 		offer.FirstSeenAt = seenAt
@@ -600,9 +696,65 @@ func (service *Service) upsertOffer(ctx context.Context, brandStoreID, regionID,
 	}
 	_, err := service.inventoryRepository.offers.UpdateOne(ctx, bson.M{"_id": offer.ID}, bson.M{"$set": offer, "$unset": bson.M{"inactiveAt": ""}}, options.Update().SetUpsert(true))
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	return isCreated, nil
+	return isCreated, len(changes) > 0, nil
+}
+
+// buildSyncChanges 比较同步前后的 SKU，生成新增、价格、库存和下架明细。
+func buildSyncChanges(nextOffer, existingOffer CatalogOffer, isCreated bool, syncRunID string, changedAt time.Time) []SyncChange {
+	nextSnapshots := buildSKUPriceSnapshots(nextOffer, nextOffer.SourceData, syncRunID, changedAt)
+	previousSnapshots := buildSKUPriceSnapshots(existingOffer, existingOffer.SourceData, syncRunID, existingOffer.LastSyncedAt)
+	previousBySKU := make(map[string]SKUPriceSnapshot, len(previousSnapshots))
+	for _, snapshot := range previousSnapshots {
+		previousBySKU[snapshot.SKUID] = snapshot
+	}
+	nextBySKU := make(map[string]SKUPriceSnapshot, len(nextSnapshots))
+	changes := make([]SyncChange, 0)
+	for _, snapshot := range nextSnapshots {
+		nextBySKU[snapshot.SKUID] = snapshot
+		previous, existed := previousBySKU[snapshot.SKUID]
+		if isCreated || !existed {
+			changes = append(changes, newSyncChange(nextOffer, snapshot, SKUPriceSnapshot{}, syncRunID, "sku_created", changedAt))
+			continue
+		}
+		if snapshot.PriceCents != previous.PriceCents || snapshot.SourcePriceCents != previous.SourcePriceCents || snapshot.ActivityPriceCents != previous.ActivityPriceCents || snapshot.MarketPriceCents != previous.MarketPriceCents {
+			changes = append(changes, newSyncChange(nextOffer, snapshot, previous, syncRunID, "price_changed", changedAt))
+		}
+		if snapshot.Stock != previous.Stock {
+			changes = append(changes, newSyncChange(nextOffer, snapshot, previous, syncRunID, "stock_changed", changedAt))
+		}
+	}
+	if !isCreated {
+		for _, previous := range previousSnapshots {
+			if _, exists := nextBySKU[previous.SKUID]; !exists {
+				changes = append(changes, newSyncChange(nextOffer, SKUPriceSnapshot{}, previous, syncRunID, "sku_off_shelf", changedAt))
+			}
+		}
+	}
+	return changes
+}
+
+// newSyncChange 将 SKU 快照转换为统一同步变更记录。
+func newSyncChange(offer CatalogOffer, next, previous SKUPriceSnapshot, syncRunID, changeType string, changedAt time.Time) SyncChange {
+	snapshot := next
+	if snapshot.SKUID == "" {
+		snapshot = previous
+	}
+	return SyncChange{
+		ID: uuid.NewString(), RunID: syncRunID, BrandStoreID: offer.BrandStoreID, OfferID: offer.ID, ProductID: offer.ProductID,
+		RegionID: offer.RegionID, ItemNo: offer.ItemNo, ProductName: offer.Name, ImageURL: mapString(offer.SourceData, "main_img"),
+		SKUID: snapshot.SKUID, SKUCode: snapshot.SKUCode, VariantLabel: snapshot.VariantLabel, ChangeType: changeType,
+		Before: syncChangeValue(previous, "onsale"), After: syncChangeValue(next, "onsale"), ChangedAt: changedAt,
+	}
+}
+
+// syncChangeValue 提取变更记录需要的价格、库存和状态字段。
+func syncChangeValue(snapshot SKUPriceSnapshot, status string) SyncChangeValue {
+	if snapshot.SKUID == "" {
+		status = "absent"
+	}
+	return SyncChangeValue{PriceCents: snapshot.PriceCents, SourcePriceCents: snapshot.SourcePriceCents, ActivityPriceCents: snapshot.ActivityPriceCents, MarketPriceCents: snapshot.MarketPriceCents, Stock: snapshot.Stock, Status: status}
 }
 
 // recordPriceHistory 保存首次价格，并仅为发生价格变化的 SKU 追加快照。
@@ -714,7 +866,7 @@ func anyMap(value any) map[string]any {
 	}
 }
 
-// reconcileMissingOffers 将完整同步中缺失的商品先标为疑似下架，连续两次才正式下架。
+// reconcileMissingOffers 将完整同步中缺失的商品立即标为正式下架。
 func (service *Service) reconcileMissingOffers(ctx context.Context, brandStoreID string, syncStartedAt, now time.Time, run *SyncRun) error {
 	cursor, err := service.inventoryRepository.offers.Find(ctx, bson.M{
 		"brandStoreId": brandStoreID,
@@ -731,19 +883,21 @@ func (service *Service) reconcileMissingOffers(ctx context.Context, brandStoreID
 	}
 	for _, offer := range missingOffers {
 		nextMissingRuns := offer.MissingRuns + 1
-		if nextMissingRuns >= 2 {
-			_, err := service.inventoryRepository.offers.UpdateOne(ctx, bson.M{"_id": offer.ID}, bson.M{"$set": bson.M{"saleStatus": "off_shelf", "syncState": "off_shelf", "missingRuns": nextMissingRuns, "inactiveAt": now}})
-			if err != nil {
-				return err
-			}
-			run.InactiveCount++
-			continue
-		}
-		_, err := service.inventoryRepository.offers.UpdateOne(ctx, bson.M{"_id": offer.ID}, bson.M{"$set": bson.M{"saleStatus": "suspected_missing", "syncState": "suspected_missing", "missingRuns": nextMissingRuns}})
+		_, err := service.inventoryRepository.offers.UpdateOne(ctx, bson.M{"_id": offer.ID}, bson.M{"$set": bson.M{"saleStatus": "off_shelf", "syncState": "off_shelf", "missingRuns": nextMissingRuns, "inactiveAt": now}})
 		if err != nil {
 			return err
 		}
-		run.SuspectedCount++
+		run.InactiveCount++
+		changes := make([]SyncChange, 0)
+		for _, snapshot := range buildSKUPriceSnapshots(offer, offer.SourceData, run.ID, now) {
+			change := newSyncChange(offer, SKUPriceSnapshot{}, snapshot, run.ID, "offer_off_shelf", now)
+			change.Before.Status = offer.SaleStatus
+			change.After.Status = "off_shelf"
+			changes = append(changes, change)
+		}
+		if err := service.inventoryRepository.InsertSyncChanges(ctx, changes); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -841,6 +995,23 @@ func mapInt64(source map[string]any, key string) int64 {
 	case string:
 		parsed, _ := strconv.ParseInt(value, 10, 64)
 		return parsed
+	default:
+		return 0
+	}
+}
+
+// anyInt64 将接口动态数字字段转换为整数。
+func anyInt64(value any) int64 {
+	switch typedValue := value.(type) {
+	case float64:
+		return int64(typedValue)
+	case int64:
+		return typedValue
+	case int:
+		return int64(typedValue)
+	case string:
+		parsedValue, _ := strconv.ParseInt(strings.TrimSpace(typedValue), 10, 64)
+		return parsedValue
 	default:
 		return 0
 	}

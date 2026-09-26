@@ -1,7 +1,7 @@
 Name: sidejob-api
 Host: 127.0.0.1
 Port: 8888
-Timeout: 10000
+Timeout: 30000
 
 Mongo:
   URI: mongodb://sidejob:sidejob-dev@127.0.0.1:27017/?authSource=admin

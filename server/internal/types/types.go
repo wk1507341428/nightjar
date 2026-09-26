@@ -1,5 +1,7 @@
 package types
 
+import "sidejob-server/internal/model"
+
 // HealthResponse 是健康检查响应。
 type HealthResponse struct {
 	Status string `json:"status"`
@@ -26,6 +28,46 @@ type SaveCatalogBrandStoreRequest struct {
 	ShopCode      string `json:"shopCode,omitempty"`
 	StoreName     string `json:"storeName,omitempty"`
 	SyncEnabled   bool   `json:"syncEnabled"`
+}
+
+// BrandProfileMemberRequest 是品牌档案中的一个地区品牌成员。
+type BrandProfileMemberRequest struct {
+	RegionID      string `json:"regionId"`
+	DistributorID string `json:"distributorId"`
+	SourceName    string `json:"sourceName"`
+}
+
+// SaveBrandProfileRequest 保存单品牌或合并品牌档案。
+type SaveBrandProfileRequest struct {
+	ID              string                      `json:"id,omitempty"`
+	Name            string                      `json:"name"`
+	DefaultRegionID string                      `json:"defaultRegionId,omitempty"`
+	Members         []BrandProfileMemberRequest `json:"members"`
+}
+
+// BrandProfileResponse 是发布和同步统一使用的品牌档案。
+type BrandProfileResponse struct {
+	ID              string                      `json:"id"`
+	Name            string                      `json:"name"`
+	DefaultRegionID string                      `json:"defaultRegionId,omitempty"`
+	Members         []BrandProfileMemberRequest `json:"members"`
+	UpdatedAt       string                      `json:"updatedAt"`
+}
+
+// BrandMaintenanceSourceResponse 是实时上游品牌及当前归属。
+type BrandMaintenanceSourceResponse struct {
+	RegionID         string `json:"regionId"`
+	DistributorID    string `json:"distributorId"`
+	Name             string `json:"name"`
+	LogoURL          string `json:"logoUrl,omitempty"`
+	OnlineGoodsCount int    `json:"onlineGoodsCount"`
+	ProfileID        string `json:"profileId,omitempty"`
+}
+
+// BrandMaintenanceResponse 是品牌维护页的完整实时数据。
+type BrandMaintenanceResponse struct {
+	Profiles []BrandProfileResponse           `json:"profiles"`
+	Sources  []BrandMaintenanceSourceResponse `json:"sources"`
 }
 
 // CatalogOfferListResponse 是本地商品库查询结果。
@@ -65,9 +107,12 @@ type CatalogSyncResponse struct {
 	ID             string `json:"id"`
 	ScopeType      string `json:"scopeType"`
 	BrandStoreID   string `json:"brandStoreId,omitempty"`
+	BrandName      string `json:"brandName,omitempty"`
+	RegionID       string `json:"regionId,omitempty"`
 	OfferID        string `json:"offerId,omitempty"`
 	Status         string `json:"status"`
 	TotalCount     int    `json:"totalCount"`
+	ProcessedCount int    `json:"processedCount"`
 	CreatedCount   int    `json:"createdCount"`
 	UpdatedCount   int    `json:"updatedCount"`
 	InactiveCount  int    `json:"inactiveCount"`
@@ -75,6 +120,47 @@ type CatalogSyncResponse struct {
 	ErrorMessage   string `json:"errorMessage,omitempty"`
 	StartedAt      string `json:"startedAt"`
 	FinishedAt     string `json:"finishedAt,omitempty"`
+}
+
+// CatalogSyncRunListResponse 是同步历史分页响应。
+type CatalogSyncRunListResponse struct {
+	List  []CatalogSyncResponse `json:"list"`
+	Total int64                 `json:"total"`
+}
+
+// CatalogSyncChangeValueResponse 是 SKU 变更前后的关键状态。
+type CatalogSyncChangeValueResponse struct {
+	PriceCents         int64  `json:"priceCents"`
+	SourcePriceCents   int64  `json:"sourcePriceCents"`
+	ActivityPriceCents int64  `json:"activityPriceCents"`
+	MarketPriceCents   int64  `json:"marketPriceCents"`
+	Stock              int64  `json:"stock"`
+	Status             string `json:"status,omitempty"`
+}
+
+// CatalogSyncChangeResponse 是一次同步的 SKU 变更明细。
+type CatalogSyncChangeResponse struct {
+	ID             string                         `json:"id"`
+	RunID          string                         `json:"runId"`
+	OfferID        string                         `json:"offerId"`
+	ItemNo         string                         `json:"itemNo"`
+	ProductName    string                         `json:"productName"`
+	ImageURL       string                         `json:"imageUrl,omitempty"`
+	SKUID          string                         `json:"skuId"`
+	SKUCode        string                         `json:"skuCode,omitempty"`
+	VariantLabel   string                         `json:"variantLabel"`
+	ChangeType     string                         `json:"changeType"`
+	Before         CatalogSyncChangeValueResponse `json:"before"`
+	After          CatalogSyncChangeValueResponse `json:"after"`
+	ChangedAt      string                         `json:"changedAt"`
+	XianyuListings []MarketplaceListingResponse   `json:"xianyuListings"`
+}
+
+// CatalogSyncChangeListResponse 是同步变更明细分页响应。
+type CatalogSyncChangeListResponse struct {
+	Run   CatalogSyncResponse         `json:"run"`
+	List  []CatalogSyncChangeResponse `json:"list"`
+	Total int64                       `json:"total"`
 }
 
 // MarketplaceListingResponse 是一个渠道当前在售商品。
@@ -197,32 +283,51 @@ type SavePinduoduoSessionRequest struct {
 
 // CreatePublishTaskRequest 是前端确认后的闲鱼发布参数。
 type CreatePublishTaskRequest struct {
-	SourceItemID       string   `json:"sourceItemId"`
-	ItemNo             string   `json:"itemNo"`
-	Title              string   `json:"title"`
-	Description        string   `json:"description"`
-	PriceCents         int64    `json:"priceCents"`
-	OriginalPriceCents int64    `json:"originalPriceCents"`
-	ImageURLs          []string `json:"imageUrls"`
-	RegionID           string   `json:"regionId"`
-	Brand              string   `json:"brand"`
-	Condition          string   `json:"condition"`
-	AvailableSizes     []string `json:"availableSizes"`
-	IsFootwear         bool     `json:"isFootwear"`
+	SourceItemID       string                        `json:"sourceItemId"`
+	ItemNo             string                        `json:"itemNo"`
+	Title              string                        `json:"title"`
+	Description        string                        `json:"description"`
+	PriceCents         int64                         `json:"priceCents"`
+	OriginalPriceCents int64                         `json:"originalPriceCents"`
+	ImageURLs          []string                      `json:"imageUrls"`
+	RegionID           string                        `json:"regionId"`
+	Brand              string                        `json:"brand"`
+	Condition          string                        `json:"condition"`
+	AvailableSizes     []string                      `json:"availableSizes"`
+	Variants           []CreatePublishVariantRequest `json:"variants,omitempty"`
+	IsFootwear         bool                          `json:"isFootwear"`
+	BrandProfileID     string                        `json:"brandProfileId,omitempty"`
+	SourceRegions      []string                      `json:"sourceRegions,omitempty"`
+}
+
+// CreatePublishVariantRequest 是单件发布时传入的一条销售规格。
+type CreatePublishVariantRequest struct {
+	PriceCents int64                                 `json:"priceCents"`
+	Quantity   int64                                 `json:"quantity"`
+	Properties []CreatePublishVariantPropertyRequest `json:"properties"`
+}
+
+// CreatePublishVariantPropertyRequest 是销售规格的一项属性。
+type CreatePublishVariantPropertyRequest struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // PublishTaskResponse 是脱敏后的发布任务响应。
 type PublishTaskResponse struct {
-	ID           string `json:"id"`
-	Status       string `json:"status"`
-	ItemNo       string `json:"itemNo"`
-	Title        string `json:"title"`
-	PriceCents   int64  `json:"priceCents"`
-	XianyuItemID string `json:"xianyuItemId,omitempty"`
-	XianyuURL    string `json:"xianyuUrl,omitempty"`
-	ErrorMessage string `json:"errorMessage,omitempty"`
-	CreatedAt    string `json:"createdAt"`
-	UpdatedAt    string `json:"updatedAt"`
+	Action        string   `json:"action"`
+	ChangeReasons []string `json:"changeReasons,omitempty"`
+	ID            string   `json:"id"`
+	Status        string   `json:"status"`
+	ItemNo        string   `json:"itemNo"`
+	Title         string   `json:"title"`
+	Brand         string   `json:"brand,omitempty"`
+	PriceCents    int64    `json:"priceCents"`
+	XianyuItemID  string   `json:"xianyuItemId,omitempty"`
+	XianyuURL     string   `json:"xianyuUrl,omitempty"`
+	ErrorMessage  string   `json:"errorMessage,omitempty"`
+	CreatedAt     string   `json:"createdAt"`
+	UpdatedAt     string   `json:"updatedAt"`
 }
 
 // PublishTaskListResponse 是发布任务列表响应。
@@ -232,12 +337,32 @@ type PublishTaskListResponse struct {
 
 // CreatePublishBatchRequest 是品牌批量发布计划参数。
 type CreatePublishBatchRequest struct {
+	PreviewID       string   `json:"previewId,omitempty"`
 	BrandStoreID    string   `json:"brandStoreId"`
+	BrandProfileID  string   `json:"brandProfileId,omitempty"`
+	SourceType      string   `json:"sourceType,omitempty"`
+	DistributorID   string   `json:"distributorId,omitempty"`
+	BrandName       string   `json:"brandName,omitempty"`
+	RegionID        string   `json:"regionId,omitempty"`
+	ItemNos         []string `json:"itemNos,omitempty"`
 	CategoryIDs     []string `json:"categoryIds,omitempty"`
 	CategoryNames   []string `json:"categoryNames,omitempty"`
 	Limit           int      `json:"limit"`
 	MinDelaySeconds int      `json:"minDelaySeconds"`
 	MaxDelaySeconds int      `json:"maxDelaySeconds"`
+}
+
+// PublishBatchSegmentResponse 是发布操作中追加的一段品牌任务。
+type PublishBatchSegmentResponse struct {
+	ID             string `json:"id"`
+	SourceType     string `json:"sourceType"`
+	BrandStoreID   string `json:"brandStoreId,omitempty"`
+	DistributorID  string `json:"distributorId,omitempty"`
+	BrandName      string `json:"brandName"`
+	BrandProfileID string `json:"brandProfileId,omitempty"`
+	RegionID       string `json:"regionId"`
+	Requested      int    `json:"requested"`
+	AddedAt        string `json:"addedAt"`
 }
 
 // PublishBatchSkipResponse 是自动跳过的商品。
@@ -249,34 +374,58 @@ type PublishBatchSkipResponse struct {
 
 // PublishBatchPreviewResponse 是创建前的批量发布预览。
 type PublishBatchPreviewResponse struct {
-	BrandStoreID  string                     `json:"brandStoreId"`
-	BrandName     string                     `json:"brandName"`
-	CategoryIDs   []string                   `json:"categoryIds,omitempty"`
-	CategoryNames []string                   `json:"categoryNames,omitempty"`
-	Total         int                        `json:"total"`
-	Publishable   int                        `json:"publishable"`
-	Selected      int                        `json:"selected"`
-	Skipped       []PublishBatchSkipResponse `json:"skipped"`
+	Updates           []model.PublishTask                    `json:"updates"`
+	Unchanged         int                                    `json:"unchanged"`
+	PreviewID         string                                 `json:"previewId,omitempty"`
+	BrandStoreID      string                                 `json:"brandStoreId"`
+	BrandName         string                                 `json:"brandName"`
+	CategoryIDs       []string                               `json:"categoryIds,omitempty"`
+	CategoryNames     []string                               `json:"categoryNames,omitempty"`
+	Total             int                                    `json:"total"`
+	Publishable       int                                    `json:"publishable"`
+	Selected          int                                    `json:"selected"`
+	Skipped           []PublishBatchSkipResponse             `json:"skipped"`
+	OfflineCandidates []PublishBatchOfflineCandidateResponse `json:"offlineCandidates"`
+}
+
+// PublishBatchOfflineCandidateResponse 是品牌对账后准备下架的闲鱼商品。
+type PublishBatchOfflineCandidateResponse struct {
+	PlatformItemID string `json:"platformItemId"`
+	ItemNo         string `json:"itemNo"`
+	Title          string `json:"title"`
+	PriceCents     int64  `json:"priceCents"`
+	ItemURL        string `json:"itemUrl,omitempty"`
 }
 
 // PublishBatchResponse 是批次及其任务进度。
 type PublishBatchResponse struct {
-	ID              string                     `json:"id"`
-	BrandName       string                     `json:"brandName"`
-	CategoryIDs     []string                   `json:"categoryIds,omitempty"`
-	CategoryNames   []string                   `json:"categoryNames,omitempty"`
-	Status          string                     `json:"status"`
-	ErrorMessage    string                     `json:"errorMessage,omitempty"`
-	Limit           int                        `json:"limit"`
-	MinDelaySeconds int                        `json:"minDelaySeconds"`
-	MaxDelaySeconds int                        `json:"maxDelaySeconds"`
-	Total           int                        `json:"total"`
-	Queued          int                        `json:"queued"`
-	Running         int                        `json:"running"`
-	Succeeded       int                        `json:"succeeded"`
-	Failed          int                        `json:"failed"`
-	NeedsLogin      int                        `json:"needsLogin"`
-	Skipped         []PublishBatchSkipResponse `json:"skipped"`
-	Tasks           []PublishTaskResponse      `json:"tasks"`
-	CreatedAt       string                     `json:"createdAt"`
+	ID               string                        `json:"id"`
+	BrandName        string                        `json:"brandName"`
+	CategoryIDs      []string                      `json:"categoryIds,omitempty"`
+	CategoryNames    []string                      `json:"categoryNames,omitempty"`
+	Status           string                        `json:"status"`
+	ErrorMessage     string                        `json:"errorMessage,omitempty"`
+	Limit            int                           `json:"limit"`
+	MinDelaySeconds  int                           `json:"minDelaySeconds"`
+	MaxDelaySeconds  int                           `json:"maxDelaySeconds"`
+	Total            int                           `json:"total"`
+	Queued           int                           `json:"queued"`
+	Running          int                           `json:"running"`
+	Succeeded        int                           `json:"succeeded"`
+	Failed           int                           `json:"failed"`
+	NeedsLogin       int                           `json:"needsLogin"`
+	Skipped          []PublishBatchSkipResponse    `json:"skipped"`
+	SkippedCount     int                           `json:"skippedCount"`
+	Tasks            []PublishTaskResponse         `json:"tasks"`
+	CreatedAt        string                        `json:"createdAt"`
+	Segments         []PublishBatchSegmentResponse `json:"segments"`
+	OfflineRequested int                           `json:"offlineRequested"`
+	OfflineSucceeded int                           `json:"offlineSucceeded"`
+	OfflineFailed    int                           `json:"offlineFailed"`
+}
+
+// PublishBatchListResponse 是发布中心操作记录列表。
+type PublishBatchListResponse struct {
+	List  []PublishBatchResponse `json:"list"`
+	Total int64                  `json:"total"`
 }
