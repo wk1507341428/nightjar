@@ -52,29 +52,6 @@ function formatDiscount(discountRate?: string | number): string {
   return numericDiscount > 0 ? `${(numericDiscount / 10).toFixed(1)}折` : '特惠';
 }
 
-/** 格式化活动结束时间。 */
-function formatPromotionEndTime(endTimestamp?: string | number): string {
-  // 秒级活动结束时间。
-  const numericTimestamp = Number(endTimestamp ?? 0);
-
-  if (numericTimestamp <= 0) {
-    return '';
-  }
-
-  // 活动结束日期。
-  const endDate = new Date(numericTimestamp * 1000);
-  // 月份文本。
-  const month = String(endDate.getMonth() + 1).padStart(2, '0');
-  // 日期文本。
-  const day = String(endDate.getDate()).padStart(2, '0');
-  // 小时文本。
-  const hour = String(endDate.getHours()).padStart(2, '0');
-  // 分钟文本。
-  const minute = String(endDate.getMinutes()).padStart(2, '0');
-
-  return `${month}/${day} ${hour}:${minute} 截止`;
-}
-
 /** 从商品图文详情中提取安全的图片地址。 */
 function extractDetailImageUrls(detailHtml?: string): string[] {
   if (!detailHtml) {
@@ -163,7 +140,7 @@ function CopyItemNoButton({ itemNo }: { itemNo?: string }) {
   );
 }
 
-/** ProductDetailDrawer 是普通列表和秒杀专区共用的商品详情抽屉。 */
+/** ProductDetailDrawer 展示商品详情及可选规格。 */
 export function ProductDetailDrawer({
   product,
   isLoading,
@@ -337,8 +314,6 @@ export function ProductDetailDrawer({
               <span>共 {totalStock} 件</span>
             </div>
           </div>
-
-          {getSubsidyAmount(product) > 0 ? <section className="seckill-banner"><div><small>FLASH SALE</small><strong>限时秒杀</strong></div><span>平台已补贴 {formatPrice(getSubsidyAmount(product))}</span><em>{formatPromotionEndTime(product?.promotion_end_time) || '活动进行中'}</em></section> : null}
 
           <section className="detail-section">
             <div className="detail-section__heading"><h3>尺码与库存</h3><span>实时库存</span></div>

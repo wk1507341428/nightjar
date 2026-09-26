@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,15 @@ import (
 	"sidejob-server/internal/svc"
 	"sidejob-server/internal/types"
 )
+
+// parsePositiveInt 将查询参数解析为正整数。
+func parsePositiveInt(rawValue string, fallback int) int {
+	parsedValue, err := strconv.Atoi(rawValue)
+	if err != nil || parsedValue < 1 {
+		return fallback
+	}
+	return parsedValue
+}
 
 // discoverCatalogBrandStoresHandler 读取上游地区的可配置品牌门店。
 func discoverCatalogBrandStoresHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {

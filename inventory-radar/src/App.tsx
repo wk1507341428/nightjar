@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Select, Spin, Switch } from 'antd';
-import { fetchBrandOptions, fetchLiveBrandCategories, fetchLiveBrandOptions, fetchLiveProductDetail, fetchLocalBrandCategories, fetchProductDetail, fetchSeckillProducts, searchLiveProducts, searchProducts } from './api';
+import { fetchBrandOptions, fetchLiveBrandCategories, fetchLiveBrandOptions, fetchLiveProductDetail, fetchLocalBrandCategories, fetchProductDetail, searchLiveProducts, searchProducts } from './api';
 import { refreshCatalogOffer } from './catalogManagementApi';
-import { INITIAL_SEARCH_STATE, INITIAL_SECKILL_STATE, PRODUCT_PAGE_SIZE, REGION_OPTIONS, getWarehouseName, getWarehouseShortName } from './constants';
+import { INITIAL_SEARCH_STATE, PRODUCT_PAGE_SIZE, REGION_OPTIONS, getWarehouseShortName } from './constants';
 import { clearLegacyBrandOptionCache, loadRecentSearches, saveRecentSearch } from './storage';
 import { PublishProductModal } from './PublishProductModal';
 import { ProductDetailDrawer } from './ProductDetailDrawer';
@@ -27,7 +27,6 @@ import type {
   ProductSku,
   ProductSummary,
   RecentSearch,
-  SeckillState,
 } from './types';
 
 /** 人民币金额格式化器。 */
@@ -45,13 +44,13 @@ const TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
 });
 
 /** 顶部模块导航；具体品类通过搜索和页面内入口查询。 */
-const PRIMARY_NAV_ITEMS = ['全部货源', '我的商品库', '发布中心', '品牌维护', '秒杀专区', '渠道上架', '同步配置'];
+const PRIMARY_NAV_ITEMS = ['全部货源', '我的商品库', '发布中心', '品牌维护', '渠道上架', '同步配置'];
 
 /** 商品排序方式。 */
 type SortMode = 'default' | 'priceAsc' | 'priceDesc' | 'discount' | 'xianyuLast';
 
 /** 商品列表展示模式。 */
-type CatalogMode = 'standard' | 'seckill' | 'marketplace' | 'sync' | 'syncRun' | 'syncHistory' | 'publishCenter' | 'brandMaintenance' | 'batchPublish' | 'priceHistory';
+type CatalogMode = 'standard' | 'marketplace' | 'sync' | 'syncRun' | 'syncHistory' | 'publishCenter' | 'brandMaintenance' | 'batchPublish' | 'priceHistory';
 
 /** 商品数据来源。 */
 type CatalogDataSource = 'live' | 'local';
@@ -122,29 +121,6 @@ function formatDiscount(discountRate?: string | number): string {
   return numericDiscount > 0 ? `${(numericDiscount / 10).toFixed(1)}折` : '特惠';
 }
 
-/** 格式化活动结束时间。 */
-function formatPromotionEndTime(endTimestamp?: string | number): string {
-  // 秒级活动结束时间。
-  const numericTimestamp = Number(endTimestamp ?? 0);
-
-  if (numericTimestamp <= 0) {
-    return '';
-  }
-
-  // 活动结束日期。
-  const endDate = new Date(numericTimestamp * 1000);
-  // 月份文本。
-  const month = String(endDate.getMonth() + 1).padStart(2, '0');
-  // 日期文本。
-  const day = String(endDate.getDate()).padStart(2, '0');
-  // 小时文本。
-  const hour = String(endDate.getHours()).padStart(2, '0');
-  // 分钟文本。
-  const minute = String(endDate.getMinutes()).padStart(2, '0');
-
-  return `${month}/${day} ${hour}:${minute} 截止`;
-}
-
 /** 汇总商品全部在售 SKU 库存。 */
 function getProductStock(product: ProductSummary): number {
   // 商品在售规格。
@@ -179,22 +155,6 @@ function getBackendGoodsSort(sortMode: SortMode): number | undefined {
   }
 
   return undefined;
-}
-
-/** 生成当前商品区标题。 */
-function getCatalogTitle(catalogMode: CatalogMode, isBrowseMode: boolean, regionShortName: string): string {
-  if (catalogMode === 'seckill') {
-    return `${regionShortName}秒杀专区`;
-  }
-  if (isBrowseMode) {
-    return `${regionShortName}在售好物`;
-  }
-  return '搜索结果';
-}
-
-/** 判断当前地址是否为独立秒杀页。 */
-function isSeckillPageRoute(): boolean {
-  return window.location.hash === '#/seckill';
 }
 
 /** 判断当前地址是否为独立渠道上架页。 */
@@ -392,10 +352,6 @@ function ProductCard({
   const discountLabel = formatDiscount(product?.discount_rate);
   // 商品平台补贴金额。
   const subsidyAmount = getSubsidyAmount(product);
-  // 商品是否参加限时活动。
-  const hasLimitedSale = subsidyAmount > 0;
-  // 商品活动结束文案。
-  const promotionEndLabel = formatPromotionEndTime(product?.promotion_end_time);
   // 商品本地同步时间文案。
   const localSyncLabel = product?.last_synced_at
     ? new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(new Date(product.last_synced_at))
@@ -436,7 +392,6 @@ function ProductCard({
             {stock > 0 ? `库存 ${stock}` : '暂时无货'}
           </span>
           {subsidyAmount > 0 ? <span className="product-card__subsidy">平台补贴 {formatPrice(subsidyAmount)}</span> : null}
-          {hasLimitedSale ? <span className="product-card__seckill">限时秒杀{promotionEndLabel ? ` · ${promotionEndLabel}` : ''}</span> : null}
         </div>
         <div className="product-card__content">
           {isListedOnXianyu ? <div className="product-card__marketplaces"><span>闲鱼在售</span></div> : null}
@@ -507,10 +462,6 @@ export function App() {
   const [isBrandLoading, setIsBrandLoading] = useState(false);
   // 商品搜索状态。
   const [searchState, setSearchState] = useState<ProductSearchState>(INITIAL_SEARCH_STATE);
-  // 秒杀专区查询状态。
-  const [seckillState, setSeckillState] = useState<SeckillState>(INITIAL_SECKILL_STATE);
-  // 当前选中的秒杀分区。
-  const [selectedSeckillActivityId, setSelectedSeckillActivityId] = useState('');
   // 当前全部渠道在售商品。
   const [marketplaceListings, setMarketplaceListings] = useState<MarketplaceListing[]>([]);
   // 渠道在售列表加载状态。
@@ -541,8 +492,6 @@ export function App() {
   const hasLoadedInitialProducts = useRef(false);
   // 最新搜索请求序号。
   const searchRequestSequence = useRef(0);
-  // 最新秒杀请求序号。
-  const seckillRequestSequence = useRef(0);
   // 最新商详请求序号。
   const detailRequestSequence = useRef(0);
   // 最新品牌请求序号。
@@ -555,33 +504,12 @@ export function App() {
   const currentRegion = REGION_OPTIONS.find((region) => region.id === regionId) ?? REGION_OPTIONS[0];
   // 当前选择的品牌门店。
   const selectedBrandOption = brandOptions.find((brandOption) => brandOption.value === brandId);
-  // 当前是否处于首页浏览模式。
-  const isBrowseMode = query.trim() === '' && (activeCategory === '全部货源' || activeCategory === '我的商品库');
   // 当前结果区标题。
-  let resultTitle = getCatalogTitle(catalogMode, isBrowseMode, currentRegion.shortName);
-  if (catalogMode === 'standard') {
-    resultTitle = catalogDataSource === 'live' ? `${currentRegion.shortName}全部货源` : `${currentRegion.shortName}我的商品库`;
-  }
+  const resultTitle = catalogDataSource === 'live' ? `${currentRegion.shortName}全部货源` : `${currentRegion.shortName}我的商品库`;
   // 页面级接口加载状态。
-  const isGlobalLoading = searchState.isLoading || seckillState.isLoading || isMarketplaceLoading;
+  const isGlobalLoading = searchState.isLoading || isMarketplaceLoading;
   // 是否还能继续加载。
-  const canLoadMore = catalogMode === 'seckill'
-    ? seckillState.products.length < seckillState.total
-    : searchState.products.length < searchState.total;
-  // 库存筛选后的秒杀商品列表。
-  const visibleSeckillProducts = useMemo(() => {
-    // 当前分区下的秒杀商品。
-    const activityProducts = selectedSeckillActivityId
-      ? seckillState.products.filter((product) => product?.seckill_collection_id === selectedSeckillActivityId)
-      : seckillState.products;
-
-    return stockOnly
-      ? activityProducts.filter((product) => getProductStock(product) > 0)
-      : [...activityProducts];
-  }, [seckillState.products, selectedSeckillActivityId, stockOnly]);
-  // 当前优先展示的秒杀活动。
-  const primarySeckillActivity = seckillState.activities.find((activity) => activity.status === 'ongoing')
-    ?? seckillState.activities[0];
+  const canLoadMore = searchState.products.length < searchState.total;
   // 按货号索引的渠道在售状态。
   const marketplacePlatformsByItemNo = useMemo(() => {
     // 货号到渠道集合的映射。
@@ -688,50 +616,6 @@ export function App() {
       // 用户可读错误信息。
       const errorMessage = error instanceof Error ? error.message : '查询失败，请稍后重试';
       setSearchState((currentState) => ({ ...currentState, isLoading: false, errorMessage }));
-    }
-  }
-
-  /** 加载当前仓库范围的参与秒杀商品。 */
-  async function loadSeckillProducts({
-    nextRegionId,
-    nextPage = 1,
-    append = false,
-  }: {
-    nextRegionId: string;
-    nextPage?: number;
-    append?: boolean;
-  }) {
-    // 本次秒杀请求序号。
-    const requestSequence = seckillRequestSequence.current + 1;
-    seckillRequestSequence.current = requestSequence;
-    setSeckillState((currentState) => ({ ...currentState, isLoading: true, errorMessage: '' }));
-
-    try {
-      // 后端聚合后的秒杀商品。
-      const result = await fetchSeckillProducts(nextRegionId, nextPage);
-      if (requestSequence !== seckillRequestSequence.current) {
-        return;
-      }
-
-      setSeckillState((currentState) => ({
-        products: append ? [...currentState.products, ...result.list] : result.list,
-        activities: result.activities,
-        total: result.total,
-        page: nextPage,
-        isLoading: false,
-        errorMessage: '',
-      }));
-      if (!append) {
-        setSelectedSeckillActivityId(result.activities[0]?.id ?? '');
-      }
-    } catch (error) {
-      if (requestSequence !== seckillRequestSequence.current) {
-        return;
-      }
-
-      // 用户可读秒杀错误。
-      const errorMessage = error instanceof Error ? error.message : '秒杀商品加载失败';
-      setSeckillState((currentState) => ({ ...currentState, isLoading: false, errorMessage }));
     }
   }
 
@@ -919,13 +803,6 @@ export function App() {
       setActiveCategory('渠道上架');
       return;
     }
-    if (isSeckillPageRoute()) {
-      setCatalogMode('seckill');
-      setActiveCategory('秒杀专区');
-      void loadSeckillProducts({ nextRegionId: currentRegionIdRef.current });
-      return;
-    }
-
     setCatalogDataSource('live');
     setSortMode('default');
     setActiveCategory('全部货源');
@@ -933,7 +810,7 @@ export function App() {
     void loadBrandOptions('3', 'live');
   }
 
-  /** 根据地址切换独立秒杀页或选品主页。 */
+  /** 根据地址切换独立页面或选品主页。 */
   function handleRouteChange() {
     if (isBrandMaintenancePageRoute()) {
       setCatalogMode('brandMaintenance');
@@ -1011,14 +888,6 @@ export function App() {
       void loadMarketplaceListings();
       return;
     }
-    if (isSeckillPageRoute()) {
-      setCatalogMode('seckill');
-      setActiveCategory('秒杀专区');
-      setQuery('');
-      void loadSeckillProducts({ nextRegionId: currentRegionIdRef.current });
-      return;
-    }
-
     setCatalogMode('standard');
     setCatalogDataSource('live');
     setSortMode('default');
@@ -1028,16 +897,6 @@ export function App() {
     setBrandCategoryId('');
     void executeSearch({ nextQuery: '', nextRegionId: currentRegionIdRef.current, nextSortMode: 'default', nextCategoryId: '', recordHistory: false, dataSource: 'live', nextBrandId: 'all' });
     void loadBrandOptions(currentRegionIdRef.current, 'live');
-  }
-
-  /** 打开独立秒杀页。 */
-  function handleOpenSeckillPage() {
-    if (isSeckillPageRoute()) {
-      void loadSeckillProducts({ nextRegionId: regionId });
-      return;
-    }
-
-    window.location.hash = '/seckill';
   }
 
   /** 打开独立渠道上架页。 */
@@ -1114,9 +973,7 @@ export function App() {
     setRegionId(nextRegionId);
     setQuery('');
     let nextActiveCategory = catalogDataSource === 'live' ? '全部货源' : '我的商品库';
-    if (catalogMode === 'seckill') {
-      nextActiveCategory = '秒杀专区';
-    } else if (catalogMode === 'marketplace') {
+    if (catalogMode === 'marketplace') {
       nextActiveCategory = '渠道上架';
     }
     setActiveCategory(nextActiveCategory);
@@ -1127,10 +984,6 @@ export function App() {
     brandRequestSequence.current += 1;
     brandCategoryRequestSequence.current += 1;
     void loadBrandOptions(nextRegionId, catalogDataSource);
-    if (catalogMode === 'seckill') {
-      void loadSeckillProducts({ nextRegionId });
-      return;
-    }
     if (catalogMode === 'marketplace') {
       return;
     }
@@ -1154,10 +1007,6 @@ export function App() {
     }
     if (categoryName === '品牌维护') {
       window.location.hash = '/brand-maintenance';
-      return;
-    }
-    if (categoryName === '秒杀专区') {
-      handleOpenSeckillPage();
       return;
     }
     if (categoryName === '渠道上架') {
@@ -1222,25 +1071,11 @@ export function App() {
 
   /** 重新加载当前结果。 */
   function handleRefreshProducts() {
-    if (catalogMode === 'seckill') {
-      void loadSeckillProducts({ nextRegionId: regionId });
-      return;
-    }
-
     void executeSearch({ nextQuery: query, nextRegionId: regionId, recordHistory: false, dataSource: catalogDataSource });
   }
 
   /** 加载下一页名称搜索结果。 */
   function handleLoadMore() {
-    if (catalogMode === 'seckill') {
-      void loadSeckillProducts({
-        nextRegionId: regionId,
-        nextPage: seckillState.page + 1,
-        append: true,
-      });
-      return;
-    }
-
     void executeSearch({ nextQuery: query, nextRegionId: regionId, nextPage: searchState.page + 1, append: true, recordHistory: false, dataSource: catalogDataSource });
   }
 
@@ -1420,59 +1255,14 @@ export function App() {
         />
       ) : (
       <main id="home">
-        {catalogMode === 'standard' ? (
-          <>
-            {recentSearches.length > 0 ? (
-              <section className="recent-strip">
-                <span>最近搜索</span>
-                <div>{recentSearches.map((recentSearch) => <button type="button" key={`${recentSearch.regionId}-${recentSearch.mode}-${recentSearch.query}`} onClick={() => handleUseRecentSearch(recentSearch)}>{recentSearch.query}</button>)}</div>
-              </section>
-            ) : null}
-          </>
-        ) : (
-          <section className="seckill-page-intro">
-            <button type="button" onClick={handleReturnToStorefront}>← 返回选品仓</button>
-            <span>LIMITED TIME / LIVE INVENTORY</span>
-            <strong>限时秒杀</strong>
-            <p>当前活动商品、实时价格与库存，一页看清。</p>
+        {recentSearches.length > 0 ? (
+          <section className="recent-strip">
+            <span>最近搜索</span>
+            <div>{recentSearches.map((recentSearch) => <button type="button" key={`${recentSearch.regionId}-${recentSearch.mode}-${recentSearch.query}`} onClick={() => handleUseRecentSearch(recentSearch)}>{recentSearch.query}</button>)}</div>
           </section>
-        )}
+        ) : null}
 
         <section className="catalog-section">
-          {catalogMode === 'seckill' ? (
-            <>
-              <div className="seckill-shelf-heading">
-                <div>
-                  <span className="seckill-shelf-heading__eyebrow">FLASH SELECTION · {currentRegion.shortName}</span>
-                  <h2>{resultTitle}</h2>
-                  <p>{seckillState.total.toLocaleString('zh-CN')} 件商品正在参与限时活动</p>
-                </div>
-                <div className="seckill-shelf-heading__meta">
-                  <strong>{primarySeckillActivity?.status === 'ongoing' ? '正在秒杀' : '即将开抢'}</strong>
-                  <span>{primarySeckillActivity ? formatPromotionEndTime(primarySeckillActivity.endTime) : '等待活动数据'}</span>
-                  <button type="button" className="refresh-button refresh-button--light" onClick={handleRefreshProducts} disabled={seckillState.isLoading}><RefreshIcon /><span>刷新</span></button>
-                </div>
-              </div>
-
-              {seckillState.activities.length > 0 ? (
-                <div className="seckill-activity-strip" aria-label="当前秒杀场次">
-                  {seckillState.activities.map((activity) => (
-                    <button type="button" key={`${activity.regionId}-${activity.id}`} onClick={() => setSelectedSeckillActivityId(activity.id)} className={selectedSeckillActivityId === activity.id ? 'seckill-activity-chip seckill-activity-chip--active' : 'seckill-activity-chip'}>
-                      <i>{activity.status === 'ongoing' ? 'LIVE' : 'NEXT'}</i>{activity.name || `${getWarehouseName(activity.regionId)}秒杀`}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-
-              {seckillState.isLoading ? <div className="catalog-loading-indicator"><Spin size="small" /><span>正在核对秒杀场次与商品…</span></div> : null}
-              {seckillState.errorMessage ? <div className="notice notice--error">{seckillState.errorMessage}</div> : null}
-              {seckillState.isLoading && seckillState.products.length === 0 ? <ProductGridSkeleton /> : null}
-              {!seckillState.isLoading && !seckillState.errorMessage && visibleSeckillProducts.length === 0 ? <div className="empty-state empty-state--seckill"><strong>当前没有进行中的秒杀商品</strong><p>切换仓库或稍后刷新，活动开始后商品会自动出现在这里。</p></div> : null}
-              {visibleSeckillProducts.length > 0 ? <div className="product-grid">{visibleSeckillProducts.map((product) => <ProductCard key={`seckill-${product?.regionauth_id}-${product?.goods_id}-${product?.item_id}`} product={product} marketplacePlatforms={getProductMarketplacePlatforms(product?.item_no)} dataSource="live" onOpen={handleOpenProduct} />)}</div> : null}
-              {canLoadMore ? <button type="button" className="load-more" onClick={handleLoadMore} disabled={seckillState.isLoading}>{seckillState.isLoading ? '正在加载…' : `加载更多秒杀商品 · ${PRODUCT_PAGE_SIZE} 件`}</button> : null}
-            </>
-          ) : (
-            <>
               <div className="catalog-heading">
                 <div>
                   <span className="catalog-heading__eyebrow">{catalogDataSource === 'live' ? 'LIVE FROM THE OUTLET' : 'YOUR LOCAL CATALOG'}</span>
@@ -1516,8 +1306,6 @@ export function App() {
               {!searchState.isLoading && !searchState.errorMessage && visibleProducts.length === 0 ? <div className="empty-state"><strong>{catalogDataSource === 'live' ? '没有找到符合条件的实时商品' : '本地商品库还没有符合条件的商品'}</strong><p>{catalogDataSource === 'live' ? '换个关键词或切换其他仓库试试。' : '前往同步配置，启用品牌并完成首次同步。'}</p></div> : null}
               {visibleProducts.length > 0 ? <div className="product-grid">{visibleProducts.map((product) => <ProductCard key={`${product?.catalog_offer_id ?? product?.regionauth_id}-${product?.goods_id}-${product?.item_id}`} product={product} marketplacePlatforms={getProductMarketplacePlatforms(product?.item_no)} dataSource={catalogDataSource} onOpen={handleOpenProduct} />)}</div> : null}
               {canLoadMore ? <button type="button" className="load-more" onClick={handleLoadMore} disabled={searchState.isLoading}>{searchState.isLoading ? '正在加载…' : `加载更多商品 · ${PRODUCT_PAGE_SIZE} 件`}</button> : null}
-            </>
-          )}
         </section>
       </main>
       )}

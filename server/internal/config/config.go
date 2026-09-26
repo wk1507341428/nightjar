@@ -33,7 +33,7 @@ type XianyuConfig struct {
 	RequestTimeout int
 }
 
-// CatalogConfig 定义奥莱商品与秒杀数据接口配置。
+// CatalogConfig 定义奥莱商品接口配置。
 type CatalogConfig struct {
 	APIBase         string
 	CompanyID       string

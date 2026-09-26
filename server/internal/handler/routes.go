@@ -28,11 +28,6 @@ func RegisterHandlers(server *rest.Server, serviceContext *svc.ServiceContext) {
 			Path:    "/api/healthz",
 			Handler: healthHandler(),
 		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/catalog/seckill",
-			Handler: listSeckillProductsHandler(serviceContext),
-		},
 		{Method: http.MethodGet, Path: "/api/catalog/brand-stores/discover", Handler: discoverCatalogBrandStoresHandler(serviceContext)},
 		{Method: http.MethodGet, Path: "/api/catalog/brand-stores", Handler: listCatalogBrandStoresHandler(serviceContext)},
 		{Method: http.MethodGet, Path: "/api/catalog/brand-stores/:id/categories", Handler: listCatalogBrandCategoriesHandler(serviceContext)},

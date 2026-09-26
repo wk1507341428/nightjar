@@ -6,7 +6,6 @@ import type {
   ProductPurchaseNoticeResponse,
   ProductSummary,
   SearchMode,
-  SeckillProductsResponse,
 } from './types';
 
 /** 各地区购买须知请求缓存。 */
@@ -234,20 +233,4 @@ export async function fetchLiveProductDetail(itemId: string, regionId: string): 
     purchase_notice: purchaseNoticeResponse?.data?.product_purchase_notice,
     purchase_notice_open: purchaseNoticeResponse?.data?.product_purchase_notice_open === true,
   };
-}
-
-/** 从 SideJob 服务获取指定地区的秒杀商品。 */
-export async function fetchSeckillProducts(
-  regionId: string,
-  page = 1,
-  pageSize = PRODUCT_PAGE_SIZE,
-): Promise<SeckillProductsResponse> {
-  // 秒杀专区请求地址。
-  const requestUrl = new URL(`${SIDEJOB_API_BASE_URL}/catalog/seckill`, window.location.origin);
-
-  requestUrl.searchParams.set('regionId', regionId);
-  requestUrl.searchParams.set('page', String(page));
-  requestUrl.searchParams.set('pageSize', String(pageSize));
-
-  return requestJson<SeckillProductsResponse>(requestUrl);
 }
