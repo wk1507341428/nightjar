@@ -5,7 +5,6 @@ import { fetchCatalogSyncChanges } from './catalogManagementApi';
 import { offlineMarketplaceListings } from './xianyuApi';
 import type { CatalogSyncChange, CatalogSyncChangeListResponse, MarketplaceListing } from './types';
 
-          <ProTable<CatalogSyncChange> rowKey="id" className="workspace-data-table" columns={changeColumns} dataSource={syncResult.list} loading={isLoading} search={false} pagination={{ pageSize: 20, showSizeChanger: true }} scroll={{ x: 1000 }} options={false} locale={{ emptyText: "这一批次没有对应变化" }} />
 /** 同步结果轮询间隔。 */
 const SYNC_RUN_POLL_INTERVAL = 1600;
 
