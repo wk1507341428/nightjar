@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Checkbox, Input, Modal, Progress, Select, Spin, Tag } from 'antd';
+import { ProTable, type ProColumns } from '@ant-design/pro-components';
 import { fetchCatalogSyncChanges } from './catalogManagementApi';
 import { offlineMarketplaceListings } from './xianyuApi';
 import type { CatalogSyncChange, CatalogSyncChangeListResponse, MarketplaceListing } from './types';
 
+          <ProTable<CatalogSyncChange> rowKey="id" className="workspace-data-table" columns={changeColumns} dataSource={syncResult.list} loading={isLoading} search={false} pagination={{ pageSize: 20, showSizeChanger: true }} scroll={{ x: 1000 }} options={false} locale={{ emptyText: "这一批次没有对应变化" }} />
 /** 同步结果轮询间隔。 */
 const SYNC_RUN_POLL_INTERVAL = 1600;
 
@@ -166,6 +168,14 @@ export function SyncRunPage({ runId, onBack }: { runId: string; onBack: () => vo
     }
   }
 
+  // SKU 变更按列核对，关联闲鱼商品仍可逐项确认下架。
+  const changeColumns: ProColumns<CatalogSyncChange>[] = [
+    { title: '商品 / 货号', width: 350, render: (_, change) => <div className="sync-change-product">{change.imageUrl ? <img src={change.imageUrl} alt="" /> : <span>{change.itemNo.slice(0, 1)}</span>}<div><small>{change.itemNo}</small><strong>{change.productName}</strong><em>{change.variantLabel || change.skuCode || '默认规格'}</em></div></div> },
+    { title: '变更类型', width: 130, render: (_, change) => <Tag>{CHANGE_TYPE_LABELS[change.changeType] || change.changeType}</Tag> },
+    { title: '变更内容', width: 230, render: (_, change) => { const previousPrice = getEffectivePrice(change, 'before'); const nextPrice = getEffectivePrice(change, 'after'); return <div className="sync-change-diff"><span>{change.changeType.includes('price') ? '成交价' : change.changeType.includes('stock') ? '库存' : '状态'}</span><strong>{change.changeType.includes('price') ? `${formatPrice(previousPrice)} → ${formatPrice(nextPrice)}` : change.changeType.includes('stock') ? `${change.before.stock} → ${change.after.stock}` : `${change.before.status || '无'} → ${change.after.status || '在售'}`}</strong></div>; } },
+    { title: '闲鱼关联 / 操作', width: 280, render: (_, change) => { const listing = change.xianyuListings?.[0]; const listingIDs = change.xianyuListings?.map((item) => item.platformItemId) ?? []; return listing ? <div className="sync-change-channel"><Checkbox checked={listingIDs.every((id) => selectedListingIDs.includes(id))} onChange={(event) => handleToggleListings(listingIDs, event.target.checked)} /><div><span>闲鱼在售 {listingIDs.length > 1 ? `· ${listingIDs.length} 件` : ''}</span><a href={listing.itemUrl} target="_blank" rel="noreferrer">{formatPrice(listing.priceCents)} · 查看 ↗</a></div><Button danger size="small" loading={isOfflining} onClick={() => handleOfflineListings(listingIDs, `${CHANGE_TYPE_LABELS[change.changeType] || change.changeType} · 手动操作`)}>下架</Button></div> : <span className="sync-change-channel__empty">闲鱼未在售</span>; } },
+  ];
+
   return (
     <main className="sync-run-page">
       <header className="sync-console-header">
@@ -181,7 +191,7 @@ export function SyncRunPage({ runId, onBack }: { runId: string; onBack: () => vo
       {syncResult ? <div className="sync-console-workspace">
         <section className="sync-run-hero">
           <div className="sync-run-hero__signal"><span className={isFinished ? 'sync-signal sync-signal--done' : 'sync-signal'} /><small>{isFinished ? 'SYNC COMPLETE' : 'LIVE SYNC'}</small><h2>{isFinished ? '本批次处理完成' : '正在核对上游 SKU'}</h2><p>结果持续写入数据库，关闭或刷新页面不会中断任务。</p></div>
-          <div className="sync-run-hero__progress"><strong>{progressPercent}%</strong><Progress percent={progressPercent} showInfo={false} strokeColor="#ff0a4f" trailColor="rgba(255,255,255,.12)" /><span>{syncResult.run.processedCount} / {syncResult.run.totalCount || '—'} 件商品</span></div>
+          <div className="sync-run-hero__progress"><strong>{progressPercent}%</strong><Progress percent={progressPercent} showInfo={false} strokeColor="#ff0a4f" railColor="#e7edf3" /><span>{syncResult.run.processedCount} / {syncResult.run.totalCount || '—'} 件商品</span></div>
         </section>
 
         <section className="sync-run-metrics">
@@ -194,18 +204,7 @@ export function SyncRunPage({ runId, onBack }: { runId: string; onBack: () => vo
         <section className="sync-change-panel">
           <header><div><small>CHANGE LEDGER</small><h2>SKU 变更明细</h2><p>共 {syncResult.total} 条符合当前条件的变化</p></div><Button danger disabled={selectedListingIDs.length === 0} loading={isOfflining} onClick={() => handleOfflineListings(selectedListingIDs)}>下架已选 {selectedListingIDs.length > 0 ? `(${selectedListingIDs.length})` : ''}</Button></header>
           <div className="sync-change-toolbar"><Input value={keyword} onChange={(event) => setKeyword(event.target.value)} onPressEnter={handleApplyFilters} placeholder="搜索货号、商品或尺码" allowClear /><Select value={changeType} onChange={setChangeType} options={CHANGE_TYPE_OPTIONS} /><Button type="primary" onClick={handleApplyFilters}>应用筛选</Button><Button danger disabled={formalOfflineListings.length === 0} loading={isOfflining} onClick={() => handleOfflineListings(formalOfflineListings.map((listing) => listing.platformItemId), '来源商品已正式下架')}>一键下架正式下架商品 {formalOfflineListings.length > 0 ? `(${formalOfflineListings.length})` : ''}</Button></div>
-          {syncResult.list.length === 0 ? <div className="sync-change-empty"><strong>这一批次没有对应变化</strong><span>切换筛选类型或等待同步继续处理。</span></div> : <div className="sync-change-list">{syncResult.list.map((change) => {
-            const previousPrice = getEffectivePrice(change, 'before');
-            const nextPrice = getEffectivePrice(change, 'after');
-            const listing = change.xianyuListings?.[0];
-            const listingIDs = change.xianyuListings?.map((xianyuListing) => xianyuListing.platformItemId) ?? [];
-            return <article key={change.id} className={`sync-change-row sync-change-row--${change.changeType}`}>
-              <div className="sync-change-product">{change.imageUrl ? <img src={change.imageUrl} alt="" /> : <span>{change.itemNo.slice(0, 1)}</span>}<div><small>{change.itemNo}</small><strong>{change.productName}</strong><em>{change.variantLabel || change.skuCode || '默认规格'}</em></div></div>
-              <Tag>{CHANGE_TYPE_LABELS[change.changeType] || change.changeType}</Tag>
-              <div className="sync-change-diff"><span>{change.changeType.includes('price') ? '成交价' : change.changeType.includes('stock') ? '库存' : '状态'}</span><strong>{change.changeType.includes('price') ? `${formatPrice(previousPrice)} → ${formatPrice(nextPrice)}` : change.changeType.includes('stock') ? `${change.before.stock} → ${change.after.stock}` : `${change.before.status || '无'} → ${change.after.status || '在售'}`}</strong></div>
-              <div className="sync-change-channel">{listing ? <><Checkbox checked={listingIDs.every((listingID) => selectedListingIDs.includes(listingID))} onChange={(event) => handleToggleListings(listingIDs, event.target.checked)} /><div><span>闲鱼在售 {listingIDs.length > 1 ? `· ${listingIDs.length} 件` : ''}</span><a href={listing.itemUrl} target="_blank" rel="noreferrer">{formatPrice(listing.priceCents)} · 查看 ↗</a></div><Button danger size="small" loading={isOfflining} onClick={() => handleOfflineListings(listingIDs, `${CHANGE_TYPE_LABELS[change.changeType] || change.changeType} · 手动操作`)}>下架</Button></> : <span className="sync-change-channel__empty">闲鱼未在售</span>}</div>
-            </article>;
-          })}</div>}
+          <ProTable<CatalogSyncChange> rowKey="id" className="workspace-data-table" columns={changeColumns} dataSource={syncResult.list} loading={isLoading} search={false} pagination={{ pageSize: 20, showSizeChanger: true }} scroll={{ x: 1000 }} options={false} locale={{ emptyText: "这一批次没有对应变化" }} />
         </section>
       </div> : null}
       <Modal
@@ -219,7 +218,7 @@ export function SyncRunPage({ runId, onBack }: { runId: string; onBack: () => vo
         okButtonProps={{ danger: true, loading: isOfflining }}
         cancelButtonProps={{ disabled: isOfflining }}
         closable={!isOfflining}
-        maskClosable={!isOfflining}
+        mask={{ closable: !isOfflining }}
         keyboard={!isOfflining}
         onOk={() => void handleConfirmOffline()}
         onCancel={() => { setOfflinePreviewListings([]); setOfflineErrorMessage(''); }}

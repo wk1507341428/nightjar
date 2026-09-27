@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Button, Input, Select, Spin, Switch } from 'antd';
+import { Button, Input, Select, Switch, Tag } from 'antd';
+import { ProCard, ProTable, type ProColumns } from '@ant-design/pro-components';
 import { discoverCatalogBrandStores, fetchCatalogBrandStores, saveCatalogBrandStore, syncCatalogBrandStore } from './catalogManagementApi';
 import { REGION_OPTIONS } from './constants';
 import type { CatalogBrandStore, CatalogBrandStoreCandidate } from './types';
@@ -121,7 +122,7 @@ export function CatalogSyncPage({ onBack }: { onBack: () => void }) {
   // 已启用同步的门店数量。
   const enabledBrandStoreCount = brandStores.filter((brandStore) => brandStore.configuration?.syncEnabled).length;
   // 当前地区名称。
-  const regionName = REGION_OPTIONS.find((region) => region.id === regionId)?.name ?? '当前地区';
+  const regionName = REGION_OPTIONS.find((region) => region.id === regionId)?.shortName ?? '当前地区';
   // 标准化后的品牌筛选关键词。
   const normalizedBrandKeyword = brandKeyword.trim().toLocaleUpperCase();
   // 当前关键词命中的品牌门店。
@@ -145,26 +146,24 @@ export function CatalogSyncPage({ onBack }: { onBack: () => void }) {
     }
     return firstBrandStore.brandName.localeCompare(secondBrandStore.brandName, 'zh-CN');
   });
+  // 品牌门店工作台列，保留同步开关和手动同步操作。
+  const brandStoreColumns: ProColumns<BrandStoreView>[] = [
+    { title: '品牌门店', dataIndex: 'brandName', width: 350, render: (_, brandStore) => <div className="sync-brand-cell"><i>{brandStore.brandName.slice(0, 1)}</i><div><strong>{brandStore.brandName}</strong><span>{brandStore.storeName || regionName}</span></div></div> },
+    { title: '店铺代码', dataIndex: 'shopCode', width: 150, render: (_, brandStore) => <span className="catalog-muted">{brandStore.shopCode || '—'}</span> },
+    { title: '最近同步', dataIndex: 'configuration', width: 170, render: (_, brandStore) => formatSyncTime(brandStore.configuration?.lastSyncedAt) },
+    { title: '配置状态', dataIndex: 'syncEnabled', width: 130, render: (_, brandStore) => brandStore.configuration?.syncEnabled ? <Tag color="success">已启用</Tag> : <Tag>未启用</Tag> },
+    { title: '同步开关', valueType: 'option', width: 110, render: (_, brandStore) => <Switch checked={brandStore.configuration?.syncEnabled === true} loading={savingBrandStoreId === brandStore.distributorId} onChange={(checked) => void handleChangeSyncEnabled(brandStore, checked)} aria-label={`${brandStore.brandName}同步开关`} /> },
+    { title: '操作', valueType: 'option', width: 150, render: (_, brandStore) => [<Button key="sync" type="link" disabled={!brandStore.configuration?.syncEnabled} loading={syncingBrandStoreId === brandStore.configuration?.id} onClick={() => void handleSyncBrandStore(brandStore)}>立即同步</Button>] },
+  ];
+
   return (
     <main className="catalog-sync-page">
-      <section className="catalog-sync-hero">
-        <button type="button" className="catalog-sync-hero__back" onClick={onBack}>← 返回本地商品库</button>
-        <div className="catalog-sync-hero__copy"><small>CATALOG CONTROL ROOM</small><h1>品牌同步控制台</h1><p>配置同步范围，启动后进入独立任务页核对 SKU 价格、库存、上下架和闲鱼在售状态。</p><Button className="catalog-sync-hero__history" onClick={() => { window.location.hash = '/sync-history'; }}>查看同步历史 →</Button></div>
-        <div className="catalog-sync-hero__meter"><span>已启用</span><strong>{enabledBrandStoreCount}</strong><small>/ {brandStores.length || '—'} 品牌门店</small></div>
-      </section>
-
+      <header className="workspace-page-heading"><div><span className="workspace-eyebrow">CATALOG / SYNC SETTINGS</span><h1>品牌同步控制台</h1><p>配置同步范围，按门店核对 SKU 价格、库存、上下架和闲鱼在售状态。</p></div><div className="workspace-page-actions"><Button onClick={onBack}>返回商品库</Button><Button onClick={() => { window.location.hash = '/sync-history'; }}>查看同步历史</Button></div></header>
+      <div className="workspace-overview sync-overview"><ProCard className="workspace-overview-card"><small>已启用同步</small><strong>{enabledBrandStoreCount}</strong><span>共 {brandStores.length} 家门店</span></ProCard><ProCard className="workspace-overview-card"><small>当前地区</small><strong>{regionName}</strong><span>可切换仓库范围</span></ProCard></div>
       <section className="catalog-sync-workspace">
-        <header className="catalog-sync-toolbar"><div><small>WAREHOUSE SCOPE</small><h2>{regionName}</h2></div><div className="catalog-sync-toolbar__controls"><Input value={brandKeyword} onChange={(event) => setBrandKeyword(event.target.value)} placeholder="搜索品牌、中文名或店铺代码" allowClear /><Select value={regionId} onChange={handleChangeRegion} options={REGION_OPTIONS.map((region) => ({ value: region.id, label: region.name }))} /></div></header>
+        <ProCard className="workspace-filter-card" title="门店筛选"><div className="catalog-sync-toolbar__controls"><Input value={brandKeyword} onChange={(event) => setBrandKeyword(event.target.value)} placeholder="搜索品牌、中文名或店铺代码" allowClear /><Select value={regionId} onChange={handleChangeRegion} options={REGION_OPTIONS.map((region) => ({ value: region.id, label: region.shortName }))} /></div></ProCard>
         {errorMessage ? <div className="notice notice--error">{errorMessage}</div> : null}
-        {isLoading ? <div className="catalog-sync-loading"><Spin /><span>正在读取品牌门店配置…</span></div> : null}
-        {!isLoading && visibleBrandStores.length === 0 ? <div className="empty-state"><strong>没有找到匹配的品牌门店</strong><p>试试输入英文品牌名、中文名或店铺代码。</p></div> : null}
-        {!isLoading && visibleBrandStores.length > 0 ? <div className="catalog-brand-store-grid">{visibleBrandStores.map((brandStore) => {
-          const configuration = brandStore.configuration;
-          const isEnabled = configuration?.syncEnabled === true;
-          const isSaving = savingBrandStoreId === brandStore.distributorId;
-          const isSyncing = syncingBrandStoreId === configuration?.id;
-          return <article className={isEnabled ? 'catalog-brand-store-card catalog-brand-store-card--enabled' : 'catalog-brand-store-card'} key={brandStore.distributorId}><div className="catalog-brand-store-card__identity"><i>{brandStore.brandName.slice(0, 1)}</i><div><small>{brandStore.shopCode || 'OUTLET STORE'}</small><h3>{brandStore.brandName}</h3><p>{brandStore.storeName || regionName}</p></div><Switch checked={isEnabled} loading={isSaving} onChange={(checked) => void handleChangeSyncEnabled(brandStore, checked)} /></div><div className="catalog-brand-store-card__meta"><span>{formatSyncTime(configuration?.lastSyncedAt)}</span><em>{isEnabled ? '本地同步已启用' : '未纳入本地商品库'}</em></div><Button type="primary" disabled={!isEnabled} loading={isSyncing} onClick={() => void handleSyncBrandStore(brandStore)}>{isSyncing ? '同步中…' : '立即同步该品牌'}</Button></article>;
-        })}</div> : null}
+        <ProTable<BrandStoreView> className="workspace-data-table" rowKey="distributorId" columns={brandStoreColumns} dataSource={visibleBrandStores} loading={isLoading} search={false} pagination={{ pageSize: 20, showSizeChanger: true }} scroll={{ x: 950 }} headerTitle={`品牌门店 · ${visibleBrandStores.length} 家`} options={{ density: true, reload: () => void loadBrandStoreWorkspace(regionId) }} locale={{ emptyText: '没有找到匹配的品牌门店' }} />
       </section>
     </main>
   );

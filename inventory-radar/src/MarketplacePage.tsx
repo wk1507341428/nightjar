@@ -1,4 +1,5 @@
-import { Button, Spin } from 'antd';
+import { Button, Tag } from 'antd';
+import { ProCard, ProTable, type ProColumns } from '@ant-design/pro-components';
 import type { MarketplaceListing } from './types';
 
 /** 人民币金额格式化器。 */
@@ -46,50 +47,22 @@ export function MarketplacePage({
   onBack: () => void;
   onRefresh: () => void;
 }) {
+  // 渠道商品列：保留货号、售价、同步时间和原平台跳转。
+  const listingColumns: ProColumns<MarketplaceListing>[] = [
+    { title: '商品', dataIndex: 'title', width: 460, render: (_, listing) => <div className="marketplace-product-cell">{listing.imageUrl ? <img src={listing.imageUrl} alt="" loading="lazy" /> : <span>闲</span>}<div><strong>{listing.title}</strong><small>{listing.itemNo || '未关联货号'}</small></div></div> },
+    { title: '平台', dataIndex: 'platform', width: 110, render: () => <Tag color="gold">闲鱼在售</Tag> },
+    { title: '售价', dataIndex: 'priceCents', width: 140, render: (_, listing) => <strong className="marketplace-table-price">{formatMarketplacePrice(listing.priceCents)}</strong> },
+    { title: '最后同步', dataIndex: 'lastSyncedAt', width: 160, render: (_, listing) => <span className="catalog-muted">{formatMarketplaceDate(listing.lastSyncedAt)}</span> },
+    { title: '操作', valueType: 'option', width: 130, render: (_, listing) => listing.itemUrl ? [<a key="open" href={listing.itemUrl} target="_blank" rel="noreferrer">查看闲鱼商品 ↗</a>] : [] },
+  ];
+
   return (
     <main className="marketplace-page">
-      <section className="marketplace-hero">
-        <button type="button" className="marketplace-hero__back" onClick={onBack}>← 返回选品仓</button>
-        <div>
-          <small>MARKETPLACE DESK</small>
-          <h1>渠道上架</h1>
-          <p>集中查看各平台当前在售商品，避免重复发布。</p>
-        </div>
-        <div className="marketplace-hero__counter"><strong>{listings.length}</strong><span>闲鱼在售</span></div>
-      </section>
-
-      <section className="marketplace-channel-tabs" aria-label="销售渠道">
-        <button type="button" className="marketplace-channel-tab marketplace-channel-tab--active"><i>闲</i><span>闲鱼</span><strong>{listings.length}</strong></button>
-        <button type="button" className="marketplace-channel-tab" disabled><i>淘</i><span>淘宝</span><small>待接入</small></button>
-        <button type="button" className="marketplace-channel-tab" disabled><i>拼</i><span>拼多多</span><small>待接入</small></button>
-        <div className="marketplace-sync-meta"><span>最后同步 {formatMarketplaceDate(lastSyncedAt)}</span><Button size="small" onClick={onRefresh} loading={isLoading}>同步闲鱼状态</Button></div>
-      </section>
-
-
-      {isLoading ? <div className="marketplace-loading"><Spin size="small" /><span>正在读取渠道在售商品…</span></div> : null}
+      <header className="workspace-page-heading"><div><span className="workspace-eyebrow">MARKETPLACE / LISTINGS</span><h1>渠道上架</h1><p>集中查看闲鱼当前在售商品，避免重复发布。</p></div><div className="workspace-page-actions"><Button onClick={onBack}>返回选品仓</Button><Button type="primary" onClick={onRefresh} loading={isLoading}>同步闲鱼状态</Button></div></header>
+      <div className="workspace-overview marketplace-overview"><ProCard className="workspace-overview-card"><small>闲鱼在售</small><strong>{listings.length.toLocaleString('zh-CN')}</strong><span>已同步商品</span></ProCard><ProCard className="workspace-overview-card"><small>最近同步</small><strong className="workspace-overview-card__date">{formatMarketplaceDate(lastSyncedAt)}</strong><span>点击右上角可手动刷新</span></ProCard></div>
+      <div className="marketplace-channel-tabs" aria-label="销售渠道"><Tag color="gold">闲鱼 · {listings.length}</Tag></div>
       {errorMessage ? <div className="notice notice--error">{errorMessage}</div> : null}
-      {!isLoading && !errorMessage && listings.length === 0 ? <div className="empty-state"><strong>暂无闲鱼在售商品</strong><p>连接闲鱼账号后重启服务，或从商品详情发布第一件商品。</p></div> : null}
-
-      {listings.length > 0 ? (
-        <div className="marketplace-listing-grid">
-          {listings.map((listing) => (
-            <article className="marketplace-listing-card" key={listing.id}>
-              <div className="marketplace-listing-card__media">
-                {listing.imageUrl ? <img src={listing.imageUrl} alt={listing.title} loading="lazy" /> : <span>XIANYU</span>}
-                <em>闲鱼在售</em>
-              </div>
-              <div className="marketplace-listing-card__content">
-                <small>{listing.itemNo || '未关联货号'}</small>
-                <h2>{listing.title}</h2>
-                <div className="marketplace-listing-card__meta"><strong>{formatMarketplacePrice(listing.priceCents)}</strong><span>同步于 {formatMarketplaceDate(listing.lastSyncedAt)}</span></div>
-                <div className="marketplace-listing-card__actions">
-                  {listing.itemUrl ? <a href={listing.itemUrl} target="_blank" rel="noreferrer">查看闲鱼商品 <span>↗</span></a> : null}
-                </div>
-              </div>
-            </article>
-          ))}
-        </div>
-      ) : null}
+      <ProTable<MarketplaceListing> className="workspace-data-table" rowKey="id" columns={listingColumns} dataSource={listings} loading={isLoading} search={false} pagination={{ pageSize: 20, showSizeChanger: true }} scroll={{ x: 930 }} headerTitle="闲鱼在售商品" options={{ density: true, reload: onRefresh }} locale={{ emptyText: '暂无闲鱼在售商品' }} />
     </main>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Spin } from 'antd';
+import { ProTable, type ProColumns } from '@ant-design/pro-components';
 import { fetchCatalogOfferPriceHistory } from './catalogManagementApi';
 import { getWarehouseShortName } from './constants';
 import type { OfferPriceHistory, SKUPriceSnapshot } from './types';
@@ -117,6 +118,14 @@ export function PriceHistoryPage({ offerId, onBack }: { offerId: string; onBack:
   const changeAmount = (selectedTrack?.currentPrice ?? 0) - firstPrice;
   // 当前 SKU 折线图坐标。
   const chartPoints = buildChartPoints(selectedTrack?.snapshots ?? []);
+  // 历史变价节点以表格核对，图表仍保留趋势展示。
+  const historyColumns: ProColumns<SKUPriceSnapshot>[] = [
+    { title: '记录时间', dataIndex: 'observedAt', width: 180, render: (_, snapshot) => HISTORY_TIME_FORMATTER.format(new Date(snapshot.observedAt)) },
+    { title: '成交价', dataIndex: 'priceCents', width: 150, render: (_, snapshot) => <strong>{formatPrice(snapshot.priceCents)}</strong> },
+    { title: '挂牌价', dataIndex: 'sourcePriceCents', width: 150, render: (_, snapshot) => formatPrice(snapshot.sourcePriceCents) },
+    { title: '原价', dataIndex: 'marketPriceCents', width: 150, render: (_, snapshot) => formatPrice(snapshot.marketPriceCents) },
+    { title: '库存', dataIndex: 'stock', width: 110 },
+  ];
 
   return (
     <main className="price-history-page">
@@ -167,14 +176,7 @@ export function PriceHistoryPage({ offerId, onBack }: { offerId: string; onBack:
 
         <section className="price-history-ledger">
           <header><div><small>CHANGE LOG</small><h3>变价记录</h3></div><span>新记录在前</span></header>
-          <div>{[...selectedTrack.snapshots].reverse().map((snapshot, index, reversedSnapshots) => {
-            const previousSnapshot = reversedSnapshots[index + 1];
-            const priceDelta = previousSnapshot ? snapshot.priceCents - previousSnapshot.priceCents : 0;
-            let changeSymbol = '—';
-            if (priceDelta > 0) changeSymbol = '↑';
-            if (priceDelta < 0) changeSymbol = '↓';
-            return <article key={snapshot.id}><time>{HISTORY_TIME_FORMATTER.format(new Date(snapshot.observedAt))}</time><div><strong>{formatPrice(snapshot.priceCents)}</strong><span>挂牌 {formatPrice(snapshot.sourcePriceCents)} · 原价 {formatPrice(snapshot.marketPriceCents)} · 库存 {snapshot.stock}</span></div><em className={getPriceChangeClass(priceDelta)}>{previousSnapshot ? `${changeSymbol} ${formatPrice(Math.abs(priceDelta))}` : '价格基线'}</em></article>;
-          })}</div>
+          <ProTable<SKUPriceSnapshot> rowKey="id" className="workspace-data-table" columns={historyColumns} dataSource={[...selectedTrack.snapshots].reverse()} search={false} options={false} pagination={{ pageSize: 10 }} scroll={{ x: 740 }} />
         </section>
       </div> : null}
     </main>

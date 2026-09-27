@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Select, Spin, Switch } from 'antd';
+import { Button, Drawer, Input, Segmented, Select, Spin, Switch, Tag } from 'antd';
+import { ProCard, ProLayout, ProTable, type ProColumns } from '@ant-design/pro-components';
 import { fetchBrandOptions, fetchLiveBrandCategories, fetchLiveBrandOptions, fetchLiveProductDetail, fetchLocalBrandCategories, fetchProductDetail, searchLiveProducts, searchProducts } from './api';
 import { refreshCatalogOffer } from './catalogManagementApi';
 import { INITIAL_SEARCH_STATE, PRODUCT_PAGE_SIZE, REGION_OPTIONS, getWarehouseShortName } from './constants';
@@ -43,8 +44,15 @@ const TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
   minute: '2-digit',
 });
 
-/** 顶部模块导航；具体品类通过搜索和页面内入口查询。 */
-const PRIMARY_NAV_ITEMS = ['全部货源', '我的商品库', '发布中心', '品牌维护', '渠道上架', '同步配置'];
+/** 运营工作台主导航。 */
+const WORKSPACE_ROUTES = [
+  { path: '/home', name: '全部货源', icon: <WorkspaceNavIcon kind="catalog" /> },
+  { path: '/library', name: '我的商品库', icon: <WorkspaceNavIcon kind="library" /> },
+  { path: '/publish-center', name: '发布中心', icon: <WorkspaceNavIcon kind="publish" /> },
+  { path: '/brand-maintenance', name: '品牌维护', icon: <WorkspaceNavIcon kind="brand" /> },
+  { path: '/marketplace', name: '渠道上架', icon: <WorkspaceNavIcon kind="marketplace" /> },
+  { path: '/sync', name: '同步配置', icon: <WorkspaceNavIcon kind="sync" /> },
+];
 
 /** 商品排序方式。 */
 type SortMode = 'default' | 'priceAsc' | 'priceDesc' | 'discount' | 'xianyuLast';
@@ -54,6 +62,19 @@ type CatalogMode = 'standard' | 'marketplace' | 'sync' | 'syncRun' | 'syncHistor
 
 /** 商品数据来源。 */
 type CatalogDataSource = 'live' | 'local';
+
+/** 商品区展示方式。 */
+type ProductViewMode = 'table' | 'grid';
+
+/** 获取当前子页面对应的主导航地址。 */
+function getWorkspaceMenuPath(mode: CatalogMode, source: CatalogDataSource): string {
+  if (mode === 'standard') return source === 'live' ? '/home' : '/library';
+  if (mode === 'batchPublish' || mode === 'priceHistory') return '/library';
+  if (mode === 'sync' || mode === 'syncRun' || mode === 'syncHistory') return '/sync';
+  if (mode === 'publishCenter') return '/publish-center';
+  if (mode === 'brandMaintenance') return '/brand-maintenance';
+  return '/marketplace';
+}
 
 /** 批量发布页面路由参数。 */
 interface PublishBatchRoute {
@@ -247,6 +268,21 @@ function SearchIcon() {
   );
 }
 
+/** 工作台侧边栏图标。 */
+function WorkspaceNavIcon({ kind }: { kind: 'catalog' | 'library' | 'publish' | 'brand' | 'marketplace' | 'sync' }) {
+  // 每个入口对应的简洁线性图形。
+  const paths: Record<typeof kind, React.ReactNode> = {
+    catalog: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M8 14h4" /></>,
+    library: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>,
+    publish: <><path d="m3 11 18-8-7 18-3-8-8-2Z" /><path d="m11 13 10-10" /></>,
+    brand: <><path d="m12 2 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 17l9 5 9-5" /></>,
+    marketplace: <><path d="M4 10h16v11H4V10ZM3 10l2-7h14l2 7H3Z" /><path d="M9 21v-7h6v7" /></>,
+    sync: <><path d="M20 7h-9l3-3M4 17h9l-3 3M17 4l3 3-3 3M7 14l-3 3 3 3" /></>,
+  };
+
+  return <svg className="workspace-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[kind]}</svg>;
+}
+
 /** 定位图标。 */
 function PinIcon() {
   return (
@@ -395,7 +431,7 @@ function ProductCard({
         </div>
         <div className="product-card__content">
           {isListedOnXianyu ? <div className="product-card__marketplaces"><span>闲鱼在售</span></div> : null}
-          <h3>{product?.item_name ?? '未命名商品'}</h3>
+          <h3 title={product?.item_name ?? '未命名商品'}>{product?.item_name ?? '未命名商品'}</h3>
           <div className="product-card__number"><span>货号</span><CopyItemNoButton itemNo={product?.item_no} compact /></div>
           <div className="product-card__footer">
             <div><strong>{formatPrice(getEffectivePrice(product))}</strong><del>{formatPrice(product?.market_price)}</del><span className="product-card__warehouse">{warehouseShortName}</span></div>
@@ -440,6 +476,12 @@ export function App() {
   const [sortMode, setSortMode] = useState<SortMode>('default');
   // 是否仅展示有货商品。
   const [stockOnly, setStockOnly] = useState(true);
+  // 当前是否进入移动工作台布局。
+  const [isCompactViewport, setIsCompactViewport] = useState(() => window.matchMedia('(max-width: 780px)').matches);
+  // 商品区默认使用卡片展示，用户仍可手动切换到表格。
+  const [productViewMode, setProductViewMode] = useState<ProductViewMode>('grid');
+  // 移动端主导航抽屉状态。
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   // 当前品牌门店 ID。
   const [brandId, setBrandId] = useState('all');
   // 当前地区品牌列表。
@@ -502,6 +544,10 @@ export function App() {
   const currentRegionIdRef = useRef('3');
   // 当前地区配置。
   const currentRegion = REGION_OPTIONS.find((region) => region.id === regionId) ?? REGION_OPTIONS[0];
+  // 当前侧边导航选中项。
+  const activeMenuPath = getWorkspaceMenuPath(catalogMode, catalogDataSource);
+  // 顶栏仓库切换只适用于选品和本地商品库，其他页面使用自身的地区筛选。
+  const isCatalogWorkspace = catalogMode === 'standard';
   // 当前选择的品牌门店。
   const selectedBrandOption = brandOptions.find((brandOption) => brandOption.value === brandId);
   // 当前结果区标题。
@@ -945,17 +991,23 @@ export function App() {
   }
 
   useEffect(() => {
-    if (hasLoadedInitialProducts.current) {
-      return;
+    if (!hasLoadedInitialProducts.current) {
+      hasLoadedInitialProducts.current = true;
+      loadInitialProducts();
     }
-
-    hasLoadedInitialProducts.current = true;
-    loadInitialProducts();
     window.addEventListener('hashchange', handleRouteChange);
 
     return () => {
       window.removeEventListener('hashchange', handleRouteChange);
     };
+  }, []);
+
+  useEffect(() => {
+    // 仅订阅浏览器断点，避免同时挂载两个平台连接组件并重复请求接口。
+    const mediaQuery = window.matchMedia('(max-width: 780px)');
+    const handleViewportChange = (event: MediaQueryListEvent) => setIsCompactViewport(event.matches);
+    mediaQuery.addEventListener('change', handleViewportChange);
+    return () => mediaQuery.removeEventListener('change', handleViewportChange);
   }, []);
 
   /** 提交搜索表单。 */
@@ -1192,43 +1244,57 @@ export function App() {
     }
   }
 
+  // 商品表格列；原有商品详情、货号复制和渠道状态入口均保留。
+  const productColumns: ProColumns<ProductSummary>[] = [
+    {
+      title: '商品信息',
+      dataIndex: 'item_name',
+      width: 420,
+      render: (_, product) => <div className="catalog-product-cell">
+        {product?.main_img || product?.pics?.[0] ? <img src={product?.main_img ?? product?.pics?.[0]} alt="" loading="lazy" /> : <span className="catalog-product-cell__placeholder">SJ</span>}
+        <div><small>{product?.goods_brand || '品牌商品'}</small><button type="button" onClick={() => handleOpenProduct(product)}>{product?.item_name || '未命名商品'}</button><span>{product?.distributor_info?.name || '奥莱门店'}</span></div>
+      </div>,
+    },
+    { title: '货号', dataIndex: 'item_no', width: 160, render: (_, product) => <CopyItemNoButton itemNo={product?.item_no} compact /> },
+    { title: '地区', dataIndex: 'regionauth_id', width: 90, render: (_, product) => <Tag className="catalog-region-tag">{getWarehouseShortName(product?.regionauth_id ?? product?.distributor_info?.regionauth_id)}</Tag> },
+    {
+      title: '售价 / 折扣',
+      dataIndex: 'price',
+      width: 170,
+      render: (_, product) => <div className="catalog-price-cell"><strong>{formatPrice(getEffectivePrice(product))}</strong><span><del>{formatPrice(product?.market_price)}</del> · {formatDiscount(product?.discount_rate)}</span>{getSubsidyAmount(product) > 0 ? <small>平台补贴 {formatPrice(getSubsidyAmount(product))}</small> : null}</div>,
+    },
+    { title: '库存', dataIndex: 'store', width: 110, render: (_, product) => <Tag color={getProductStock(product) > 0 ? 'success' : 'default'}>{getProductStock(product) > 0 ? `${getProductStock(product)} 件` : '无货'}</Tag> },
+    { title: '闲鱼状态', dataIndex: 'xianyu_listed', width: 120, render: (_, product) => product?.xianyu_listed === true || getProductMarketplacePlatforms(product?.item_no).includes('xianyu') ? <Tag color="processing">已上架</Tag> : <span className="catalog-muted">未上架</span> },
+    { title: '操作', valueType: 'option', width: 100, render: (_, product) => [<Button key="detail" type="link" onClick={() => handleOpenProduct(product)}>查看详情</Button>] },
+  ];
+
   return (
-    <div className="storefront">
+    <div className="storefront workspace-app">
       {isGlobalLoading ? <div className="global-loading-bar" aria-label="数据加载中"><i /></div> : null}
-      <header className="store-header">
-        <div className="store-header__inner">
-          <a href="#home" className="store-logo" aria-label="SideJob Select 首页">
-            <span>SJ</span><div><strong>SideJob</strong><small>OUTLET SELECT</small></div>
-          </a>
-
-          <form className="header-search" onSubmit={handleSubmitSearch}>
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索商品名称、品牌或货号" aria-label="搜索商品" />
-            <button type="submit" aria-label="提交搜索"><SearchIcon /><span>搜索</span></button>
-          </form>
-
-          <XianyuConnectionControl />
-
-          <label className="region-picker">
-            <PinIcon /><span>仓库范围</span>
-            <Select
-              value={regionId}
-              onChange={handleChangeRegion}
-              options={REGION_OPTIONS.map((region) => ({ value: region.id, label: region.shortName }))}
-              aria-label="仓库范围"
-            />
-          </label>
-        </div>
-      </header>
-
-      <nav className="category-nav" aria-label="商品分类">
-        <div className="category-nav__inner">
-          {PRIMARY_NAV_ITEMS.map((categoryName) => (
-            <button type="button" className={activeCategory === categoryName ? 'category-nav__item category-nav__item--active' : 'category-nav__item'} key={categoryName} onClick={() => handleSelectCategory(categoryName)}>
-              {categoryName}
-            </button>
-          ))}
-        </div>
-      </nav>
+      <ProLayout
+        className="workspace-layout"
+        title="SideJob"
+        logo={<span className="workspace-logo">SJ</span>}
+        layout="side"
+        navTheme="light"
+        fixedHeader
+        fixSiderbar
+        headerRender={false}
+        siderWidth={232}
+        route={{ path: '/', routes: WORKSPACE_ROUTES }}
+        location={{ pathname: activeMenuPath }}
+        breadcrumbRender={false}
+        headerTitleRender={false}
+        avatarProps={false}
+        actionsRender={false}
+        menuExtraRender={() => <div className="workspace-menu-caption">OPERATIONS <span>运营工作台</span></div>}
+        menuFooterRender={() => <div className="workspace-menu-footer"><span className="workspace-menu-footer__dot" /><div><strong>SideJob Console</strong><small>选品 · 发布 · 同步</small></div></div>}
+        menuItemRender={(item, defaultDom) => <a href={`#${item.path}`} onClick={(event) => { event.preventDefault(); handleSelectCategory(String(item.name ?? '')); }}>{defaultDom}</a>}
+        onMenuHeaderClick={() => { window.location.hash = '/home'; }}
+      >
+      <header className="workspace-topbar"><Button className="workspace-mobile-menu-button" type="text" onClick={() => setIsMobileMenuOpen(true)} aria-label="打开主菜单">☰</Button><div className="workspace-header-content"><div className="workspace-header-heading"><small>WORKSPACE / {isCatalogWorkspace ? currentRegion.shortName : 'OPERATIONS'}</small><strong>{activeCategory === '全部' ? '全部货源' : activeCategory}</strong></div><form className="workspace-global-search" onSubmit={handleSubmitSearch}><Input value={query} onChange={(event) => setQuery(event.target.value)} prefix={<SearchIcon />} placeholder="搜索商品名称、品牌或货号" allowClear aria-label="搜索商品" /><Button type="primary" htmlType="submit" icon={<SearchIcon />} aria-label="提交搜索"><span>搜索</span></Button></form></div><div className="workspace-topbar-actions">{!isCompactViewport ? <XianyuConnectionControl /> : null}{isCatalogWorkspace ? <label className="workspace-region-picker"><PinIcon /><span>仓库</span><Select value={regionId} onChange={handleChangeRegion} options={REGION_OPTIONS.map((region) => ({ value: region.id, label: region.shortName }))} aria-label="仓库范围" /></label> : null}</div></header>
+      <Drawer className="workspace-mobile-drawer" title="SideJob 工作台" placement="left" size={270} open={isMobileMenuOpen} onClose={() => setIsMobileMenuOpen(false)}><nav aria-label="移动端主导航">{WORKSPACE_ROUTES.map((route) => <button type="button" key={route.path} className={activeMenuPath === route.path ? 'workspace-mobile-nav-item workspace-mobile-nav-item--active' : 'workspace-mobile-nav-item'} onClick={() => { setIsMobileMenuOpen(false); handleSelectCategory(route.name); }}>{route.icon}<span>{route.name}</span></button>)}</nav>{isCompactViewport ? <div className="workspace-mobile-connection"><span>平台连接</span><XianyuConnectionControl /></div> : null}</Drawer>
+      <div className="workspace-content">
 
       {catalogMode === 'batchPublish' && publishBatchRoute ? (
         <BrandPublishPage key={publishBatchRoute.routeKey} batchId={publishBatchRoute.batchId} brandStoreId={publishBatchRoute.brandStoreId} brandName={publishBatchRoute.brandName} onBack={() => { window.location.hash = '/library'; }} />
@@ -1254,7 +1320,11 @@ export function App() {
           onRefresh={handleSyncMarketplaceListings}
         />
       ) : (
-      <main id="home">
+      <main id="home" className="catalog-workspace-page">
+        <div className="workspace-page-heading">
+          <div><span className="workspace-eyebrow">INVENTORY / {catalogDataSource === 'live' ? 'LIVE SOURCE' : 'LOCAL LIBRARY'}</span><h1>{resultTitle}</h1><p>按品牌、品类和库存状态快速定位商品，打开详情即可发布或比价。</p></div>
+          <div className="workspace-overview"><ProCard className="workspace-overview-card"><small>商品总量</small><strong>{searchState.total.toLocaleString('zh-CN')}</strong><span>当前筛选范围</span></ProCard><ProCard className="workspace-overview-card"><small>当前仓库</small><strong>{currentRegion.shortName}</strong><span>{catalogDataSource === 'live' ? '小程序实时货源' : '已同步本地商品'}</span></ProCard></div>
+        </div>
         {recentSearches.length > 0 ? (
           <section className="recent-strip">
             <span>最近搜索</span>
@@ -1263,12 +1333,7 @@ export function App() {
         ) : null}
 
         <section className="catalog-section">
-              <div className="catalog-heading">
-                <div>
-                  <span className="catalog-heading__eyebrow">{catalogDataSource === 'live' ? 'LIVE FROM THE OUTLET' : 'YOUR LOCAL CATALOG'}</span>
-                  <h2>{resultTitle}</h2>
-                  <p>共找到 {searchState.total.toLocaleString('zh-CN')} 件商品</p>
-                </div>
+          <ProCard className="catalog-filter-card" title="筛选与视图" extra={<Tag color={catalogDataSource === 'live' ? 'processing' : 'default'}>{catalogDataSource === 'live' ? '实时货源' : '本地商品库'}</Tag>}>
                 <div className="catalog-controls">
                   <Select<string, BrandOption>
                     className="brand-select"
@@ -1284,9 +1349,9 @@ export function App() {
                   />
                   <label className="stock-toggle"><Switch size="small" checked={stockOnly} onChange={setStockOnly} /><span>只看有货</span></label>
                   <Select className="sort-select" value={sortMode} onChange={handleChangeSort} options={getCatalogSortOptions(catalogDataSource)} aria-label="商品排序" />
-                  <button type="button" className="refresh-button" onClick={handleRefreshProducts} disabled={searchState.isLoading}><RefreshIcon /><span>{searchState.updatedAt || '刷新'}</span></button>
+                  <Segmented<ProductViewMode> className="catalog-view-switch" value={productViewMode} onChange={setProductViewMode} options={[{ label: '表格', value: 'table' }, { label: '卡片', value: 'grid' }]} aria-label="展示方式" />
+                  <Button className="refresh-button" icon={<RefreshIcon />} onClick={handleRefreshProducts} loading={searchState.isLoading}><span>{searchState.updatedAt || '刷新'}</span></Button>
                 </div>
-              </div>
               {brandId !== 'all' && (isBrandCategoryLoading || brandCategories.length > 0) ? (
                 <div className="brand-category-strip" aria-label="当前品牌商品品类">
                   <button type="button" className={brandCategoryId === '' ? 'brand-category-card brand-category-card--active' : 'brand-category-card'} onClick={() => handleChangeBrandCategory('')}>
@@ -1300,12 +1365,10 @@ export function App() {
                   {isBrandCategoryLoading ? <div className="brand-category-strip__loading"><Spin size="small" /><span>正在读取品牌品类</span></div> : null}
                 </div>
               ) : null}
-              {searchState.isLoading ? <div className="catalog-loading-indicator"><Spin size="small" /><span>{catalogDataSource === 'live' ? '正在获取小程序实时商品…' : '正在读取本地商品库…'}</span></div> : null}
+          </ProCard>
               {searchState.errorMessage ? <div className="notice notice--error">{searchState.errorMessage}</div> : null}
-              {searchState.isLoading && searchState.products.length === 0 ? <ProductGridSkeleton /> : null}
-              {!searchState.isLoading && !searchState.errorMessage && visibleProducts.length === 0 ? <div className="empty-state"><strong>{catalogDataSource === 'live' ? '没有找到符合条件的实时商品' : '本地商品库还没有符合条件的商品'}</strong><p>{catalogDataSource === 'live' ? '换个关键词或切换其他仓库试试。' : '前往同步配置，启用品牌并完成首次同步。'}</p></div> : null}
-              {visibleProducts.length > 0 ? <div className="product-grid">{visibleProducts.map((product) => <ProductCard key={`${product?.catalog_offer_id ?? product?.regionauth_id}-${product?.goods_id}-${product?.item_id}`} product={product} marketplacePlatforms={getProductMarketplacePlatforms(product?.item_no)} dataSource={catalogDataSource} onOpen={handleOpenProduct} />)}</div> : null}
-              {canLoadMore ? <button type="button" className="load-more" onClick={handleLoadMore} disabled={searchState.isLoading}>{searchState.isLoading ? '正在加载…' : `加载更多商品 · ${PRODUCT_PAGE_SIZE} 件`}</button> : null}
+              {productViewMode === 'table' ? <ProTable<ProductSummary> className="catalog-product-table" rowKey={(product) => `${product?.catalog_offer_id ?? product?.regionauth_id}-${product?.goods_id}-${product?.item_id}`} columns={productColumns} dataSource={visibleProducts} loading={searchState.isLoading} search={false} pagination={false} scroll={{ x: 1050 }} headerTitle={`商品列表 · 已加载 ${visibleProducts.length} 件`} options={{ density: true, fullScreen: false, reload: () => handleRefreshProducts() }} /> : <>{searchState.isLoading && searchState.products.length === 0 ? <ProductGridSkeleton /> : null}{!searchState.isLoading && !searchState.errorMessage && visibleProducts.length === 0 ? <div className="empty-state"><strong>没有找到符合条件的商品</strong><p>换个关键词、品牌或库存条件试试。</p></div> : null}{visibleProducts.length > 0 ? <div className="product-grid">{visibleProducts.map((product) => <ProductCard key={`${product?.catalog_offer_id ?? product?.regionauth_id}-${product?.goods_id}-${product?.item_id}`} product={product} marketplacePlatforms={getProductMarketplacePlatforms(product?.item_no)} dataSource={catalogDataSource} onOpen={handleOpenProduct} />)}</div> : null}</>}
+              {canLoadMore ? <Button className="load-more" onClick={handleLoadMore} loading={searchState.isLoading}>{`加载更多商品 · ${PRODUCT_PAGE_SIZE} 件`}</Button> : null}
         </section>
       </main>
       )}
@@ -1346,6 +1409,8 @@ export function App() {
           onClose={handleCloseComparison}
         />
       ) : null}
+      </div>
+      </ProLayout>
     </div>
   );
 }

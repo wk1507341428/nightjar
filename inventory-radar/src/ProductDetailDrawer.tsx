@@ -293,7 +293,7 @@ export function ProductDetailDrawer({
       className="product-detail-drawer"
       footer={drawerFooter}
     >
-      {isLoading ? <div className="detail-loading"><Spin size="large" tip="正在读取实时商详…"><div className="detail-loading__space" /></Spin></div> : null}
+      {isLoading ? <div className="detail-loading"><Spin size="large" description="正在读取实时商详…"><div className="detail-loading__space" /></Spin></div> : null}
       {!isLoading && errorMessage ? <div className="notice notice--error">{errorMessage}</div> : null}
       {!isLoading && !errorMessage && product ? (
         <div className="detail-content">

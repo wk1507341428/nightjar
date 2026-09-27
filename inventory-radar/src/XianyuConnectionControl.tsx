@@ -205,14 +205,12 @@ export function XianyuConnectionControl() {
         </Button>
       </Tooltip>
 
-      <Drawer open={isDrawerOpen} width="95vw" title={<div className="platform-drawer-title"><small>CHANNEL ACCESS</small><strong>平台连接管理</strong><span>每个平台独立保存登录信息，连接成功后即可参与一键比价。</span></div>} rootClassName="platform-connection-drawer" onClose={() => setIsDrawerOpen(false)}>
+      <Drawer open={isDrawerOpen} size="95vw" title={<div className="platform-drawer-title"><small>CHANNEL ACCESS</small><strong>平台连接管理</strong><span>每个平台独立保存登录信息，连接成功后即可参与一键比价。</span></div>} rootClassName="platform-connection-drawer" onClose={() => setIsDrawerOpen(false)}>
         <div className="platform-connection-layout">
           <aside className="platform-connection-nav" aria-label="平台列表">
             <button type="button" className={activePlatform === 'xianyu' ? 'platform-nav-card platform-nav-card--active' : 'platform-nav-card'} onClick={() => handleSelectPlatform('xianyu')}><i className="platform-nav-card__logo platform-nav-card__logo--xianyu">闲</i><span><strong>闲鱼</strong><small>{isXianyuConnected ? '已连接' : '未连接'}</small></span><em className={isXianyuConnected ? 'status-dot status-dot--online' : 'status-dot'} /></button>
             <button type="button" className={activePlatform === 'xianyuSeller' ? 'platform-nav-card platform-nav-card--active' : 'platform-nav-card'} onClick={() => handleSelectPlatform('xianyuSeller')}><i className="platform-nav-card__logo platform-nav-card__logo--seller">鱼</i><span><strong>闲鱼卖家后台</strong><small>{isXianyuSellerConnected ? '已连接' : '未连接'}</small></span><em className={isXianyuSellerConnected ? 'status-dot status-dot--online' : 'status-dot'} /></button>
             <button type="button" className={activePlatform === 'pinduoduo' ? 'platform-nav-card platform-nav-card--active' : 'platform-nav-card'} onClick={() => handleSelectPlatform('pinduoduo')}><i className="platform-nav-card__logo platform-nav-card__logo--pdd">拼</i><span><strong>拼多多</strong><small>{isPinduoduoConnected ? '已连接' : '未连接'}</small></span><em className={isPinduoduoConnected ? 'status-dot status-dot--online' : 'status-dot'} /></button>
-            <div className="platform-nav-card platform-nav-card--disabled"><i className="platform-nav-card__logo">淘</i><span><strong>淘宝</strong><small>后续接入</small></span></div>
-            <div className="platform-nav-card platform-nav-card--disabled"><i className="platform-nav-card__logo">京</i><span><strong>京东</strong><small>后续接入</small></span></div>
           </aside>
 
           <main className="platform-connection-panel">

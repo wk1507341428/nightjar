@@ -5,6 +5,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { App } from './App';
 import 'antd/dist/reset.css';
 import './styles.css';
+import './admin-theme.css';
 
 // React 应用挂载节点。
 const rootElement = document.getElementById('root');
@@ -21,10 +22,14 @@ createRoot(rootElement).render(
         token: {
           colorPrimary: '#ff0046',
           colorInfo: '#ff0046',
-          colorText: '#2f4858',
-          colorBorder: '#dfe4eb',
-          borderRadius: 12,
-          fontFamily: '"Avenir Next", "Futura", "PingFang SC", sans-serif',
+          colorText: '#203548',
+          colorTextSecondary: '#728395',
+          colorBorder: '#dfe6ed',
+          colorBgLayout: '#f2f5f8',
+          colorBgContainer: '#ffffff',
+          borderRadius: 10,
+          controlHeight: 36,
+          fontFamily: '"Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif',
         },
         components: {
           Select: {
@@ -36,6 +41,15 @@ createRoot(rootElement).render(
           Switch: {
             colorPrimary: '#ff0046',
             colorPrimaryHover: '#d8003c',
+          },
+          Table: {
+            headerBg: '#f7f9fb',
+            headerColor: '#6d7e8f',
+            rowHoverBg: '#fff7f9',
+            cellPaddingBlock: 13,
+          },
+          Card: {
+            headerFontSize: 15,
           },
         },
       }}

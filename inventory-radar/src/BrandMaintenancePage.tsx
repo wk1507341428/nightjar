@@ -110,7 +110,6 @@ export function BrandMaintenancePage() {
       return `${source.name} ${source.distributorId}`.toLocaleUpperCase().includes(normalizedKeyword);
     });
   }, [sources, filterRegionId, filterKeyword]);
-
   /** 打开新建合并品牌弹窗。 */
   function handleOpenMerge() {
     setEditingProfile(null);
@@ -182,14 +181,6 @@ export function BrandMaintenancePage() {
     }
   }
 
-  // 候选门店列表复用品牌图标、地区和库存展示。
-  const candidateColumns: ProColumns<BrandMaintenanceSource>[] = [
-    { title: '地区', width: 80, render: (_, source) => getWarehouseShortName(source.regionId) },
-    { title: '门店品牌', render: (_, source) => <div className="brand-maintenance-brand">{source.logoUrl ? <img src={source.logoUrl} alt="" /> : <i>{source.name.slice(0, 1)}</i>}<div><strong>{source.name}</strong><span>ID {source.distributorId}</span></div></div> },
-    { title: '可售', dataIndex: 'onlineGoodsCount', width: 75 },
-    { title: '归属', render: (_, source) => source.profileId && source.profileId !== editingProfile?.id ? <Tag>{profilesByID.get(source.profileId)?.name ?? '其他品牌档案'}</Tag> : '可添加' },
-  ];
-
   // 实时品牌列表列定义。
   const columns: ProColumns<BrandMaintenanceSource>[] = [
     { title: '地区', dataIndex: 'regionId', valueType: 'select', valueEnum: Object.fromEntries(REGION_OPTIONS.map((region) => [region.id, { text: region.shortName }])), width: 105, render: (_, source) => <Tag>{getWarehouseShortName(source.regionId)}</Tag> },
@@ -199,12 +190,26 @@ export function BrandMaintenancePage() {
     { title: '操作', valueType: 'option', render: (_, source) => source.profileId ? <Button type="link" onClick={() => { const profile = profilesByID.get(source.profileId!); if (profile) handleEditProfile(profile); }}>编辑合并品牌</Button> : null },
   ];
 
+  // 编辑档案时的候选门店，保留跨页勾选。
+  const candidateColumns: ProColumns<BrandMaintenanceSource>[] = [
+    { title: '地区', width: 90, render: (_, source) => getWarehouseShortName(source.regionId) },
+    { title: '品牌门店', dataIndex: 'name', render: (_, source) => <div className="brand-maintenance-brand">{source.logoUrl ? <img src={source.logoUrl} alt="" /> : <i>{source.name.slice(0, 1)}</i>}<div><strong>{source.name}</strong><span>ID {source.distributorId}</span></div></div> },
+    { title: '可售', dataIndex: 'onlineGoodsCount', width: 90, render: (_, source) => `${source.onlineGoodsCount} 件` },
+    { title: '归属', width: 130, render: (_, source) => source.profileId && source.profileId !== editingProfile?.id ? <Tag>其他档案</Tag> : '可添加' },
+  ];
+
+  const selectedColumns: ProColumns<BrandMaintenanceSource>[] = [
+    { title: '地区', width: 90, render: (_, source) => getWarehouseShortName(source.regionId) },
+    { title: '已合并门店', dataIndex: 'name', render: (_, source) => <div className="brand-maintenance-brand">{source.logoUrl ? <img src={source.logoUrl} alt="" /> : <i>{source.name.slice(0, 1)}</i>}<div><strong>{source.name}</strong><span>ID {source.distributorId} · {liveKeys.has(getSourceKey(source)) ? `可售 ${source.onlineGoodsCount} 件` : '实时信息暂缺，保留原成员'}</span></div></div> },
+    { title: '操作', valueType: 'option', width: 80, render: (_, source) => <Button disabled={isSaving} type="link" danger onClick={() => handleRemoveDraft(getSourceKey(source))}>移除</Button> },
+  ];
+
   return <main className="brand-maintenance-page">
     <section className="brand-maintenance-summary"><div><small>BRAND DIRECTORY</small><h1>品牌维护</h1><p>品牌数据实时来自小程序；数据库只保存单品牌或跨地区合并关系。</p></div><div><span>实时品牌</span><strong>{sources.length}</strong></div><div><span>品牌档案</span><strong>{profiles.length}</strong></div><div><span>已配置成员</span><strong>{sources.filter((source) => source.profileId).length}</strong></div></section>
     {errorMessage ? <Alert type="error" showIcon closable onClose={() => setErrorMessage('')} message={errorMessage} /> : null}
     {successMessage ? <Alert type="success" showIcon closable onClose={() => setSuccessMessage('')} message={successMessage} /> : null}
-    <ProTable<BrandMaintenanceSource> rowKey={getSourceKey} className="brand-maintenance-table" columns={columns} dataSource={visibleSources} loading={isLoading} pagination={{ pageSize: 20, showSizeChanger: true }} search={{ labelWidth: 'auto' }} onSubmit={(params) => { setFilterRegionId(String(params.regionId ?? '')); setFilterKeyword(String(params.name ?? '')); }} onReset={() => { setFilterRegionId(''); setFilterKeyword(''); }} onRow={(source) => ({ onClick: (event) => handleToggleSource(source, event), className: 'brand-maintenance-row' })} rowSelection={{ selectedRowKeys: selectedSourceKeys, preserveSelectedRowKeys: true, onChange: setSelectedSourceKeys, getCheckboxProps: (source) => ({ disabled: Boolean(source.profileId) }) }} options={{ density: false, reload: () => void loadMaintenance() }} headerTitle={`各地区实时品牌 · ${visibleSources.length} 条`} toolBarRender={() => [<Select<string> key="edit" value={undefined} style={{ width: 240 }} showSearch optionFilterProp="label" placeholder="编辑已合并品牌" options={profiles.map((profile) => ({ value: profile.id, label: profile.name }))} onChange={(id) => { const profile = profilesByID.get(id); if (profile) handleEditProfile(profile); }} />, <Button key="merge" type="primary" disabled={selectedSourceKeys.length === 0} onClick={handleOpenMerge}>合并所选品牌 ({selectedSourceKeys.length})</Button>]} />
-    <Modal open={isMergeOpen} width="75vw" className="brand-editor-modal" title={<div className="brand-maintenance-modal-title"><small>BRAND PROFILE</small><strong>{editingProfile ? '编辑合并品牌' : '创建品牌档案'}</strong></div>} okText="保存修改" cancelText="取消" confirmLoading={isSaving} onOk={() => void handleSaveProfile()} onCancel={handleCancelMerge} closable={!isSaving} maskClosable={!isSaving}>
+    <ProTable<BrandMaintenanceSource> rowKey={getSourceKey} className="brand-maintenance-table" columns={columns} dataSource={visibleSources} loading={isLoading} pagination={{ pageSize: 20, showSizeChanger: true }} scroll={{ x: 980 }} search={{ labelWidth: 'auto' }} onSubmit={(params) => { setFilterRegionId(String(params.regionId ?? '')); setFilterKeyword(String(params.name ?? '')); }} onReset={() => { setFilterRegionId(''); setFilterKeyword(''); }} onRow={(source) => ({ onClick: (event) => handleToggleSource(source, event), className: 'brand-maintenance-row' })} rowSelection={{ selectedRowKeys: selectedSourceKeys, preserveSelectedRowKeys: true, onChange: setSelectedSourceKeys, getCheckboxProps: (source) => ({ disabled: Boolean(source.profileId) }) }} options={{ density: false, reload: () => void loadMaintenance() }} headerTitle={`各地区实时品牌 · ${visibleSources.length} 条`} toolBarRender={() => [<Select<string> key="edit" value={undefined} style={{ width: 240 }} showSearch optionFilterProp="label" placeholder="编辑已合并品牌" options={profiles.map((profile) => ({ value: profile.id, label: profile.name }))} onChange={(id) => { const profile = profilesByID.get(id); if (profile) handleEditProfile(profile); }} />, <Button key="merge" type="primary" disabled={selectedSourceKeys.length === 0} onClick={handleOpenMerge}>合并所选品牌 ({selectedSourceKeys.length})</Button> ]} />
+    <Modal open={isMergeOpen} width="75vw" className="brand-editor-modal" title={<div className="brand-maintenance-modal-title"><small>BRAND PROFILE</small><strong>{editingProfile ? '编辑合并品牌' : '创建品牌档案'}</strong></div>} okText="保存修改" cancelText="取消" confirmLoading={isSaving} onOk={() => void handleSaveProfile()} onCancel={handleCancelMerge} closable={!isSaving} mask={{ closable: !isSaving }}>
       {modalErrorMessage ? <Alert type="error" showIcon message={modalErrorMessage} /> : null}
       <div className="brand-maintenance-form">
         <label><span>品牌档案名称</span><Input disabled={isSaving} value={profileName} onChange={(event) => setProfileName(event.target.value)} /></label>
@@ -213,16 +218,13 @@ export function BrandMaintenancePage() {
       <div className="brand-editor-panels">
         <section className="brand-editor-panel">
           <header><strong>添加门店</strong><span>搜索、勾选后加入右侧</span></header>
-          <div className="brand-editor-filters"><Select aria-label="筛选门店地区" allowClear placeholder="全部地区" value={candidateRegion || undefined} onChange={(value) => setCandidateRegion(value ?? '')} options={REGION_OPTIONS.map((region) => ({ value: region.id, label: region.shortName }))} /><Input aria-label="搜索门店品牌" allowClear placeholder="品牌名称或门店 ID" value={candidateKeyword} onChange={(event) => setCandidateKeyword(event.target.value)} /></div>
-          <ProTable<BrandMaintenanceSource> rowKey={getSourceKey} columns={candidateColumns} dataSource={candidates} search={false} options={false} size="small" pagination={{ pageSize: 8, showSizeChanger: false }} rowSelection={{ selectedRowKeys: candidateKeys, preserveSelectedRowKeys: true, onChange: setCandidateKeys, getCheckboxProps: (source) => ({ disabled: isSaving || Boolean(source.profileId && source.profileId !== editingProfile?.id) }) }} />
+          <div className="brand-editor-filters"><Select aria-label="筛选门店地区" allowClear placeholder="全部地区" value={candidateRegion || undefined} onChange={(value) => { setCandidateRegion(value ?? ''); }} options={REGION_OPTIONS.map((region) => ({ value: region.id, label: region.shortName }))} /><Input aria-label="搜索门店品牌" allowClear placeholder="品牌名称或门店 ID" value={candidateKeyword} onChange={(event) => { setCandidateKeyword(event.target.value); }} /></div>
+          <ProTable<BrandMaintenanceSource> rowKey={getSourceKey} columns={candidateColumns} dataSource={candidates} search={false} options={false} size="small" pagination={{ pageSize: 8 }} scroll={{ x: 680, y: 360 }} rowSelection={{ selectedRowKeys: candidateKeys, preserveSelectedRowKeys: true, onChange: setCandidateKeys, getCheckboxProps: (source) => ({ disabled: isSaving || Boolean(source.profileId && source.profileId !== editingProfile?.id) }) }} />
           <Button type="primary" disabled={isSaving || candidateKeys.length === 0} onClick={handleAddCandidates}>添加已选 {candidateKeys.length} 家门店 →</Button>
         </section>
         <section className="brand-editor-panel brand-editor-panel--selected">
           <header><strong>已合并门店</strong><span>{draftRegions.length} 个地区 · {draftSources.length} 家门店</span></header>
-          <div className="brand-editor-members">
-            {draftRegions.map((id) => <div key={id}><h4>{getWarehouseShortName(id)}</h4>{draftSources.filter((source) => source.regionId === id).map((source) => <article key={getSourceKey(source)}>{source.logoUrl ? <img src={source.logoUrl} alt="" /> : <i>{source.name.slice(0, 1)}</i>}<div><strong>{source.name}</strong><small>ID {source.distributorId} · {liveKeys.has(getSourceKey(source)) ? `可售 ${source.onlineGoodsCount} 件` : '实时信息暂缺，保留原成员'}</small></div><Button disabled={isSaving} type="text" danger onClick={() => handleRemoveDraft(getSourceKey(source))}>移除</Button></article>)}</div>)}
-            {draftSources.length === 0 ? <p>尚未选择门店，请从左侧添加。</p> : null}
-          </div>
+          <ProTable<BrandMaintenanceSource> rowKey={getSourceKey} columns={selectedColumns} dataSource={draftSources} search={false} options={false} size="small" pagination={{ pageSize: 8 }} scroll={{ x: 580, y: 360 }} locale={{ emptyText: '尚未选择门店，请从左侧添加' }} />
         </section>
       </div>
       <div className="brand-editor-review"><Space><Tag color="success">新增 {addedCount} 家</Tag><Tag color="warning">移除 {removedCount} 家</Tag><span>保存仅更新品牌配置，闲鱼商品需另行预览并确认。</span></Space></div>

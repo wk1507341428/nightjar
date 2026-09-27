@@ -1,0 +1,298 @@
+/* SideJob 运营后台：统一布局、密度和交互层级，保留品牌玫红。 */
+:root {
+  --cream: #f2f5f8;
+  --paper: #fff;
+  --primary: #ff0046;
+  --magenta: #d8155d;
+  --blue: #37566e;
+  --slate: #253d50;
+  --ink: #203548;
+  --muted: #7c8b99;
+  --line: #e0e7ee;
+  --forest: #ff0046;
+  --shadow: 0 8px 28px rgba(26, 49, 70, .055);
+}
+
+html { scroll-behavior: auto; }
+body { color: var(--ink); background: var(--cream); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline-color: rgba(255, 0, 70, .42); }
+.workspace-app { min-height: 100vh; }
+.workspace-layout, .workspace-layout .ant-layout { min-height: 100vh; background: var(--cream); }
+.workspace-layout .ant-pro-layout-content { padding: 0; }
+.workspace-layout .ant-layout-sider, .workspace-layout .ant-layout-sider-children, .workspace-layout .ant-pro-sider-logo, .workspace-layout .ant-pro-sider .ant-menu { border-right-color: #263d51; background: #14283b !important; }
+.workspace-layout .ant-layout-sider { border-right: 1px solid #263d51; box-shadow: 10px 0 30px rgba(13, 32, 48, .08); }
+.workspace-layout .ant-pro-sider-logo { min-height: 74px; padding: 17px 20px; border-bottom: 1px solid rgba(255,255,255,.09); }
+.workspace-layout .ant-pro-sider-logo h1, .workspace-layout .ant-pro-sider-logo a { color: #fff; font-family: "DIN Alternate", "Avenir Next Condensed", "PingFang SC", sans-serif; font-size: 20px; font-weight: 900; letter-spacing: -.035em; }
+.workspace-layout .ant-pro-sider-logo a h1 { color: #fff !important; }
+.workspace-logo { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 10px 10px 10px 3px; color: #fff; background: var(--primary); box-shadow: 0 8px 22px rgba(255, 0, 70, .27); font-size: 14px; font-weight: 900; }
+.workspace-nav-icon { width: 17px; height: 17px; }
+.workspace-menu-caption { display: flex; margin: 21px 17px 9px; justify-content: space-between; color: #ff7399; font-family: "DIN Alternate", "Avenir Next Condensed", sans-serif; font-size: 10px; font-weight: 900; letter-spacing: .18em; }
+.workspace-menu-caption span { color: #72889b; font-family: "PingFang SC", sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 0; }
+.workspace-layout .ant-pro-base-menu { padding-inline: 10px; }
+.workspace-layout .ant-menu-item { height: 42px; margin: 3px 0; border-radius: 9px; color: #b9c9d6 !important; font-size: 13px; font-weight: 750; }
+.workspace-layout .ant-menu-item:hover { color: #fff !important; background: rgba(255,255,255,.065) !important; }
+.workspace-layout .ant-menu-item-selected { color: #fff !important; background: #ff0046 !important; box-shadow: 0 6px 15px rgba(255,0,70,.18); }
+.workspace-layout .ant-menu-item a { display: block; width: 100%; color: inherit !important; }
+.workspace-layout .ant-menu-item .ant-menu-item-icon { color: inherit !important; }
+.workspace-menu-footer { display: flex; margin: 13px; padding: 14px 12px; align-items: center; gap: 11px; border: 1px solid rgba(255,255,255,.09); border-radius: 10px; background: rgba(255,255,255,.045); }
+.workspace-menu-footer__dot { width: 8px; height: 8px; border-radius: 50%; background: #ff4779; box-shadow: 0 0 0 5px rgba(255,71,121,.11); }
+.workspace-menu-footer > div { display: grid; gap: 2px; }
+.workspace-menu-footer strong { color: #ecf2f7; font-size: 11px; }
+.workspace-menu-footer small { color: #8298a9; font-size: 10px; }
+.workspace-layout .ant-layout-sider-collapsed .workspace-menu-caption, .workspace-layout .ant-layout-sider-collapsed .workspace-menu-footer { display: none; }
+.workspace-topbar { position: sticky; z-index: 12; top: 0; display: flex; height: 70px; padding: 0 clamp(20px,2.5vw,42px); align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.96); backdrop-filter: blur(14px); }
+.workspace-mobile-menu-button.ant-btn { display: none; }
+.workspace-header-content { display: flex; width: 100%; min-width: 0; align-items: center; gap: 30px; }
+.workspace-topbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; }
+.workspace-header-heading { display: grid; min-width: 150px; gap: 1px; }
+.workspace-header-heading small { color: #94a1ad; font-family: "DIN Alternate", "Avenir Next Condensed", sans-serif; font-size: 9px; font-weight: 900; letter-spacing: .13em; }
+.workspace-header-heading strong { color: var(--ink); font-size: 16px; font-weight: 850; }
+.workspace-global-search { display: flex; width: min(460px, 100%); align-items: center; gap: 8px; }
+.workspace-global-search .ant-input-affix-wrapper { height: 36px; border-color: #e0e7ee; background: #f7f9fb; }
+.workspace-global-search .ant-input-affix-wrapper:hover, .workspace-global-search .ant-input-affix-wrapper-focused { border-color: var(--primary); background: #fff; }
+.workspace-global-search svg, .workspace-region-picker svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
+.workspace-global-search .ant-btn { min-width: 68px; font-weight: 800; }
+.workspace-global-search .ant-btn svg { width: 14px; height: 14px; }
+.workspace-region-picker { display: flex; height: 36px; margin-left: 4px; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.workspace-region-picker svg { color: var(--primary); }
+.workspace-region-picker .ant-select { min-width: 78px; }
+.workspace-region-picker .ant-select-selector { border-color: #e0e7ee !important; }
+.workspace-layout .xianyu-connect { height: 34px; border-radius: 8px; box-shadow: none; }
+.workspace-mobile-drawer .ant-drawer-body { display: flex; flex-direction: column; padding: 14px; background: #f7f9fb; }
+.workspace-mobile-drawer nav { display: grid; gap: 4px; }
+.workspace-mobile-nav-item { display: flex; width: 100%; min-height: 42px; padding: 0 12px; align-items: center; gap: 12px; border: 0; border-radius: 8px; color: var(--ink); background: transparent; text-align: left; font-weight: 750; }
+.workspace-mobile-nav-item--active { color: var(--primary); background: #fff0f4; }
+.workspace-mobile-connection { display: grid; margin-top: auto; padding: 16px 8px; gap: 9px; border-top: 1px solid var(--line); }
+.workspace-mobile-connection > span { color: var(--muted); font-size: 11px; font-weight: 800; }
+.workspace-content { min-height: calc(100vh - 70px); padding: 26px clamp(20px, 2.5vw, 42px) 72px; background: radial-gradient(circle at 94% 0, rgba(255,0,70,.045), transparent 27%), var(--cream); }
+
+/* 全站页面外框与标题统一。 */
+.workspace-content :is(.catalog-workspace-page,.marketplace-page,.catalog-sync-page,.brand-maintenance-page,.publish-center-page,.sync-run-page,.sync-history-page,.brand-publish-page,.price-history-page) { width: 100%; min-height: 0; margin: 0; padding: 0; color: var(--ink); background: transparent; }
+.workspace-page-heading { display: flex; min-height: 96px; margin-bottom: 20px; align-items: center; justify-content: space-between; gap: 24px; }
+.workspace-eyebrow { display: block; margin-bottom: 7px; color: var(--primary); font-family: "DIN Alternate", "Avenir Next Condensed", sans-serif; font-size: 10px; font-weight: 900; letter-spacing: .18em; }
+.workspace-page-heading h1 { margin: 0; color: var(--ink); font-family: "DIN Alternate", "Avenir Next Condensed", "PingFang SC", sans-serif; font-size: clamp(26px, 2.8vw, 36px); line-height: 1.12; letter-spacing: -.04em; }
+.workspace-page-heading p { margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.workspace-page-actions { display: flex; align-items: center; gap: 9px; flex: 0 0 auto; }
+.workspace-page-actions .ant-btn { min-width: 100px; }
+.workspace-overview { display: flex; align-items: stretch; gap: 12px; }
+.workspace-overview-card.ant-pro-card { min-width: 160px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: var(--shadow); }
+.workspace-overview-card .ant-pro-card-body { display: grid; padding: 13px 17px; gap: 3px; }
+.workspace-overview-card small { color: var(--muted); font-size: 10px; font-weight: 750; }
+.workspace-overview-card strong { color: var(--ink); font-family: "DIN Alternate", "Avenir Next Condensed", "PingFang SC", sans-serif; font-size: 27px; line-height: 1.1; letter-spacing: -.04em; white-space: nowrap; }
+.workspace-overview-card span { color: #a0acb7; font-size: 10px; }
+.workspace-overview-card__date { font-size: 17px !important; letter-spacing: 0 !important; }
+.workspace-filter-card.ant-pro-card, .catalog-filter-card.ant-pro-card { margin-bottom: 16px; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+.workspace-filter-card .ant-pro-card-head, .catalog-filter-card .ant-pro-card-head { min-height: 52px; border-bottom: 1px solid #edf1f4; }
+.workspace-filter-card .ant-pro-card-title, .catalog-filter-card .ant-pro-card-title { color: var(--ink); font-size: 14px; font-weight: 850; }
+.workspace-filter-card .ant-pro-card-body, .catalog-filter-card .ant-pro-card-body { padding: 16px 18px; }
+.workspace-content .ant-pro-table .ant-pro-card { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: var(--shadow); }
+.workspace-content .ant-pro-table-list-toolbar { padding: 13px 17px 10px; }
+.workspace-content .ant-pro-table-list-toolbar-container { flex-wrap: wrap; gap: 8px; }
+.workspace-content .ant-pro-table-list-toolbar-title { color: var(--ink); font-size: 15px; font-weight: 850; }
+.workspace-content .ant-table-thead > tr > th { border-bottom-color: var(--line); color: #718293; font-size: 11px; font-weight: 800; }
+.workspace-content .ant-table-tbody > tr > td { border-bottom-color: #edf1f4; color: var(--ink); font-size: 12px; }
+.workspace-content .ant-table-tbody > tr:hover > td { background: #fff7f9; }
+.brand-maintenance-table .ant-table-content, .brand-editor-modal .ant-table-content, .publish-center-page .ant-table-content, .publish-operation-modal .ant-table-content { overflow-x: auto !important; overscroll-behavior-inline: contain; }
+.publish-center-page .ant-table-content > table { min-width: 900px; }
+.publish-operation-detail .publish-center-table .ant-table-content > table { min-width: 1340px; }
+.publish-operation-modal .ant-table-content > table { min-width: 720px; }
+.workspace-content .ant-tag { margin-inline-end: 0; border-radius: 5px; font-size: 10px; font-weight: 750; }
+.workspace-content .ant-btn { font-weight: 750; }
+.workspace-content .ant-btn-link { padding-inline: 3px; }
+.catalog-muted { color: var(--muted); font-size: 11px; }
+.notice--error { margin: 12px 0; padding: 12px 16px; border: 1px solid #ffccd8; border-radius: 9px; color: #b5234b; background: #fff2f5; text-align: left; }
+.empty-state { border-color: var(--line); border-radius: 12px; background: #fff; }
+
+/* 选品与渠道：高密度表格为默认视图，卡片视图仍可切换。 */
+.catalog-section { width: 100%; margin: 0; padding: 0; }
+.catalog-workspace-page .workspace-page-heading { align-items: stretch; }
+.catalog-workspace-page .workspace-page-heading > div:first-child { display: grid; align-content: center; }
+.recent-strip { width: 100%; margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; box-shadow: var(--shadow); }
+.recent-strip button { border-radius: 6px; background: #f3f6f9; }
+.catalog-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.catalog-controls .brand-select { min-width: 240px; }
+.catalog-controls .sort-select { min-width: 160px; }
+.catalog-controls .ant-select-selector { border: 1px solid var(--line) !important; border-radius: 8px !important; background: #fff !important; }
+.catalog-controls .stock-toggle { min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; box-shadow: none; }
+.catalog-view-switch { padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: #f4f6f9; }
+.catalog-controls .refresh-button.ant-btn { display: inline-flex; min-height: 36px; margin-left: auto; align-items: center; border-color: var(--line); border-radius: 8px; color: var(--ink); box-shadow: none; }
+.catalog-controls .refresh-button svg { width: 15px; }
+.brand-category-strip { margin: 16px 0 0; padding: 10px; border-radius: 9px; background: #f6f8fa; box-shadow: none; }
+.brand-category-card { flex-basis: 84px; min-height: 83px; border-radius: 8px; }
+.brand-category-card img, .brand-category-card > span { width: 48px; height: 43px; border-radius: 6px; }
+.brand-category-card--active { border-color: var(--primary); box-shadow: inset 0 0 0 1px rgba(255,0,70,.16); }
+.catalog-product-cell, .marketplace-product-cell { display: grid; grid-template-columns: 54px minmax(0,1fr); min-width: 0; align-items: center; gap: 12px; }
+.catalog-product-cell > img, .catalog-product-cell__placeholder, .marketplace-product-cell > img, .marketplace-product-cell > span { display: grid; width: 54px; height: 54px; place-items: center; border: 1px solid #e9edf1; border-radius: 8px; background: #f6f8fa; object-fit: contain; }
+.catalog-product-cell__placeholder, .marketplace-product-cell > span { color: var(--primary); font-size: 16px; font-weight: 900; }
+.catalog-product-cell > div, .marketplace-product-cell > div { display: grid; min-width: 0; gap: 3px; }
+.catalog-product-cell small { color: var(--primary); font-size: 9px; font-weight: 850; letter-spacing: .04em; }
+.catalog-product-cell button { width: fit-content; max-width: 100%; padding: 0; overflow: hidden; border: 0; color: var(--ink); background: transparent; font-size: 12px; font-weight: 800; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.catalog-product-cell button:hover { color: var(--primary); }
+.catalog-product-cell > div > span, .marketplace-product-cell small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.marketplace-product-cell strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.catalog-price-cell { display: grid; gap: 2px; }
+.catalog-price-cell strong, .marketplace-table-price { color: var(--primary); font-family: "DIN Alternate", "Avenir Next Condensed", sans-serif; font-size: 19px; font-weight: 900; }
+.catalog-price-cell span { color: #a0aab3; font-size: 10px; }
+.catalog-price-cell small { color: #b16b10; font-size: 10px; }
+.catalog-region-tag { border-color: #e3e9ef; color: #526c81; background: #f4f7f9; }
+.catalog-product-table { margin-top: 16px; }
+.product-grid { grid-template-columns: repeat(auto-fill,minmax(220px,1fr)); gap: 14px; margin-top: 16px; }
+.product-card { border-color: var(--line); border-radius: 11px; box-shadow: var(--shadow); }
+.product-card:hover { transform: translateY(-2px); box-shadow: 0 12px 30px rgba(24,49,71,.12); }
+.product-card__content { padding: 12px 14px; }
+.product-card__media { aspect-ratio: 1 / .83; }
+.product-card h3 { height: 3em; min-height: 3em; max-height: 3em; flex: 0 0 3em; overflow: hidden; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.product-card__number { flex: 0 0 auto; min-height: 18px; margin-top: 10px; }
+.product-card__footer strong { font-size: 20px; }
+.load-more.ant-btn { display: block; min-width: 190px; height: 38px; margin: 18px auto 0; border-color: var(--line); border-radius: 8px; color: var(--ink); background: #fff; }
+.load-more.ant-btn:hover { border-color: var(--primary); color: var(--primary); }
+.marketplace-page .workspace-overview, .catalog-sync-page .workspace-overview, .sync-history-page .workspace-overview { margin-bottom: 16px; }
+.marketplace-channel-tabs { display: flex; margin: 0 0 14px; padding: 12px 15px; gap: 8px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: var(--shadow); }
+.marketplace-channel-tabs .ant-tag { padding: 5px 10px; }
+.marketplace-page .workspace-data-table { margin-top: 0; }
+.catalog-sync-workspace { display: grid; min-width: 0; grid-template-columns: minmax(0,1fr); gap: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.catalog-sync-workspace > * { min-width: 0; max-width: 100%; }
+.catalog-sync-toolbar__controls { display: flex; gap: 10px; }
+.catalog-sync-toolbar__controls .ant-input { width: min(340px,48vw); }
+.catalog-sync-toolbar__controls .ant-select { width: 220px; }
+.sync-brand-cell { display: grid; grid-template-columns: 40px minmax(0,1fr); align-items: center; gap: 10px; }
+.sync-brand-cell i { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 8px; color: #fff; background: #21394e; font-style: normal; font-weight: 900; }
+.sync-brand-cell > div { display: grid; gap: 2px; }
+.sync-brand-cell strong { font-size: 12px; }
+.sync-brand-cell span { color: var(--muted); font-size: 10px; }
+.sync-history-toolbar { display: flex; width: 100%; margin: 0; padding: 0; gap: 10px; border: 0; border-radius: 0; box-shadow: none; }
+.sync-history-toolbar .ant-select { width: 210px; min-width: 210px; }
+.sync-history-toolbar .ant-select { grid-template-columns: minmax(0,1fr) auto; grid-template-rows: 1fr; align-items: center; min-height: 36px; }
+.sync-history-toolbar .ant-select-content { min-width: 0; }
+.sync-history-toolbar .ant-select-suffix { grid-column: 2; grid-row: 1; }
+.sync-history-batch { display: grid; gap: 3px; }
+.sync-history-batch strong { font-size: 12px; }
+.sync-history-batch span { color: var(--muted); font-family: "DIN Alternate",sans-serif; font-size: 10px; }
+.sync-history-numbers { display: flex; gap: 6px; }
+.sync-history-numbers span { padding: 3px 6px; border-radius: 5px; color: #536779; background: #f3f6f9; font-size: 10px; font-weight: 800; }
+.sync-history-load-more.ant-btn { width: min(320px,100%); margin: 16px auto; border-radius: 8px; }
+.sync-history-page .workspace-overview-card.ant-pro-card { flex: 0 0 210px; }
+
+/* 其余业务页：用同一套工作台页眉、统计卡和数据面板。 */
+.brand-maintenance-summary, .brand-publish-page__header, .price-history-header, .sync-console-header { width: 100%; margin: 0 0 18px; padding: 20px 22px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: var(--shadow); }
+.brand-maintenance-summary { color: var(--ink); }
+.brand-maintenance-summary h1, .brand-maintenance-summary p { color: var(--ink); }
+.brand-maintenance-summary h1 { font-size: 30px; }
+.brand-maintenance-summary p { color: var(--muted); font-size: 12px; }
+.brand-maintenance-summary > div:not(:first-child) { border-color: var(--line); border-radius: 9px; background: #f6f8fa; }
+.brand-maintenance-summary span { color: var(--muted); }
+.brand-maintenance-summary strong { color: var(--ink); }
+.brand-maintenance-summary > div:nth-child(2) strong { color: var(--primary); }
+.brand-maintenance-table .ant-pro-card, .publish-center-table .ant-pro-card { border-radius: 12px; }
+.brand-profile-pill { border: 1px solid #e3e9ef; border-radius: 7px; background: #f5f7f9; }
+.brand-editor-panel, .brand-editor-panel--selected { border-color: var(--line); border-radius: 10px; background: #f8fafb; }
+.brand-editor-panel--selected { border-top: 2px solid var(--primary); background: #fff; }
+.brand-editor-members article { padding: 10px 0; }
+.publish-center-dashboard, .publish-operation-detail, .publish-center-page > .ant-alert, .brand-publish-workspace, .price-history-workspace, .sync-console-workspace, .sync-history-page > .ant-alert, .sync-run-page > .ant-alert { width: 100%; margin-left: 0; margin-right: 0; }
+.publish-center-dashboard { min-width: 0; grid-template-columns: minmax(0,1fr); }
+.publish-center-dashboard > *, .publish-operation-detail .ant-pro-table { min-width: 0; max-width: 100%; }
+.brand-publish-workspace, .price-history-workspace, .sync-console-workspace, .publish-operation-detail { min-width: 0; grid-template-columns: minmax(0,1fr); }
+.brand-publish-workspace > *, .price-history-workspace > *, .sync-console-workspace > *, .publish-operation-detail > * { min-width: 0; max-width: 100%; }
+.price-history-metrics { grid-template-columns: repeat(4,minmax(0,1fr)); }
+.publish-center-page .workspace-page-heading { margin-bottom: 18px; }
+.publish-center-metrics article, .sync-run-metrics article, .price-history-metrics article, .brand-publish-metrics article { min-height: 92px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 10px; background: #fff !important; box-shadow: var(--shadow); }
+.publish-center-metrics span, .sync-run-metrics span, .price-history-metrics span, .brand-publish-metrics span { color: var(--muted); }
+.publish-center-metrics strong, .sync-run-metrics strong, .price-history-metrics strong, .brand-publish-metrics strong { color: var(--ink); font-size: 30px; }
+.publish-center-metrics__live, .sync-run-metrics__xianyu { border-left: 3px solid var(--primary) !important; }
+.publish-operation-hero, .sync-run-hero, .price-history-hero, .brand-publish-overview { min-height: 0; padding: 23px 27px; border: 1px solid var(--line); border-left: 4px solid var(--primary); border-radius: 12px; color: var(--ink); background: #fff; box-shadow: var(--shadow); }
+.publish-operation-hero::after, .sync-run-hero::after, .price-history-hero::after { display: none; }
+.publish-operation-hero h2, .sync-run-hero__signal h2, .price-history-product h2, .brand-publish-overview h2 { color: var(--ink); font-size: 28px; }
+.publish-operation-hero p, .sync-run-hero__signal p, .price-history-product p, .brand-publish-overview p { color: var(--muted); }
+.publish-operation-hero > div:last-child, .sync-run-hero__progress, .price-history-current, .brand-publish-overview label { border-color: var(--line); border-radius: 9px; background: #f7f9fb; }
+.publish-operation-hero .ant-statistic-title, .sync-run-hero__progress > span, .price-history-current > span, .brand-publish-overview label > span { color: var(--muted); }
+.publish-operation-hero .ant-statistic-content, .sync-run-hero__progress > strong, .price-history-current strong { color: var(--ink); }
+.price-history-product > img { border: 1px solid var(--line); }
+.price-history-current em { background: #fff0f4; color: var(--primary); }
+.brand-publish-page__header h1, .price-history-header h1, .sync-console-header h1 { color: var(--ink); font-size: 27px; }
+.brand-publish-overview label { color: var(--ink); }
+.brand-publish-overview .ant-input-number, .brand-publish-overview .ant-select-selector { color: var(--ink); background: #fff; }
+.brand-publish-settings { min-width: 330px; }
+.queue-action-summary__card, .brand-publish-preview, .brand-publish-progress, .brand-publish-skips, .price-history-sku-section, .price-history-chart-card, .price-history-ledger, .sync-change-panel { border-color: var(--line); border-radius: 11px; box-shadow: var(--shadow); }
+.queue-action-summary__card { border-top-width: 2px; }
+.queue-action-summary__card header strong { font-family: "DIN Alternate",sans-serif; }
+.sync-change-row, .brand-publish-task-list article { border-radius: 8px; }
+.sync-change-row:hover { transform: none; }
+.sync-change-toolbar { border: 1px solid var(--line); border-radius: 8px; background: #f7f9fb; }
+.price-history-chart { border: 1px solid var(--line); border-radius: 8px; background: #f8fafc; }
+.price-history-ledger article { border: 1px solid #edf1f4; border-radius: 7px; background: #fbfcfd; }
+
+/* 平台连接抽屉与弹窗沿用后台表单体系；商品详情使用原有选品样式。 */
+.platform-connection-drawer .ant-drawer-header { min-height: 0; padding: 17px 24px; border-bottom-color: var(--line); background: #fff; }
+.platform-connection-drawer .ant-drawer-body { background: #f6f8fa; }
+.platform-connection-layout { min-height: calc(100vh - 68px); }
+.platform-connection-nav { border-right-color: var(--line); background: #fff; }
+.platform-connection-panel { padding: 24px clamp(20px,3vw,44px); }
+.platform-config-form { border-color: var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+.ant-modal .ant-modal-content { border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 28px 72px rgba(15,40,60,.18); }
+.ant-modal .ant-modal-header { border-bottom-color: var(--line); }
+.publish-modal .ant-modal-content, .price-comparison-modal .ant-modal-content { border-radius: 12px; }
+.publish-product-strip, .publish-center-preview > div, .brand-editor-panel { background: #f7f9fb; }
+.publish-center-form .ant-form-item-label > label, .brand-maintenance-form label > span { color: var(--ink); font-weight: 800; }
+.ant-modal .ant-input, .ant-modal .ant-select-selector, .ant-modal .ant-input-number { border-radius: 8px; }
+
+/* 表格列表的标题和渠道信息。 */
+.workspace-list-heading { display: flex; min-height: 54px; margin: 15px 0 12px; align-items: center; justify-content: space-between; gap: 14px; }
+.workspace-list-heading > div:first-child { display: grid; min-width: 0; gap: 3px; }
+.workspace-list-heading strong { color: var(--ink); font-size: 15px; font-weight: 850; }
+.workspace-list-heading span { color: var(--muted); font-size: 11px; }
+.marketplace-channel-tabs { justify-content: space-between; }
+
+@media (max-width: 1100px) {
+  .workspace-header-heading { display: none; }
+  .workspace-global-search { width: min(340px,100%); }
+  .workspace-overview-card.ant-pro-card { min-width: 135px; }
+}
+@media (max-width: 780px) {
+  .workspace-layout .ant-layout-has-sider > div:first-child:not(.ant-pro-layout-container) { display: none !important; }
+  .workspace-layout .ant-layout-sider { display: none !important; }
+  .workspace-layout .ant-pro-layout-container { width: 100% !important; margin-left: 0 !important; }
+  .workspace-content { padding: 18px 14px 50px; }
+  .workspace-topbar { height: 62px; padding: 0 14px; }
+  .workspace-mobile-menu-button.ant-btn { display: inline-flex; width: 32px; min-width: 32px; padding: 0; align-items: center; justify-content: center; font-size: 20px; }
+  .workspace-topbar-actions { gap: 4px; }
+  .workspace-global-search { width: 100%; }
+  .workspace-global-search .ant-btn { display: inline-flex; width: 32px; min-width: 32px; padding: 0; align-items: center; justify-content: center; font-size: 0; }
+  .workspace-topbar-actions .xianyu-connect { display: none; }
+  .workspace-region-picker > span, .workspace-region-picker svg { display: none; }
+  .workspace-page-heading { align-items: stretch; flex-direction: column; gap: 14px; }
+  .workspace-page-actions { flex-wrap: wrap; }
+  .workspace-overview { width: 100%; }
+  .workspace-overview-card.ant-pro-card { min-width: 0; flex: 1; }
+  .catalog-controls { display: grid; grid-template-columns: 1fr 1fr; }
+  .catalog-controls .brand-select { min-width: 0; grid-column: 1 / -1; }
+  .catalog-controls .refresh-button.ant-btn { margin-left: 0; }
+  .catalog-view-switch { width: 100%; }
+  .catalog-sync-toolbar__controls { flex-wrap: wrap; }
+  .catalog-sync-toolbar__controls .ant-input, .catalog-sync-toolbar__controls .ant-select { width: 100%; }
+  .workspace-list-heading { align-items: stretch; flex-direction: column; }
+  .marketplace-channel-tabs { align-items: stretch; flex-direction: column; }
+  .sync-history-toolbar { align-items: stretch; flex-direction: column; }
+  .sync-history-toolbar .ant-select { width: 100%; min-width: 0; }
+  .brand-editor-modal.ant-modal, .publish-operation-modal.ant-modal, .sync-offline-modal.ant-modal, .price-comparison-modal.ant-modal, .publish-modal.ant-modal { top: 12px; width: calc(100vw - 24px) !important; max-width: calc(100vw - 24px); padding-bottom: 12px; }
+  .brand-editor-modal .ant-modal-body, .publish-operation-modal .ant-modal-body, .sync-offline-modal .ant-modal-body, .price-comparison-modal .ant-modal-body, .publish-modal .ant-modal-body { max-height: calc(100vh - 170px); overflow-y: auto; }
+  .brand-editor-modal .ant-modal-content, .publish-operation-modal .ant-modal-content { padding: 16px; }
+  .sync-offline-list article { grid-template-columns: 24px 42px minmax(0,1fr); }
+  .sync-offline-list img, .sync-offline-list i { width: 42px; height: 42px; }
+  .sync-offline-list article > em { grid-column: 3; justify-self: start; }
+  .brand-maintenance-form { grid-template-columns: 1fr; }
+  .brand-editor-panel { padding: 12px; }
+  .brand-maintenance-table .ant-pro-table-list-toolbar-right { width: 100%; flex-wrap: wrap; }
+  .brand-maintenance-table .ant-pro-table-list-toolbar-right > div:first-child { width: 100%; flex-wrap: wrap; }
+  .brand-maintenance-table .ant-pro-table-list-toolbar-right .ant-select { width: 100% !important; flex: 1 1 180px; }
+  .brand-maintenance-table .ant-pro-table-list-toolbar-right .ant-btn-primary { flex: 1 1 180px; }
+  .publish-center-preview { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .brand-maintenance-summary { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .brand-maintenance-summary > div:first-child { grid-column: 1 / -1; }
+  .publish-center-metrics, .sync-run-metrics, .price-history-metrics, .brand-publish-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .publish-operation-hero, .sync-run-hero, .price-history-hero, .brand-publish-overview { grid-template-columns: 1fr; }
+  .brand-publish-settings { min-width: 0; }
+  .queue-action-summary { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
