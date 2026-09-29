@@ -90,18 +90,26 @@ func prepareRetryContent(ctx context.Context, sc *svc.ServiceContext, task model
 		return task, nil
 	} // 下架 worker 自身会再次实时核对全部来源。
 	if task.Action == "update" {
-		detail, err := sc.SellerXianyuService.GetSellerEditDetail(ctx, task.XianyuItemID)
+		detail, err := sc.SellerXianyuService.ForAccount(task.AccountID).GetSellerEditDetail(ctx, task.XianyuItemID)
 		if err != nil {
 			return task, err
 		}
 		task.Before = xianyu.ManagedState(detail)
 		return task, nil
 	}
+	if task.Action == "relist" {
+		detail, err := sc.SellerXianyuService.ForAccount(task.AccountID).GetSellerEditDetail(ctx, task.XianyuItemID)
+		if err != nil {
+			return task, err
+		}
+		task.Before = xianyu.ManagedState(detail)
+		return refreshReconcileTask(ctx, sc, task)
+	}
 	// 同步渠道快照后去重：网络不确定的上一次发布可能已经成功。
-	if err := sc.MarketplaceService.EnsureRetrySnapshot(ctx, retryRequiresFreshSnapshot(task.ErrorMessage)); err != nil {
+	if err := sc.MarketplaceService.EnsureRetrySnapshot(ctx, task.AccountID, retryRequiresFreshSnapshot(task.ErrorMessage)); err != nil {
 		return task, fmt.Errorf("重试前核对闲鱼在售状态失败：%w", err)
 	}
-	listed, err := sc.ListingRepository.ListByItemNos(ctx, "xianyu", []string{task.ItemNo})
+	listed, err := sc.ListingRepository.ListByItemNos(ctx, task.AccountID, "xianyu", []string{task.ItemNo})
 	if err != nil {
 		return task, err
 	}

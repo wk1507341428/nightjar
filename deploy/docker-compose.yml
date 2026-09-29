@@ -37,6 +37,7 @@ services:
       SIDEJOB_PORT: "9800"
       SIDEJOB_MONGO_URI: mongodb://${MONGO_USERNAME:-sidejob}:${MONGO_PASSWORD:-sidejob-dev}@mongodb:27017/?authSource=admin
       SIDEJOB_MONGO_DATABASE: sidejob
+      SIDEJOB_REDIS_ADDR: redis:6379
       SIDEJOB_SESSION_KEY_PATH: /var/lib/sidejob/session.key
       SIDEJOB_ALLOWED_ORIGINS: http://127.0.0.1:9300,http://localhost:9300
       TZ: Asia/Shanghai
@@ -44,6 +45,8 @@ services:
       - ../runtime:/var/lib/sidejob
     depends_on:
       mongodb:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9800/api/healthz"]
@@ -71,5 +74,21 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7.4-alpine
+    container_name: sidejob-redis
+    restart: unless-stopped
+    expose:
+      - "6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - sidejob-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   sidejob-mongodb-data:
+  sidejob-redis-data:

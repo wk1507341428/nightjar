@@ -19,9 +19,22 @@ func RegisterHandlers(server *rest.Server, serviceContext *svc.ServiceContext) {
 	serviceContext.PublishService.PrepareRetry = func(ctx context.Context, task model.PublishTask) (model.PublishTask, error) {
 		return prepareRetryContent(ctx, serviceContext, task)
 	}
+	serviceContext.PublishService.PrepareOfflineBatch = func(ctx context.Context, tasks []model.PublishTask) map[string]error {
+		return prepareOfflineBatch(ctx, serviceContext, tasks)
+	}
 	serviceContext.PublishService.Start()
 	server.AddRoutes([]rest.Route{
+		{Method: http.MethodGet, Path: "/api/xianyu/accounts", Handler: listXianyuAccountsHandler(serviceContext)},
+		{Method: http.MethodPost, Path: "/api/xianyu/accounts", Handler: createXianyuAccountHandler(serviceContext)},
+		{Method: http.MethodPatch, Path: "/api/xianyu/accounts/:accountId", Handler: updateXianyuAccountHandler(serviceContext)},
+		{Method: http.MethodPut, Path: "/api/xianyu/accounts/:accountId/sessions/:kind", Handler: saveXianyuAccountSessionHandler(serviceContext)},
+		{Method: http.MethodDelete, Path: "/api/xianyu/accounts/:accountId/sessions/:kind", Handler: deleteXianyuAccountSessionHandler(serviceContext)},
+		{Method: http.MethodPost, Path: "/api/xianyu/accounts/:accountId/verify", Handler: verifyXianyuAccountHandler(serviceContext)},
 		{Method: http.MethodPost, Path: "/api/xianyu/publish-operations/:id/retry-failed", Handler: retryFailedOperationHandler(serviceContext)},
+		{Method: http.MethodPost, Path: "/api/xianyu/publish-operations/:id/cancel", Handler: cancelPublishOperationHandler(serviceContext)},
+		{Method: http.MethodGet, Path: "/api/catalog/brand-profiles/:id/categories", Handler: listOfflineCenterCategoriesHandler(serviceContext)},
+		{Method: http.MethodPost, Path: "/api/xianyu/offline-center/preview", Handler: previewOfflineCenterHandler(serviceContext)},
+		{Method: http.MethodPost, Path: "/api/xianyu/offline-center/operations", Handler: createOfflineCenterOperationHandler(serviceContext)},
 		{Method: http.MethodGet, Path: "/api/xianyu/reconcile-plans", Handler: automaticPlansHandler(serviceContext)},
 		{
 			Method:  http.MethodGet,
@@ -78,21 +91,6 @@ func RegisterHandlers(server *rest.Server, serviceContext *svc.ServiceContext) {
 		{Method: http.MethodPost, Path: "/api/xianyu-seller/session", Handler: saveXianyuSellerSessionHandler(serviceContext)},
 		{Method: http.MethodGet, Path: "/api/xianyu-seller/connection", Handler: getXianyuSellerConnectionHandler(serviceContext)},
 		{Method: http.MethodDelete, Path: "/api/xianyu-seller/session", Handler: deleteXianyuSellerSessionHandler(serviceContext)},
-		{
-			Method:  http.MethodPost,
-			Path:    "/api/pinduoduo/session",
-			Handler: savePinduoduoSessionHandler(serviceContext),
-		},
-		{
-			Method:  http.MethodGet,
-			Path:    "/api/pinduoduo/connection",
-			Handler: getPinduoduoConnectionHandler(serviceContext),
-		},
-		{
-			Method:  http.MethodDelete,
-			Path:    "/api/pinduoduo/session",
-			Handler: deletePinduoduoSessionHandler(serviceContext),
-		},
 		{
 			Method:  http.MethodPost,
 			Path:    "/api/xianyu/publish-tasks",

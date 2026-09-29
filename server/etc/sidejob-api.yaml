@@ -7,6 +7,11 @@ Mongo:
   URI: mongodb://sidejob:sidejob-dev@127.0.0.1:27017/?authSource=admin
   Database: sidejob
 
+Redis:
+  Addr: 127.0.0.1:6379
+  Password: ""
+  DB: 0
+
 Xianyu:
   APIBase: https://h5api.m.goofish.com/h5
   UploadURL: https://stream-upload.goofish.com/api/upload.api?floderId=0&appkey=fleamarket&_input_charset=utf-8

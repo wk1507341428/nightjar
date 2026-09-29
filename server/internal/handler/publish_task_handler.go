@@ -29,6 +29,15 @@ func createPublishTaskHandler(serviceContext *svc.ServiceContext) http.HandlerFu
 			writeError(responseWriter, http.StatusBadRequest, validationMessage)
 			return
 		}
+		accountID := strings.TrimSpace(requestBody.AccountID)
+		if accountID == "" {
+			accountID = model.DefaultXianyuAccountID
+		}
+		account, accountErr := serviceContext.XianyuAccountRepository.Get(request.Context(), accountID)
+		if accountErr != nil || account.Status != model.XianyuAccountActive || !account.SellerConnected {
+			writeError(responseWriter, http.StatusConflict, "目标闲鱼账号未连接卖家后台或队列不可用")
+			return
+		}
 
 		now := time.Now()
 		itemNo := strings.TrimSpace(requestBody.ItemNo)
@@ -49,6 +58,7 @@ func createPublishTaskHandler(serviceContext *svc.ServiceContext) http.HandlerFu
 		}
 		task := model.PublishTask{
 			ID:                 primitive.NewObjectID().Hex(),
+			AccountID:          accountID,
 			SourceItemID:       strings.TrimSpace(requestBody.SourceItemID),
 			ItemNo:             itemNo,
 			Title:              buildPublishTitle(sourceTitle, itemNo),
@@ -176,7 +186,8 @@ func retryPublishTaskHandler(serviceContext *svc.ServiceContext) http.HandlerFun
 // listPublishTasksHandler 返回最近 50 条发布任务。
 func listPublishTasksHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
-		tasks, err := serviceContext.PublishRepository.List(request.Context(), 50)
+		accountID := strings.TrimSpace(request.URL.Query().Get("accountId"))
+		tasks, err := serviceContext.PublishRepository.List(request.Context(), accountID, 50)
 		if err != nil {
 			logx.Errorf("list publish tasks: %v", err)
 			writeError(responseWriter, http.StatusInternalServerError, "读取发布记录失败")
@@ -257,6 +268,7 @@ func uniqueImageURLs(imageURLs []string) []string {
 // publishTaskToResponse 将数据库任务转换为精简响应。
 func publishTaskToResponse(task model.PublishTask) types.PublishTaskResponse {
 	return types.PublishTaskResponse{
+		AccountID:     task.AccountID,
 		Action:        task.Action,
 		ChangeReasons: task.ChangeReasons,
 		ID:            task.ID,
@@ -265,6 +277,7 @@ func publishTaskToResponse(task model.PublishTask) types.PublishTaskResponse {
 		Title:         task.Title,
 		Brand:         task.Brand,
 		PriceCents:    task.PriceCents,
+		ImageURLs:     task.ImageURLs,
 		XianyuItemID:  task.XianyuItemID,
 		XianyuURL:     task.XianyuURL,
 		ErrorMessage:  task.ErrorMessage,

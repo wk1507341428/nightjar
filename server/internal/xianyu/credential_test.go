@@ -28,3 +28,13 @@ func TestParseCredentialFromCookie(t *testing.T) {
 		t.Fatal("plain cookie must not report search credential")
 	}
 }
+
+func TestPlatformUserIDFromCredential(t *testing.T) {
+	userID, err := PlatformUserIDFromCredential("Cookie: _m_h5_tk=abc_123; cookie2=session; unb=123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if userID != "123456" {
+		t.Fatalf("platform user id = %q, want 123456", userID)
+	}
+}

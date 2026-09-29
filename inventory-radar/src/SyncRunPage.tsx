@@ -4,6 +4,7 @@ import { ProTable, type ProColumns } from '@ant-design/pro-components';
 import { fetchCatalogSyncChanges } from './catalogManagementApi';
 import { offlineMarketplaceListings } from './xianyuApi';
 import type { CatalogSyncChange, CatalogSyncChangeListResponse, MarketplaceListing } from './types';
+import { useXianyuAccount } from './XianyuAccountContext';
 
 /** 同步结果轮询间隔。 */
 const SYNC_RUN_POLL_INTERVAL = 1600;
@@ -49,6 +50,8 @@ function uniqueXianyuListings(changes: CatalogSyncChange[]): MarketplaceListing[
 
 /** 同步任务实时进度与完整变更审计页。 */
 export function SyncRunPage({ runId, onBack }: { runId: string; onBack: () => void }) {
+  // 当前账号限定变更关联的闲鱼商品和下架操作。
+  const { currentAccountId } = useXianyuAccount();
   // 当前同步任务及变更明细。
   const [syncResult, setSyncResult] = useState<CatalogSyncChangeListResponse | null>(null);
   // 当前变更类型筛选。
@@ -80,7 +83,7 @@ export function SyncRunPage({ runId, onBack }: { runId: string; onBack: () => vo
       setIsLoading(true);
     }
     try {
-      const response = await fetchCatalogSyncChanges(runId, { type: nextType, keyword: nextKeyword, page: 1, pageSize: 100 });
+      const response = await fetchCatalogSyncChanges(runId, { accountId: currentAccountId, type: nextType, keyword: nextKeyword, page: 1, pageSize: 100 });
       setSyncResult(response);
       setErrorMessage('');
     } catch (error) {
@@ -100,7 +103,7 @@ export function SyncRunPage({ runId, onBack }: { runId: string; onBack: () => vo
       }
     }, SYNC_RUN_POLL_INTERVAL);
     return () => window.clearInterval(pollTimer);
-  }, [runId, syncResult?.run.status]);
+  }, [runId, currentAccountId, syncResult?.run.status]);
 
   // 当前结果关联的去重闲鱼在售商品。
   const xianyuListings = useMemo(() => uniqueXianyuListings(syncResult?.list ?? []), [syncResult?.list]);
@@ -152,7 +155,7 @@ export function SyncRunPage({ runId, onBack }: { runId: string; onBack: () => vo
       let succeededCount = 0;
       let failedCount = 0;
       for (let startIndex = 0; startIndex < listingIDs.length; startIndex += 100) {
-        const response = await offlineMarketplaceListings(listingIDs.slice(startIndex, startIndex + 100));
+        const response = await offlineMarketplaceListings(listingIDs.slice(startIndex, startIndex + 100), currentAccountId);
         succeededCount += response.succeededItemIds?.length ?? 0;
         failedCount += response.failedItemIds?.length ?? 0;
       }

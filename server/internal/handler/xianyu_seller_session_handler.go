@@ -31,12 +31,14 @@ func saveXianyuSellerSessionHandler(serviceContext *svc.ServiceContext) http.Han
 			writeError(responseWriter, http.StatusBadRequest, "请粘贴卖家工作台请求 cURL 或完整 Cookie")
 			return
 		}
-		displayName, _, err := serviceContext.SellerXianyuService.Connect(request.Context(), rawCredential)
+		accountService := serviceContext.SellerXianyuService.ForAccount(model.DefaultXianyuAccountID)
+		displayName, platformUserID, _, err := accountService.ConnectWithIdentity(request.Context(), rawCredential, "")
 		if err != nil {
 			logx.Errorf("connect xianyu seller session: %v", err)
 			writeError(responseWriter, http.StatusUnauthorized, err.Error())
 			return
 		}
+		_ = serviceContext.XianyuAccountRepository.UpdateConnection(request.Context(), model.DefaultXianyuAccountID, "seller", displayName, platformUserID, true, false)
 		writeJSON(responseWriter, http.StatusOK, types.ConnectionResponse{Platform: model.XianyuSellerPlatform, Status: "connected", Authenticated: true, LastVerifiedAt: time.Now().Format(time.RFC3339), Message: "已连接 " + displayName})
 	}
 }
@@ -44,7 +46,7 @@ func saveXianyuSellerSessionHandler(serviceContext *svc.ServiceContext) http.Han
 // getXianyuSellerConnectionHandler 返回卖家工作台连接状态。
 func getXianyuSellerConnectionHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
-		session, err := serviceContext.SellerXianyuService.Connection(request.Context())
+		session, err := serviceContext.SellerXianyuService.ForAccount(model.DefaultXianyuAccountID).Connection(request.Context())
 		if errors.Is(err, repository.ErrSessionNotFound) {
 			writeJSON(responseWriter, http.StatusOK, types.ConnectionResponse{Platform: model.XianyuSellerPlatform, Status: "not_connected", Message: "尚未连接闲鱼卖家后台"})
 			return
@@ -60,10 +62,11 @@ func getXianyuSellerConnectionHandler(serviceContext *svc.ServiceContext) http.H
 // deleteXianyuSellerSessionHandler 删除卖家工作台专用凭证。
 func deleteXianyuSellerSessionHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
-		if err := serviceContext.SellerXianyuService.Disconnect(request.Context()); err != nil {
+		if err := serviceContext.SellerXianyuService.ForAccount(model.DefaultXianyuAccountID).Disconnect(request.Context()); err != nil {
 			writeError(responseWriter, http.StatusInternalServerError, "断开闲鱼卖家后台失败")
 			return
 		}
+		_ = serviceContext.XianyuAccountRepository.UpdateConnection(request.Context(), model.DefaultXianyuAccountID, "seller", "", "", false, false)
 		writeJSON(responseWriter, http.StatusOK, types.ConnectionResponse{Platform: model.XianyuSellerPlatform, Status: "not_connected", Message: "闲鱼卖家后台已断开"})
 	}
 }

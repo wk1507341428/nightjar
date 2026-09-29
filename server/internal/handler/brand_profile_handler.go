@@ -12,6 +12,7 @@ import (
 	"github.com/zeromicro/go-zero/core/logx"
 
 	"sidejob-server/internal/catalog"
+	"sidejob-server/internal/model"
 	"sidejob-server/internal/svc"
 	"sidejob-server/internal/types"
 )
@@ -120,7 +121,11 @@ func backfillBrandProfileListings(ctx context.Context, serviceContext *svc.Servi
 		if len(sourceItemIDs) == 0 && task.SourceItemID != "" {
 			sourceItemIDs = []string{task.SourceItemID}
 		}
-		if err := serviceContext.ListingRepository.BindBrandProfile(ctx, task.XianyuItemID, profile.ID, "legacy", []string{task.RegionID}, memberIDByRegion[task.RegionID], sourceItemIDs); err != nil {
+		accountID := task.AccountID
+		if accountID == "" {
+			accountID = model.DefaultXianyuAccountID
+		}
+		if err := serviceContext.ListingRepository.BindBrandProfile(ctx, accountID, task.XianyuItemID, profile.ID, "legacy", []string{task.RegionID}, memberIDByRegion[task.RegionID], sourceItemIDs); err != nil {
 			return err
 		}
 	}

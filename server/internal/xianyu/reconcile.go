@@ -142,6 +142,13 @@ func ManagedEditPayload(detail map[string]any, input PublishInput) map[string]an
 	return payload
 }
 
+// ManagedRelistPayload 使用编辑发布页相同语义，把下架商品状态切回正式在售。
+func ManagedRelistPayload(detail map[string]any, input PublishInput) map[string]any {
+	payload := ManagedEditPayload(detail, input)
+	payload["itemStatus"] = "0"
+	return payload
+}
+
 func skuPropertyKey(sku map[string]any) string {
 	// 转一次 JSON，使生成器和接口返回数组具有相同类型。
 	encoded, _ := json.Marshal(sku["propertyList"])
@@ -176,7 +183,7 @@ func (service *Service) EditManagedItem(ctx context.Context, itemID string, inpu
 	}
 	var response map[string]any
 	callErr := client.Call(ctx, "mtop.idle.pc.backend.idleitem.edit", "1.0", map[string]any{"inputJson": mustJSON(payload)}, &response)
-	_ = service.saveCookie(ctx, client.CookieHeader(), name)
+	_ = service.saveCookie(ctx, client.CookieHeader(), name, client.CredentialVersion())
 	actual, readErr := service.GetSellerEditDetail(ctx, itemID)
 	if readErr == nil && SameManagedState(ManagedState(actual), desired) {
 		return nil

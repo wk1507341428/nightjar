@@ -44,7 +44,7 @@ func (service *Service) EditSellerText(ctx context.Context, itemID, title, descr
 	if err = client.Call(ctx, "mtop.idle.pc.backend.idleitem.edit", "1.0", map[string]any{"inputJson": mustJSON(payload)}, &response); err != nil {
 		return fmt.Errorf("编辑闲鱼商品失败：%w", err)
 	}
-	_ = service.saveCookie(ctx, client.CookieHeader(), displayName)
+	_ = service.saveCookie(ctx, client.CookieHeader(), displayName, client.CredentialVersion())
 	if stringValue(response["itemId"]) != itemID {
 		return errors.New("编辑结果未确认原商品 ID，请回读核对后再操作")
 	}

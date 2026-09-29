@@ -85,7 +85,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .platform-nav-card__logo { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 12px; color: #fff; background: #aab1bb; font-style: normal; font-weight: 900; }
 .platform-nav-card__logo--xianyu { color: #352a00; background: #ffda21; }
 .platform-nav-card__logo--seller { background: #f58300; }
-.platform-nav-card__logo--pdd { background: #e02e24; }
 .platform-nav-card > span { display: grid; gap: 2px; }
 .platform-nav-card strong { font-size: 14px; }
 .platform-nav-card small { color: var(--muted); font-size: 10px; }
@@ -671,9 +670,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .brand-editor-review { margin:16px 0; padding:12px 0; border-top:1px solid #e3e8eb; color:#6a7b87; font-size:12px; }
 @media(max-width:900px) { .brand-editor-panels { grid-template-columns:minmax(0,1fr); }.brand-editor-filters { grid-template-columns:1fr; } }
 
-.queue-action-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+.queue-action-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
 .queue-action-summary__card { padding:20px; border:1px solid #dfe6ea; border-top:3px solid #ff0a4f; border-radius:16px; background:#fff; color:#203a4c; }
 .queue-action-summary__card--update { border-top-color:#1677ff; }
+.queue-action-summary__card--relist { border-top-color:#13a8a8; }
 .queue-action-summary__card--offline { border-top-color:#d99c00; }
 .queue-action-summary__card header { display:flex; align-items:center; justify-content:space-between; gap:12px; font-weight:800; }
 .queue-action-summary__card header strong { font-size:30px; font-variant-numeric:tabular-nums; }

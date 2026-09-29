@@ -23,7 +23,9 @@ func (service *Service) AppendSellerImages(ctx context.Context, itemID string, p
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = service.saveCookie(context.WithoutCancel(ctx), client.CookieHeader(), name) }()
+	defer func() {
+		_ = service.saveCookie(context.WithoutCancel(ctx), client.CookieHeader(), name, client.CredentialVersion())
+	}()
 	for _, path := range paths {
 		if len(images) >= 9 {
 			break

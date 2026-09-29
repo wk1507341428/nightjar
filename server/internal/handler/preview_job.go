@@ -9,8 +9,10 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"net/http"
+	"sidejob-server/internal/model"
 	"sidejob-server/internal/svc"
 	"sidejob-server/internal/types"
+	"strings"
 	"time"
 )
 
@@ -32,6 +34,10 @@ func servePreviewJob(w http.ResponseWriter, r *http.Request, sc *svc.ServiceCont
 			writeError(w, 404, "预览不存在，请重新生成")
 			return
 		}
+		if job.Request.AccountID != body.AccountID {
+			writeError(w, http.StatusConflict, "预览所属账号已变化，请重新生成")
+			return
+		}
 		if job.Status == "failed" {
 			writeError(w, 502, job.Error)
 			return
@@ -49,7 +55,7 @@ func servePreviewJob(w http.ResponseWriter, r *http.Request, sc *svc.ServiceCont
 			writeError(w, 500, "预览读取失败")
 			return
 		}
-		writeJSON(w, 200, types.PublishBatchPreviewResponse{PreviewID: job.ID, Updates: plan.Updates, Unchanged: plan.Unchanged, BrandStoreID: plan.BrandStoreID, BrandName: plan.BrandName, CategoryIDs: plan.CategoryIDs, CategoryNames: plan.CategoryNames, Total: plan.Total, Publishable: len(plan.Candidates), Selected: minInt(job.Request.Limit, len(plan.Candidates)), Skipped: publishBatchSkipResponses(plan.Skipped), OfflineCandidates: publishBatchOfflineCandidateResponses(plan.OfflineListings)})
+		writeJSON(w, 200, types.PublishBatchPreviewResponse{AccountID: plan.AccountID, PreviewID: job.ID, Candidates: publishBatchCandidateResponses(plan.Candidates), Relists: plan.Relists, Updates: plan.Updates, Unchanged: plan.Unchanged, BrandStoreID: plan.BrandStoreID, BrandName: plan.BrandName, CategoryIDs: plan.CategoryIDs, CategoryNames: plan.CategoryNames, Total: plan.Total, Publishable: len(plan.Candidates) + len(plan.Relists), Selected: minInt(job.Request.Limit, len(plan.Candidates)+len(plan.Relists)), Skipped: publishBatchSkipResponses(plan.Skipped), OfflineCandidates: publishBatchOfflineCandidateResponses(plan.OfflineListings)})
 		return
 	}
 	job := previewJob{ID: primitive.NewObjectID().Hex(), Status: "preparing", CreatedAt: time.Now(), Request: body}
@@ -86,16 +92,37 @@ func servePreviewJob(w http.ResponseWriter, r *http.Request, sc *svc.ServiceCont
 func consumePreview(ctx context.Context, sc *svc.ServiceContext, body types.CreatePublishBatchRequest) (publishBatchPlan, error) {
 	var job previewJob
 	collection := sc.MongoClient.Database(sc.Config.Mongo.Database).Collection("publish_previews")
-	err := collection.FindOneAndUpdate(ctx, bson.M{"_id": body.PreviewID, "status": "ready", "createdAt": bson.M{"$gte": time.Now().Add(-5 * time.Minute)}}, bson.M{"$set": bson.M{"status": "submitted"}}).Decode(&job)
+	err := collection.FindOneAndUpdate(ctx, bson.M{"_id": body.PreviewID, "status": "ready", "request.accountId": body.AccountID, "createdAt": bson.M{"$gte": time.Now().Add(-5 * time.Minute)}}, bson.M{"$set": bson.M{"status": "submitted"}}).Decode(&job)
 	if err != nil {
 		return publishBatchPlan{}, fmt.Errorf("预览已过期或已提交，请重新生成")
 	}
 	var plan publishBatchPlan
 	err = decodePreviewPlan(job.Plan, &plan)
 	if err == nil {
-		plan.Candidates = plan.Candidates[:minInt(job.Request.Limit, len(plan.Candidates))]
+		plan.Relists = plan.Relists[:minInt(job.Request.Limit, len(plan.Relists))]
+		remainingLimit := max(0, job.Request.Limit-len(plan.Relists))
+		plan.Candidates = plan.Candidates[:minInt(remainingLimit, len(plan.Candidates))]
+		plan.OfflineListings = excludePreservedOfflineListings(plan.OfflineListings, body.PreservedOfflinePlatformItemIDs)
 	}
 	return plan, err
+}
+
+// excludePreservedOfflineListings 移除用户明确要求保留上架的闲鱼商品。
+func excludePreservedOfflineListings(listings []model.MarketplaceListing, preservedPlatformItemIDs []string) []model.MarketplaceListing {
+	if len(preservedPlatformItemIDs) == 0 {
+		return listings
+	}
+	preservedIDs := make(map[string]struct{}, len(preservedPlatformItemIDs))
+	for _, platformItemID := range preservedPlatformItemIDs {
+		preservedIDs[strings.TrimSpace(platformItemID)] = struct{}{}
+	}
+	filteredListings := make([]model.MarketplaceListing, 0, len(listings))
+	for _, listing := range listings {
+		if _, preserved := preservedIDs[strings.TrimSpace(listing.PlatformItemID)]; !preserved {
+			filteredListings = append(filteredListings, listing)
+		}
+	}
+	return filteredListings
 }
 
 // encodePreviewPlan 压缩完整货源快照，避免多门店计划超过 Mongo 单文档限制。

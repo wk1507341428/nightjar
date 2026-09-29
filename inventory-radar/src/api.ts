@@ -13,6 +13,7 @@ const purchaseNoticeRequestCache = new Map<string, Promise<ProductPurchaseNotice
 
 /** 商品查询参数。 */
 interface SearchProductsParams {
+	accountId?: string;
   query: string;
   mode: SearchMode;
   regionId: string;
@@ -80,6 +81,7 @@ async function requestCatalog<ResponseType>(path: string, query?: Record<string,
 
 /** 按名称模糊搜索，或按货号进行精确匹配。 */
 export async function searchProducts({
+	accountId = '',
   query,
   mode,
   regionId,
@@ -102,6 +104,7 @@ export async function searchProducts({
   }
   // 本地商品库搜索结果。
   const response = await requestCatalog<{ list?: ProductSummary[]; total?: number }>('/catalog/offers', {
+	accountId,
     regionId,
     brandStoreId,
     keyword: query.trim(),

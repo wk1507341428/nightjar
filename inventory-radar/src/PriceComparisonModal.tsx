@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Modal, Spin } from 'antd';
 import { createPriceComparison } from './xianyuApi';
 import type { PriceComparisonPlatformResult, PriceComparisonProduct, PriceComparisonResponse } from './types';
+import { useXianyuAccount } from './XianyuAccountContext';
 
 /** 人民币金额格式化器。 */
 const PRICE_FORMATTER = new Intl.NumberFormat('zh-CN', {
@@ -14,7 +15,6 @@ const PRICE_FORMATTER = new Intl.NumberFormat('zh-CN', {
 /** 平台中文名称。 */
 const PLATFORM_LABELS: Record<string, string> = {
   xianyu: '闲鱼',
-  pinduoduo: '拼多多',
 };
 
 /** 格式化候选商品售价。 */
@@ -28,9 +28,6 @@ function getComparisonErrorMessage(platformResult: PriceComparisonPlatformResult
   if (message.includes('FAIL_SYS_USER_VALIDATE')) {
     return '闲鱼要求完成安全验证。请在闲鱼网页保持登录后，更新闲鱼连接再试。';
   }
-  if (platformResult.platform === 'pinduoduo' && message.includes('尚未连接')) {
-    return '尚未连接拼多多 API，请先在平台连接管理中填写拼多多凭证。';
-  }
   return message || `暂时无法获取${PLATFORM_LABELS[platformResult.platform] || platformResult.platform}比价结果，请稍后重试。`;
 }
 
@@ -42,6 +39,8 @@ export function PriceComparisonModal({
   product: PriceComparisonProduct;
   onClose: () => void;
 }) {
+  // 当前账号提供闲鱼搜索凭证。
+  const { currentAccountId } = useXianyuAccount();
   // 当前比价返回结果。
   const [comparisonResult, setComparisonResult] = useState<PriceComparisonResponse | null>(null);
   // 远端比价加载状态。
@@ -52,8 +51,9 @@ export function PriceComparisonModal({
     setIsLoading(true);
     try {
       const result = await createPriceComparison({
+		accountId: currentAccountId,
         product,
-        platforms: ['xianyu', 'pinduoduo'],
+		platforms: ['xianyu'],
         filters: {
           condition: ['new'],
           shipping: 'free',
@@ -68,8 +68,7 @@ export function PriceComparisonModal({
         status: 'failed',
         product,
         platformResults: [
-          { platform: 'xianyu', status: 'failed', message, candidates: [] },
-          { platform: 'pinduoduo', status: 'failed', message, candidates: [] },
+		  { platform: 'xianyu', status: 'failed', message, candidates: [] },
         ],
         createdAt: '',
       });
@@ -80,7 +79,7 @@ export function PriceComparisonModal({
 
   useEffect(() => {
     void loadComparisonResult();
-  }, []);
+  }, [currentAccountId]);
 
   // 各个平台的比价结果。
   const platformResults = comparisonResult?.platformResults ?? [];
@@ -102,7 +101,7 @@ export function PriceComparisonModal({
         <button type="button" onClick={loadComparisonResult} disabled={isLoading}>{isLoading ? '查询中…' : '重新查询'}</button>
       </section>
 
-      {isLoading ? <div className="price-comparison-modal__loading"><Spin /><span>正在查询闲鱼和拼多多市场价格…</span></div> : null}
+      {isLoading ? <div className="price-comparison-modal__loading"><Spin /><span>正在查询闲鱼市场价格…</span></div> : null}
       {!isLoading ? platformResults.map((platformResult) => {
         const platformLabel = PLATFORM_LABELS[platformResult.platform] || platformResult.platform;
         return (

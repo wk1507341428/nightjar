@@ -6,6 +6,7 @@ const (
 	PublishBatchPreparing = "preparing"
 	PublishBatchRunning   = "running"
 	PublishBatchCompleted = "completed"
+	PublishBatchCancelled = "cancelled"
 	PublishBatchFailed    = "failed"
 )
 
@@ -32,6 +33,7 @@ type PublishBatchSegment struct {
 // PublishBatch 保存一次品牌批量发布计划。
 type PublishBatch struct {
 	ID               string                `bson:"_id" json:"id"`
+	AccountID        string                `bson:"accountId" json:"accountId"`
 	BrandStoreID     string                `bson:"brandStoreId" json:"brandStoreId"`
 	BrandName        string                `bson:"brandName" json:"brandName"`
 	RegionID         string                `bson:"regionId" json:"regionId"`

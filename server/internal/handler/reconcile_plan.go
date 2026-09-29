@@ -6,6 +6,7 @@ import (
 	"sidejob-server/internal/model"
 	"sidejob-server/internal/svc"
 	"sidejob-server/internal/xianyu"
+	"sort"
 	"strings"
 	"time"
 )
@@ -22,6 +23,64 @@ func listingBelongsToPlan(listing model.MarketplaceListing, plan publishBatchPla
 		}
 	}
 	return false
+}
+
+// prepareOfflineBatch 一次读取每组货源，再判断批量重试的下架商品是否仍有货。
+func prepareOfflineBatch(ctx context.Context, sc *svc.ServiceContext, tasks []model.PublishTask) map[string]error {
+	results := make(map[string]error)
+	type offlineGroup struct {
+		tasks []model.PublishTask
+		keys  []string
+	}
+	groups := make(map[string]*offlineGroup)
+	for _, task := range tasks {
+		if !task.RetryRequested {
+			continue
+		}
+		keys := append([]string{}, task.SourceMemberIDs...)
+		if task.BrandProfileID != "" {
+			_, members, err := sc.InventoryRepository.GetBrandProfile(ctx, task.BrandProfileID)
+			if err != nil {
+				results[task.ID] = err
+				continue
+			}
+			keys = keys[:0]
+			for _, member := range members {
+				keys = append(keys, member.RegionID+":"+member.DistributorID)
+			}
+		}
+		sort.Strings(keys)
+		groupKey := task.AccountID + "|" + task.BrandProfileID + "|" + strings.Join(keys, "|")
+		group := groups[groupKey]
+		if group == nil {
+			group = &offlineGroup{keys: keys}
+			groups[groupKey] = group
+		}
+		group.tasks = append(group.tasks, task)
+	}
+	for _, group := range groups {
+		rows, err := loadReconcileSources(ctx, sc, group.keys, true)
+		if err != nil {
+			for _, task := range group.tasks {
+				results[task.ID] = fmt.Errorf("重试前读取货源失败：%w", err)
+			}
+			continue
+		}
+		productsByItemNo := make(map[string][]map[string]any)
+		for _, row := range rows {
+			itemNo := strings.ToUpper(strings.TrimSpace(productString(row, "item_no")))
+			if itemNo != "" {
+				productsByItemNo[itemNo] = append(productsByItemNo[itemNo], row)
+			}
+		}
+		for _, task := range group.tasks {
+			itemNo := strings.ToUpper(strings.TrimSpace(task.ItemNo))
+			if len(mergePublishProductsByItemNo(productsByItemNo[itemNo])) > 0 {
+				results[task.ID] = fmt.Errorf("货源已恢复库存，取消本次下架")
+			}
+		}
+	}
+	return results
 }
 
 func taskPublishInput(task model.PublishTask) xianyu.PublishInput {
@@ -44,11 +103,12 @@ func planListingUpdate(ctx context.Context, sc *svc.ServiceContext, plan publish
 	if err != nil {
 		return task, false, err
 	}
-	before, err := sc.SellerXianyuService.GetSellerEditDetail(ctx, listing.PlatformItemID)
+	before, err := sc.SellerXianyuService.ForAccount(plan.AccountID).GetSellerEditDetail(ctx, listing.PlatformItemID)
 	if err != nil {
 		return task, false, fmt.Errorf("核对货号%s失败：%w", listing.ItemNo, err)
 	}
 	task.Action = "update"
+	task.AccountID = plan.AccountID
 	task.Quantity = productNumber(product, "item_total_store")
 	task.XianyuItemID = listing.PlatformItemID
 	task.XianyuURL = listing.ItemURL
@@ -57,6 +117,25 @@ func planListingUpdate(ctx context.Context, sc *svc.ServiceContext, plan publish
 	after := xianyu.ManagedState(xianyu.ManagedEditPayload(before, taskPublishInput(task)))
 	task.ChangeReasons = xianyu.StateChangeReasons(task.Before, after)
 	return task, !xianyu.SameActionableState(task.Before, after), nil
+}
+
+// planListingRelist 为可发布商品复用最近下架的闲鱼商品 ID。
+func planListingRelist(plan publishBatchPlan, product map[string]any, listing model.MarketplaceListing) (model.PublishTask, error) {
+	if specs, ok := product["_merged_spec_items"]; ok {
+		product["spec_items"] = specs
+	}
+	task, err := buildBatchPublishTask("", plan, product, time.Now())
+	if err != nil {
+		return task, err
+	}
+	task.Action = "relist"
+	task.AccountID = plan.AccountID
+	task.Quantity = productNumber(product, "item_total_store")
+	task.XianyuItemID = listing.PlatformItemID
+	task.XianyuURL = listing.ItemURL
+	task.PlannedAt = time.Now()
+	task.ChangeReasons = []string{"复用最近下架商品并按当前模板重新编辑"}
+	return task, nil
 }
 
 // canonicalSpecValue 只合并明确等价的占位色名，不合并真实不同配色。
@@ -105,25 +184,27 @@ func refreshReconcileTask(ctx context.Context, sc *svc.ServiceContext, task mode
 		return task, fmt.Errorf("全部来源已无货，请重新预览并确认下架")
 	}
 	product := merged[0]
-	if task.Action == "" || task.Action == "publish" {
+	if task.Action == "" || task.Action == "publish" || task.Action == "relist" {
 		product, err = retryPublishDetail(ctx, sc.CatalogService.GetLiveProductDetail, product, task)
 		if err != nil {
 			return task, err
 		}
 	}
-	updated, err := buildBatchPublishTask(task.BatchID, publishBatchPlan{BrandProfileID: task.BrandProfileID, BrandName: task.Brand, RegionID: task.RegionID}, product, task.CreatedAt)
+	updated, err := buildBatchPublishTask(task.BatchID, publishBatchPlan{AccountID: task.AccountID, BrandProfileID: task.BrandProfileID, BrandName: task.Brand, RegionID: task.RegionID}, product, task.CreatedAt)
 	if err != nil {
 		return task, err
 	}
 	updated.MinDelaySeconds = task.MinDelaySeconds
 	updated.MaxDelaySeconds = task.MaxDelaySeconds
 	updated.ID = task.ID
+	updated.AccountID = task.AccountID
 	updated.Quantity = productNumber(merged[0], "item_total_store")
 	updated.Action = task.Action
 	updated.Before = task.Before
 	updated.ChangeReasons = task.ChangeReasons
 	updated.XianyuItemID = task.XianyuItemID
 	updated.XianyuURL = task.XianyuURL
+	updated.DuplicateXianyuItemIDs = task.DuplicateXianyuItemIDs
 	updated.PlannedAt = time.Now()
 	return updated, nil
 }

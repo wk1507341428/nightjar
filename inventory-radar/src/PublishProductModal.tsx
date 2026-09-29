@@ -3,6 +3,7 @@ import { Alert, Button, Form, Input, InputNumber, Modal, Progress, Select } from
 import { getWarehouseShortName } from './constants';
 import { createPublishTask, fetchPublishTask, retryPublishTask } from './xianyuApi';
 import type { ProductDetail, ProductSku, ProductSummary, PublishTask, PublishTaskStatus } from './types';
+import { useXianyuAccount } from './XianyuAccountContext';
 
 /** 发布任务轮询间隔。 */
 const TASK_POLL_INTERVAL = 1500;
@@ -177,6 +178,8 @@ export function PublishProductModal({
   onClose: () => void;
   onPublished: () => void;
 }) {
+  // 当前发布目标账号。
+  const { currentAccount, currentAccountId } = useXianyuAccount();
   // Ant Design 发布表单实例。
   const [form] = Form.useForm<PublishFormValues>();
   // 当前发布任务。
@@ -271,6 +274,7 @@ export function PublishProductModal({
     try {
       // 新建的发布任务。
       const nextTask = await createPublishTask({
+		accountId: currentAccountId,
         sourceItemId: product?.default_item_id ?? product?.item_id ?? product?.goods_id ?? '',
         itemNo: product?.item_no ?? '',
         title: values.title,
@@ -360,6 +364,7 @@ export function PublishProductModal({
           }}
           onFinish={handleSubmitPublish}
         >
+          <Alert type={currentAccount?.sellerConnected && currentAccount.status === 'active' ? 'info' : 'warning'} showIcon message={`发布账号：${currentAccount?.name ?? '未选择账号'}`} description={currentAccount?.sellerConnected && currentAccount.status === 'active' ? '本次任务创建后将始终绑定该账号。' : '请先连接该账号的卖家后台并恢复队列。'} />
           <Form.Item label="商品标题" name="title" rules={[{ required: true, message: '请输入商品标题' }, { max: 120, message: '最多 120 个字符' }]}>
             <Input showCount maxLength={120} />
           </Form.Item>
@@ -380,7 +385,7 @@ export function PublishProductModal({
           {errorMessage ? <Alert type="error" showIcon message={errorMessage} /> : null}
           <div className="publish-modal__actions">
             <Button onClick={onClose}>取消</Button>
-            <Button type="primary" htmlType="submit" loading={isSubmitting}>确认并发布</Button>
+            <Button type="primary" htmlType="submit" loading={isSubmitting} disabled={!currentAccount?.sellerConnected || currentAccount.status !== 'active'}>确认并发布</Button>
           </div>
         </Form>
       ) : (

@@ -32,14 +32,17 @@ func saveXianyuSessionHandler(serviceContext *svc.ServiceContext) http.HandlerFu
 			return
 		}
 
-		displayName, searchReady, err := serviceContext.XianyuService.Connect(request.Context(), rawCredential)
+		accountService := serviceContext.XianyuService.ForAccount(model.DefaultXianyuAccountID)
+		displayName, platformUserID, searchReady, err := accountService.ConnectWithIdentity(request.Context(), rawCredential, "")
 		if err != nil {
 			logx.Errorf("connect xianyu API session: %v", err)
 			writeError(responseWriter, http.StatusUnauthorized, err.Error())
 			return
 		}
+		_ = serviceContext.XianyuAccountRepository.UpdateConnection(request.Context(), model.DefaultXianyuAccountID, "session", displayName, platformUserID, true, searchReady)
 
 		writeJSON(responseWriter, http.StatusOK, types.ConnectionResponse{
+			AccountID:      model.DefaultXianyuAccountID,
 			Platform:       model.XianyuPlatform,
 			Status:         "connected",
 			Authenticated:  true,
@@ -53,7 +56,7 @@ func saveXianyuSessionHandler(serviceContext *svc.ServiceContext) http.HandlerFu
 // getXianyuConnectionHandler 返回本地保存的闲鱼 API 会话状态。
 func getXianyuConnectionHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
-		session, err := serviceContext.XianyuService.Connection(request.Context())
+		session, err := serviceContext.XianyuService.ForAccount(model.DefaultXianyuAccountID).Connection(request.Context())
 		if errors.Is(err, repository.ErrSessionNotFound) {
 			writeJSON(responseWriter, http.StatusOK, types.ConnectionResponse{
 				Platform: model.XianyuPlatform,
@@ -69,6 +72,7 @@ func getXianyuConnectionHandler(serviceContext *svc.ServiceContext) http.Handler
 		}
 
 		writeJSON(responseWriter, http.StatusOK, types.ConnectionResponse{
+			AccountID:      model.DefaultXianyuAccountID,
 			Platform:       model.XianyuPlatform,
 			Status:         "connected",
 			Authenticated:  true,
@@ -82,11 +86,12 @@ func getXianyuConnectionHandler(serviceContext *svc.ServiceContext) http.Handler
 // deleteXianyuSessionHandler 删除本地加密 Cookie。
 func deleteXianyuSessionHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
-		if err := serviceContext.XianyuService.Disconnect(request.Context()); err != nil {
+		if err := serviceContext.XianyuService.ForAccount(model.DefaultXianyuAccountID).Disconnect(request.Context()); err != nil {
 			logx.Errorf("delete xianyu API session: %v", err)
 			writeError(responseWriter, http.StatusInternalServerError, "断开闲鱼失败")
 			return
 		}
+		_ = serviceContext.XianyuAccountRepository.UpdateConnection(request.Context(), model.DefaultXianyuAccountID, "session", "", "", false, false)
 		writeJSON(responseWriter, http.StatusOK, types.ConnectionResponse{
 			Platform: model.XianyuPlatform,
 			Status:   "not_connected",

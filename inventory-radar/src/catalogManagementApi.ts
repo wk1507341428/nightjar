@@ -76,7 +76,7 @@ export function fetchCatalogSyncRuns(params: { brandStoreId?: string; regionId?:
 }
 
 /** 分页读取一次同步的 SKU 变更明细。 */
-export function fetchCatalogSyncChanges(runId: string, params: { type?: string; keyword?: string; page?: number; pageSize?: number }): Promise<CatalogSyncChangeListResponse> {
+export function fetchCatalogSyncChanges(runId: string, params: { accountId?: string; type?: string; keyword?: string; page?: number; pageSize?: number }): Promise<CatalogSyncChangeListResponse> {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== '') {

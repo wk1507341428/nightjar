@@ -16,9 +16,11 @@ import { PriceHistoryPage } from './PriceHistoryPage';
 import { SyncRunPage } from './SyncRunPage';
 import { SyncHistoryPage } from './SyncHistoryPage';
 import { PublishCenterPage } from './PublishCenterPage';
+import { OfflineCenterPage } from './OfflineCenterPage';
 import { BrandSelectOption } from './BrandSelectOption';
 import { BrandMaintenancePage } from './BrandMaintenancePage';
 import { fetchMarketplaceListings, syncMarketplaceListings } from './xianyuApi';
+import { useXianyuAccount } from './XianyuAccountContext';
 import type {
   MarketplaceListing,
   ProductDetail,
@@ -49,6 +51,7 @@ const WORKSPACE_ROUTES = [
   { path: '/home', name: '全部货源', icon: <WorkspaceNavIcon kind="catalog" /> },
   { path: '/library', name: '我的商品库', icon: <WorkspaceNavIcon kind="library" /> },
   { path: '/publish-center', name: '发布中心', icon: <WorkspaceNavIcon kind="publish" /> },
+  { path: '/offline-center', name: '下架中心', icon: <WorkspaceNavIcon kind="offline" /> },
   { path: '/brand-maintenance', name: '品牌维护', icon: <WorkspaceNavIcon kind="brand" /> },
   { path: '/marketplace', name: '渠道上架', icon: <WorkspaceNavIcon kind="marketplace" /> },
   { path: '/sync', name: '同步配置', icon: <WorkspaceNavIcon kind="sync" /> },
@@ -58,7 +61,7 @@ const WORKSPACE_ROUTES = [
 type SortMode = 'default' | 'priceAsc' | 'priceDesc' | 'discount' | 'xianyuLast';
 
 /** 商品列表展示模式。 */
-type CatalogMode = 'standard' | 'marketplace' | 'sync' | 'syncRun' | 'syncHistory' | 'publishCenter' | 'brandMaintenance' | 'batchPublish' | 'priceHistory';
+type CatalogMode = 'standard' | 'marketplace' | 'sync' | 'syncRun' | 'syncHistory' | 'publishCenter' | 'offlineCenter' | 'brandMaintenance' | 'batchPublish' | 'priceHistory';
 
 /** 商品数据来源。 */
 type CatalogDataSource = 'live' | 'local';
@@ -72,6 +75,7 @@ function getWorkspaceMenuPath(mode: CatalogMode, source: CatalogDataSource): str
   if (mode === 'batchPublish' || mode === 'priceHistory') return '/library';
   if (mode === 'sync' || mode === 'syncRun' || mode === 'syncHistory') return '/sync';
   if (mode === 'publishCenter') return '/publish-center';
+  if (mode === 'offlineCenter') return '/offline-center';
   if (mode === 'brandMaintenance') return '/brand-maintenance';
   return '/marketplace';
 }
@@ -216,6 +220,11 @@ function isPublishCenterPageRoute(): boolean {
   return window.location.hash === '#/publish-center';
 }
 
+/** 判断当前地址是否为下架中心。 */
+function isOfflineCenterPageRoute(): boolean {
+  return window.location.hash === '#/offline-center';
+}
+
 /** 判断当前地址是否为品牌维护页。 */
 function isBrandMaintenancePageRoute(): boolean {
   return window.location.hash === '#/brand-maintenance';
@@ -269,12 +278,13 @@ function SearchIcon() {
 }
 
 /** 工作台侧边栏图标。 */
-function WorkspaceNavIcon({ kind }: { kind: 'catalog' | 'library' | 'publish' | 'brand' | 'marketplace' | 'sync' }) {
+function WorkspaceNavIcon({ kind }: { kind: 'catalog' | 'library' | 'publish' | 'offline' | 'brand' | 'marketplace' | 'sync' }) {
   // 每个入口对应的简洁线性图形。
   const paths: Record<typeof kind, React.ReactNode> = {
     catalog: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M8 14h4" /></>,
     library: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></>,
     publish: <><path d="m3 11 18-8-7 18-3-8-8-2Z" /><path d="m11 13 10-10" /></>,
+    offline: <><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M8 12h8M12 8v8" transform="rotate(45 12 12)" /></>,
     brand: <><path d="m12 2 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 17l9 5 9-5" /></>,
     marketplace: <><path d="M4 10h16v11H4V10ZM3 10l2-7h14l2 7H3Z" /><path d="M9 21v-7h6v7" /></>,
     sync: <><path d="M20 7h-9l3-3M4 17h9l-3 3M17 4l3 3-3 3M7 14l-3 3 3 3" /></>,
@@ -462,6 +472,8 @@ function ProductGridSkeleton() {
 
 /** 应用主页面。 */
 export function App() {
+  // 当前闲鱼账号决定渠道状态、去重和发布目标。
+  const { currentAccountId } = useXianyuAccount();
   // 当前输入关键词。
   const [query, setQuery] = useState('');
   // 当前地区 ID。
@@ -506,6 +518,10 @@ export function App() {
   const [searchState, setSearchState] = useState<ProductSearchState>(INITIAL_SEARCH_STATE);
   // 当前全部渠道在售商品。
   const [marketplaceListings, setMarketplaceListings] = useState<MarketplaceListing[]>([]);
+  // 渠道请求序号，用于丢弃切换账号前的迟到响应。
+  const marketplaceRequestSequence = useRef(0);
+  // 当前账号引用，供异步请求完成时核对归属。
+  const currentAccountIdRef = useRef(currentAccountId);
   // 渠道在售列表加载状态。
   const [isMarketplaceLoading, setIsMarketplaceLoading] = useState(false);
   // 渠道在售列表错误信息。
@@ -622,6 +638,7 @@ export function App() {
       // 商品查询结果。
       const searchFunction = dataSource === 'live' ? searchLiveProducts : searchProducts;
       const result = await searchFunction({
+		accountId: currentAccountId,
         query: trimmedQuery,
         mode: 'name',
         regionId: nextRegionId,
@@ -667,29 +684,36 @@ export function App() {
 
   /** 加载第三方渠道当前在售商品。 */
   async function loadMarketplaceListings() {
+    const requestSequence = marketplaceRequestSequence.current + 1;
+    marketplaceRequestSequence.current = requestSequence;
+    const requestAccountId = currentAccountId;
     setIsMarketplaceLoading(true);
     setMarketplaceErrorMessage('');
     try {
       // 当前闲鱼在售列表响应。
-      const response = await fetchMarketplaceListings('xianyu');
+      const response = await fetchMarketplaceListings('xianyu', [], currentAccountId);
+      if (requestSequence !== marketplaceRequestSequence.current || requestAccountId !== currentAccountIdRef.current) return;
       setMarketplaceListings(response.list ?? []);
       setMarketplaceLastSyncedAt(response.lastSyncedAt);
     } catch (error) {
+      if (requestSequence !== marketplaceRequestSequence.current || requestAccountId !== currentAccountIdRef.current) return;
       setMarketplaceErrorMessage(error instanceof Error ? error.message : '渠道在售状态加载失败');
     } finally {
-      setIsMarketplaceLoading(false);
+      if (requestSequence === marketplaceRequestSequence.current && requestAccountId === currentAccountIdRef.current) setIsMarketplaceLoading(false);
     }
   }
 
   /** 按当前商品货号增量刷新闲鱼在售状态。 */
   async function loadMarketplaceStatusesForProducts(products: ProductSummary[]) {
+    const requestAccountId = currentAccountId;
     // 当前批次需要核对的标准货号。
     const itemNos = Array.from(new Set(products.map((product) => normalizeMarketplaceItemNo(product?.item_no)).filter(Boolean)));
     if (itemNos.length === 0) {
       return;
     }
     try {
-      const response = await fetchMarketplaceListings('xianyu', itemNos);
+      const response = await fetchMarketplaceListings('xianyu', itemNos, currentAccountId);
+      if (requestAccountId !== currentAccountIdRef.current) return;
       const targetItemNos = new Set(itemNos);
       setMarketplaceListings((currentListings) => [
         ...currentListings.filter((listing) => !targetItemNos.has(normalizeMarketplaceItemNo(listing.itemNo))),
@@ -705,7 +729,7 @@ export function App() {
     setIsMarketplaceLoading(true);
     setMarketplaceErrorMessage('');
     try {
-      await syncMarketplaceListings('xianyu');
+      await syncMarketplaceListings('xianyu', currentAccountId);
       await loadMarketplaceListings();
     } catch (error) {
       setMarketplaceErrorMessage(error instanceof Error ? error.message : '同步闲鱼在售状态失败');
@@ -788,6 +812,11 @@ export function App() {
   function loadInitialProducts() {
     clearLegacyBrandOptionCache();
     void loadMarketplaceListings();
+    if (isOfflineCenterPageRoute()) {
+      setCatalogMode('offlineCenter');
+      setActiveCategory('下架中心');
+      return;
+    }
     if (isBrandMaintenancePageRoute()) {
       setCatalogMode('brandMaintenance');
       setActiveCategory('品牌维护');
@@ -858,6 +887,12 @@ export function App() {
 
   /** 根据地址切换独立页面或选品主页。 */
   function handleRouteChange() {
+    if (isOfflineCenterPageRoute()) {
+      setCatalogMode('offlineCenter');
+      setActiveCategory('下架中心');
+      setQuery('');
+      return;
+    }
     if (isBrandMaintenancePageRoute()) {
       setCatalogMode('brandMaintenance');
       setActiveCategory('品牌维护');
@@ -1003,6 +1038,17 @@ export function App() {
   }, []);
 
   useEffect(() => {
+	// 切换账号后清空上个账号的在售标签，并按当前页面重新加载。
+	currentAccountIdRef.current = currentAccountId;
+	marketplaceRequestSequence.current += 1;
+	setMarketplaceListings([]);
+	void loadMarketplaceListings();
+	if (catalogMode === 'standard') {
+		void executeSearch({ nextQuery: query, nextRegionId: regionId, nextBrandId: brandId, nextPage: 1, nextSortMode: sortMode, nextCategoryId: brandCategoryId, dataSource: catalogDataSource });
+	}
+  }, [currentAccountId]);
+
+  useEffect(() => {
     // 仅订阅浏览器断点，避免同时挂载两个平台连接组件并重复请求接口。
     const mediaQuery = window.matchMedia('(max-width: 780px)');
     const handleViewportChange = (event: MediaQueryListEvent) => setIsCompactViewport(event.matches);
@@ -1055,6 +1101,10 @@ export function App() {
     }
     if (categoryName === '发布中心') {
       window.location.hash = '/publish-center';
+      return;
+    }
+    if (categoryName === '下架中心') {
+      window.location.hash = '/offline-center';
       return;
     }
     if (categoryName === '品牌维护') {
@@ -1306,6 +1356,8 @@ export function App() {
         <SyncHistoryPage onBack={() => { window.location.hash = '/sync'; }} />
       ) : catalogMode === 'publishCenter' ? (
         <PublishCenterPage operationId={publishOperationRouteID || undefined} />
+      ) : catalogMode === 'offlineCenter' ? (
+        <OfflineCenterPage />
       ) : catalogMode === 'brandMaintenance' ? (
         <BrandMaintenancePage />
       ) : catalogMode === 'sync' ? (

@@ -5,6 +5,7 @@ import "time"
 // MarketplaceListing 保存第三方渠道当前在售商品，不保留下架状态。
 type MarketplaceListing struct {
 	ID              string     `bson:"_id" json:"id"`
+	AccountID       string     `bson:"accountId" json:"accountId"`
 	Platform        string     `bson:"platform" json:"platform"`
 	PlatformItemID  string     `bson:"platformItemId" json:"platformItemId"`
 	SourceItemID    string     `bson:"sourceItemId,omitempty" json:"sourceItemId,omitempty"`
@@ -17,6 +18,7 @@ type MarketplaceListing struct {
 	LastSyncedAt    time.Time  `bson:"lastSyncedAt" json:"lastSyncedAt"`
 	LastSeenAt      time.Time  `bson:"lastSeenAt" json:"lastSeenAt"`
 	SaleStatus      string     `bson:"saleStatus" json:"saleStatus"`
+	RemoteStatus    string     `bson:"remoteStatus,omitempty" json:"remoteStatus,omitempty"`
 	OffShelfAt      *time.Time `bson:"offShelfAt,omitempty" json:"offShelfAt,omitempty"`
 	BrandProfileID  string     `bson:"brandProfileId,omitempty" json:"brandProfileId,omitempty"`
 	SourceType      string     `bson:"sourceType,omitempty" json:"sourceType,omitempty"`

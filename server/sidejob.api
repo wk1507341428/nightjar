@@ -100,11 +100,6 @@ type SaveXianyuSessionRequest {
 	Cookie string `json:"cookie,optional"`
 }
 
-type SavePinduoduoSessionRequest {
-	Credential string `json:"credential,optional"`
-	Cookie     string `json:"cookie,optional"`
-}
-
 type CreatePublishTaskRequest {
 	SourceItemId      string   `json:"sourceItemId"`
 	ItemNo            string   `json:"itemNo"`
@@ -161,15 +156,6 @@ service sidejob-api {
 
 	@handler deleteXianyuSession
 	delete /xianyu/session returns (ConnectionResponse)
-
-	@handler savePinduoduoSession
-	post /pinduoduo/session (SavePinduoduoSessionRequest) returns (ConnectionResponse)
-
-	@handler getPinduoduoConnection
-	get /pinduoduo/connection returns (ConnectionResponse)
-
-	@handler deletePinduoduoSession
-	delete /pinduoduo/session returns (ConnectionResponse)
 
 	@handler createPublishTask
 	post /xianyu/publish-tasks (CreatePublishTaskRequest) returns (PublishTaskResponse)

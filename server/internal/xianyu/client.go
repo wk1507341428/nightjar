@@ -43,13 +43,20 @@ func (apiError *APIError) Error() string {
 
 // Client 使用 Cookie 和 MTop 签名直接调用闲鱼接口。
 type Client struct {
-	config           config.XianyuConfig
-	httpClient       *http.Client
-	mutex            sync.Mutex
-	cookies          map[string]string
-	searchCredential SearchCredential
-	sellerWorkbench  bool
+	config            config.XianyuConfig
+	httpClient        *http.Client
+	mutex             sync.Mutex
+	cookies           map[string]string
+	searchCredential  SearchCredential
+	sellerWorkbench   bool
+	credentialVersion int64
 }
+
+// SetCredentialVersion 记录创建客户端时使用的凭证版本。
+func (client *Client) SetCredentialVersion(version int64) { client.credentialVersion = version }
+
+// CredentialVersion 返回创建客户端时使用的凭证版本。
+func (client *Client) CredentialVersion() int64 { return client.credentialVersion }
 
 // SetSearchCredential 设置闲鱼 PC 搜索接口所需的动态安全参数。
 func (client *Client) SetSearchCredential(credential SearchCredential) {

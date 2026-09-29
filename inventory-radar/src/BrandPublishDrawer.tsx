@@ -3,6 +3,7 @@ import { Alert, Button, InputNumber, Progress, Select, Spin, Tag, message } from
 import { fetchLocalBrandCategories } from './api';
 import { createPublishBatch, fetchPublishBatch, previewPublishBatch, retryPublishTask } from './xianyuApi';
 import type { BrandCategory, PublishBatch, PublishBatchPreview, PublishBatchSettings, PublishTask, PublishTaskStatus } from './types';
+import { useXianyuAccount } from './XianyuAccountContext';
 
 /** 发布任务状态展示配置。 */
 const TASK_STATUS_LABELS: Record<PublishTaskStatus, string> = {
@@ -24,6 +25,8 @@ function getTaskStatusColor(status: PublishTaskStatus): string {
 
 /** 品牌批量发布独立页面。 */
 export function BrandPublishPage({ batchId, brandStoreId, brandName, onBack }: { batchId?: string; brandStoreId?: string; brandName?: string; onBack: () => void }) {
+  // 当前发布目标账号。
+  const { currentAccountId } = useXianyuAccount();
   // 本次最多创建的任务数量。
   const [publishLimit, setPublishLimit] = useState(20);
   // 相邻商品发布的最小间隔秒数。
@@ -51,7 +54,7 @@ export function BrandPublishPage({ batchId, brandStoreId, brandName, onBack }: {
   function getPublishBatchSettings(): PublishBatchSettings {
     const selectedCategorySet = new Set(categoryIds);
     const selectedCategories = brandCategories.filter((category) => selectedCategorySet.has(category.id));
-    return { limit: publishLimit, minDelaySeconds, maxDelaySeconds, categoryIds: selectedCategories.map((category) => category.id), categoryNames: selectedCategories.map((category) => category.name) };
+    return { accountId: currentAccountId, limit: publishLimit, minDelaySeconds, maxDelaySeconds, categoryIds: selectedCategories.map((category) => category.id), categoryNames: selectedCategories.map((category) => category.name) };
   }
 
   /** 获取当前配置下的发布计划预览。 */

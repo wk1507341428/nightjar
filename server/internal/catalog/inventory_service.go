@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -14,9 +15,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	redisclient "github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"sidejob-server/internal/model"
 )
 
 // BrandStoreCandidate 是上游品牌馆发现的一家门店。
@@ -200,6 +204,11 @@ func (service *Service) ListBrandCategories(ctx context.Context, brandStoreID st
 	if err != nil {
 		return nil, err
 	}
+	return service.ListSourceCategories(ctx, brandStore.RegionID, brandStore.DistributorID)
+}
+
+// ListSourceCategories 读取一个地区上游品牌门店当前展示的品类。
+func (service *Service) ListSourceCategories(ctx context.Context, regionID, distributorID string) ([]BrandCategory, error) {
 	var response struct {
 		Data []struct {
 			CategoryID   string `json:"category_id"`
@@ -208,8 +217,8 @@ func (service *Service) ListBrandCategories(ctx context.Context, brandStoreID st
 		} `json:"data"`
 	}
 	if err := service.getJSON(ctx, "/goods/shopcategory", url.Values{
-		"regionauth_id":         {brandStore.RegionID},
-		"distributor_id":        {brandStore.DistributorID},
+		"regionauth_id":         {regionID},
+		"distributor_id":        {distributorID},
 		"is_marketing_category": {"1"},
 	}, &response); err != nil {
 		return nil, err
@@ -273,7 +282,10 @@ func (service *Service) SaveBrandStore(ctx context.Context, candidate BrandStore
 }
 
 // ListOffers 查询本地商品库，供首页和品牌筛选使用。
-func (service *Service) ListOffers(ctx context.Context, regionID, brandStoreID, categoryID, keyword string, page, pageSize int, stockOnly bool, sortMode string) (OfferListResult, error) {
+func (service *Service) ListOffers(ctx context.Context, accountID, regionID, brandStoreID, categoryID, keyword string, page, pageSize int, stockOnly bool, sortMode string) (OfferListResult, error) {
+	if accountID == "" {
+		accountID = model.DefaultXianyuAccountID
+	}
 	if page < 1 {
 		page = 1
 	}
@@ -337,7 +349,7 @@ func (service *Service) ListOffers(ctx context.Context, regionID, brandStoreID, 
 	pipeline := mongo.Pipeline{{{Key: "$match", Value: filter}}}
 	if sortMode == "xianyuLast" {
 		// 当前闲鱼在售货号；只在用户选择置底排序时读取。
-		xianyuItemNos, listErr := service.listingRepository.ListNormalizedItemNos(ctx, "xianyu")
+		xianyuItemNos, listErr := service.listingRepository.ListNormalizedItemNos(ctx, accountID, "xianyu")
 		if listErr != nil {
 			return OfferListResult{}, listErr
 		}
@@ -498,7 +510,8 @@ func (service *Service) RefreshOffer(ctx context.Context, offerID string) (SyncR
 		} else {
 			detailProduct["purchase_notice"] = purchaseNotice
 			detailProduct["purchase_notice_open"] = purchaseNoticeOpen
-			_, wasUpdated, upsertErr := service.upsertOffer(ctx, offer.BrandStoreID, offer.RegionID, offer.DistributorID, detailProduct, run.ID, time.Now())
+			profileID, _ := service.inventoryRepository.FindBrandProfileIDByMember(ctx, offer.RegionID, offer.DistributorID)
+			_, wasUpdated, upsertErr := service.upsertOffer(ctx, offer.BrandStoreID, offer.RegionID, offer.DistributorID, profileID, detailProduct, run.ID, time.Now())
 			err = upsertErr
 			if wasUpdated {
 				run.UpdatedCount = 1
@@ -536,6 +549,76 @@ func (service *Service) fetchProductDetail(ctx context.Context, sourceProduct ma
 	if itemID == "" {
 		return nil, errors.New("商品缺少详情 ID")
 	}
+	rawDetail, err := service.cachedRawProductDetail(ctx, itemID, regionID)
+	if err != nil {
+		return nil, err
+	}
+	mergedProduct := make(map[string]any, len(sourceProduct)+len(rawDetail))
+	for key, value := range sourceProduct {
+		mergedProduct[key] = value
+	}
+	for key, value := range rawDetail {
+		mergedProduct[key] = value
+	}
+	return mergedProduct, nil
+}
+
+const productDetailCacheTTL = 30 * time.Minute
+
+type productDetailCacheEntry struct {
+	Status string         `json:"status"`
+	Detail map[string]any `json:"detail,omitempty"`
+	Error  string         `json:"error,omitempty"`
+}
+
+// cachedRawProductDetail 使用 Redis 和 singleflight 复用30分钟内的商详结果。
+func (service *Service) cachedRawProductDetail(ctx context.Context, itemID, regionID string) (map[string]any, error) {
+	cacheKey := "sidejob:catalog:detail:v2:" + regionID + ":" + itemID
+	if service.detailCache != nil {
+		cachedValue, cacheErr := service.detailCache.Get(ctx, cacheKey).Bytes()
+		if cacheErr == nil {
+			var cachedEntry productDetailCacheEntry
+			if json.Unmarshal(cachedValue, &cachedEntry) == nil {
+				if cachedEntry.Status == "missing" {
+					return nil, errors.New(cachedEntry.Error)
+				}
+				if cachedEntry.Status == "ok" && len(cachedEntry.Detail) > 0 {
+					return cachedEntry.Detail, nil
+				}
+			}
+		} else if !errors.Is(cacheErr, redisclient.Nil) {
+			return nil, fmt.Errorf("读取商详缓存失败：%w", cacheErr)
+		}
+	}
+	result, err, _ := service.detailGroup.Do(cacheKey, func() (any, error) {
+		select {
+		case service.detailSemaphore <- struct{}{}:
+			defer func() { <-service.detailSemaphore }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		detail, fetchErr := service.fetchRawProductDetail(ctx, itemID, regionID)
+		if service.detailCache != nil {
+			entry := productDetailCacheEntry{Status: "ok", Detail: detail}
+			if fetchErr != nil && IsExplicitMissingProductError(fetchErr) {
+				entry = productDetailCacheEntry{Status: "missing", Error: fetchErr.Error()}
+			}
+			if fetchErr == nil || entry.Status == "missing" {
+				if encodedEntry, encodeErr := json.Marshal(entry); encodeErr == nil {
+					_ = service.detailCache.Set(context.WithoutCancel(ctx), cacheKey, encodedEntry, productDetailCacheTTL).Err()
+				}
+			}
+		}
+		return detail, fetchErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.(map[string]any), nil
+}
+
+// fetchRawProductDetail 调用单商品详情接口，不混入列表快照字段。
+func (service *Service) fetchRawProductDetail(ctx context.Context, itemID, regionID string) (map[string]any, error) {
 	var response struct {
 		Data map[string]any `json:"data"`
 	}
@@ -543,20 +626,25 @@ func (service *Service) fetchProductDetail(ctx context.Context, sourceProduct ma
 		return nil, fmt.Errorf("读取商品详情失败：%w", err)
 	}
 	if len(response.Data) == 0 {
-		return nil, errors.New("商品详情为空")
+		return nil, errors.New("商品详情为空，商品不存在或已下架")
 	}
-	mergedProduct := make(map[string]any, len(sourceProduct)+len(response.Data))
-	for key, value := range sourceProduct {
-		mergedProduct[key] = value
+	message := mapString(response.Data, "message")
+	statusCode := mapInt64(response.Data, "status_code")
+	if statusCode >= 400 || strings.Contains(message, "不存在") || strings.Contains(message, "已下架") {
+		return nil, fmt.Errorf("小程序商详不可用：%s", firstNonEmpty(message, "商品不存在或已下架"))
 	}
-	for key, value := range response.Data {
-		mergedProduct[key] = value
-	}
-	return mergedProduct, nil
+	return response.Data, nil
+}
+
+// isExplicitMissingProductError 只缓存平台明确返回的商品失效，不缓存网络异常。
+func IsExplicitMissingProductError(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "商品详情为空") || strings.Contains(message, "商品不存在") || strings.Contains(message, "不存在") || strings.Contains(message, "已下架")
 }
 
 func (service *Service) syncBrandStore(ctx context.Context, brandStore BrandStore, run SyncRun) (SyncRun, error) {
 	syncStartedAt := run.StartedAt
+	profileID, _ := service.inventoryRepository.FindBrandProfileIDByMember(ctx, brandStore.RegionID, brandStore.DistributorID)
 	existingActiveCount, err := service.inventoryRepository.offers.CountDocuments(ctx, bson.M{"brandStoreId": brandStore.ID, "saleStatus": "onsale"})
 	if err != nil {
 		return run, err
@@ -599,7 +687,7 @@ func (service *Service) syncBrandStore(ctx context.Context, brandStore BrandStor
 			_, _ = service.inventoryRepository.syncRuns.UpdateOne(ctx, bson.M{"_id": run.ID}, bson.M{"$set": run})
 		}
 		for _, sourceProduct := range response.Data.List {
-			wasCreated, wasUpdated, upsertErr := service.upsertOffer(ctx, brandStore.ID, brandStore.RegionID, brandStore.DistributorID, sourceProduct, run.ID, syncStartedAt)
+			wasCreated, wasUpdated, upsertErr := service.upsertOffer(ctx, brandStore.ID, brandStore.RegionID, brandStore.DistributorID, profileID, sourceProduct, run.ID, syncStartedAt)
 			if upsertErr != nil {
 				return run, upsertErr
 			}
@@ -645,7 +733,7 @@ func (service *Service) syncBrandStore(ctx context.Context, brandStore BrandStor
 	return run, nil
 }
 
-func (service *Service) upsertOffer(ctx context.Context, brandStoreID, regionID, distributorID string, sourceProduct map[string]any, syncRunID string, seenAt time.Time) (bool, bool, error) {
+func (service *Service) upsertOffer(ctx context.Context, brandStoreID, regionID, distributorID, profileID string, sourceProduct map[string]any, syncRunID string, seenAt time.Time) (bool, bool, error) {
 	itemNo := mapString(sourceProduct, "item_no")
 	brandName := mapString(sourceProduct, "goods_brand")
 	sourceItemID := firstNonEmpty(mapString(sourceProduct, "item_id"), mapString(sourceProduct, "default_item_id"), mapString(sourceProduct, "goods_id"))
@@ -696,6 +784,11 @@ func (service *Service) upsertOffer(ctx context.Context, brandStoreID, regionID,
 	}
 	_, err := service.inventoryRepository.offers.UpdateOne(ctx, bson.M{"_id": offer.ID}, bson.M{"$set": offer, "$unset": bson.M{"inactiveAt": ""}}, options.Update().SetUpsert(true))
 	if err != nil {
+		return false, false, err
+	}
+	categoryID, categoryName := productCategory(sourceProduct)
+	binding := SKUCategoryBinding{ItemNo: itemNo, BrandProfileID: profileID, BrandStoreID: brandStoreID, BrandName: brandName, RegionID: regionID, DistributorID: distributorID, SourceItemID: sourceItemID, CategoryID: categoryID, CategoryName: categoryName, MarketPriceCents: offer.MarketCents, FirstSeenAt: offer.FirstSeenAt, LastSeenAt: seenAt}
+	if err := service.inventoryRepository.UpsertSKUCategoryBinding(ctx, binding); err != nil {
 		return false, false, err
 	}
 	return isCreated, len(changes) > 0, nil
@@ -945,6 +1038,11 @@ func normalizeBrandID(brandName string) string {
 func buildBrandStoreID(regionID, distributorID string) string {
 	return hashID("brand-store", regionID, distributorID)
 }
+
+// BrandStoreIDForSource 返回一个地区品牌门店稳定的本地 ID。
+func BrandStoreIDForSource(regionID, distributorID string) string {
+	return buildBrandStoreID(regionID, distributorID)
+}
 func buildProductID(brandName, itemNo, sourceID string) string {
 	return hashID("product", strings.ToUpper(strings.TrimSpace(brandName)), strings.ToUpper(strings.TrimSpace(firstNonEmpty(itemNo, sourceID))))
 }
@@ -983,6 +1081,23 @@ func mapString(source map[string]any, key string) string {
 	default:
 		return ""
 	}
+}
+
+// productCategory 读取小程序商品所属的主品类。
+func productCategory(source map[string]any) (string, string) {
+	categoryValue := source["item_category_main"]
+	category, validCategory := categoryValue.(map[string]any)
+	if !validCategory {
+		if bsonCategory, validBSONCategory := categoryValue.(bson.M); validBSONCategory {
+			category = map[string]any(bsonCategory)
+		}
+	}
+	if category == nil {
+		return "", ""
+	}
+	categoryID := firstNonEmpty(mapString(category, "category_id"), mapString(category, "id"))
+	categoryName := firstNonEmpty(mapString(category, "category_name"), mapString(category, "name"))
+	return categoryID, categoryName
 }
 func mapInt64(source map[string]any, key string) int64 {
 	switch value := source[key].(type) {

@@ -8,6 +8,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"sidejob-server/internal/config"
@@ -58,6 +59,7 @@ type OnSaleItem struct {
 	PriceCents int64
 	ImageURL   string
 	CategoryID string
+	Status     string
 }
 
 // OfflineResult 是一次下架操作的逐商品结果。
@@ -91,6 +93,7 @@ type Service struct {
 	sessionRepository *repository.SessionRepository
 	sessionCipher     *security.Cipher
 	sellerWorkbench   bool
+	accountID         string
 }
 
 // NewSellerService 创建卖家工作台专用闲鱼服务。
@@ -110,23 +113,47 @@ func NewService(
 		config:            serviceConfig,
 		sessionRepository: sessionRepository,
 		sessionCipher:     sessionCipher,
+		accountID:         model.DefaultXianyuAccountID,
 	}
 }
 
+// ForAccount 返回绑定到指定闲鱼账号的服务实例。
+func (service *Service) ForAccount(accountID string) *Service {
+	if accountID == "" {
+		accountID = model.DefaultXianyuAccountID
+	}
+	return &Service{
+		config:            service.config,
+		sessionRepository: service.sessionRepository.ForAccount(accountID),
+		sessionCipher:     service.sessionCipher,
+		sellerWorkbench:   service.sellerWorkbench,
+		accountID:         accountID,
+	}
+}
+
+// AccountID 返回当前服务绑定的账号 ID。
+func (service *Service) AccountID() string { return service.accountID }
+
 // Connect 解析任意闲鱼 cURL 或 Cookie，校验后加密保存可用凭证。
 func (service *Service) Connect(ctx context.Context, rawCredential string) (string, bool, error) {
+	displayName, _, searchReady, err := service.ConnectWithIdentity(ctx, rawCredential, "")
+	return displayName, searchReady, err
+}
+
+// ConnectWithIdentity 校验凭证并返回可用于账号绑定的平台用户 ID。
+func (service *Service) ConnectWithIdentity(ctx context.Context, rawCredential, expectedPlatformUserID string) (string, string, bool, error) {
 	parsedCredential, err := ParseCredential(rawCredential)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 	client, err := NewClient(service.config, parsedCredential.Cookie)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 	client.SetSellerWorkbenchMode(service.sellerWorkbench)
 	if service.sellerWorkbench {
 		if err := validateSellerWorkbenchSession(ctx, client); err != nil {
-			return "", false, fmt.Errorf("闲鱼卖家后台凭证校验失败：%w", err)
+			return "", "", false, fmt.Errorf("闲鱼卖家后台凭证校验失败：%w", err)
 		}
 	}
 
@@ -134,6 +161,13 @@ func (service *Service) Connect(ctx context.Context, rawCredential string) (stri
 	var navigationResponse map[string]any
 	_ = client.Call(ctx, "mtop.idle.web.user.page.nav", "1.0", map[string]any{}, &navigationResponse)
 	displayName := readDisplayName(navigationResponse)
+	platformUserID := readPlatformUserID(navigationResponse)
+	if platformUserID == "" {
+		platformUserID = credentialPlatformUserID(parsedCredential.Cookie)
+	}
+	if expectedPlatformUserID != "" && platformUserID != "" && platformUserID != expectedPlatformUserID {
+		return "", "", false, errors.New("当前凭证属于另一个闲鱼账号，请新增账号后再连接")
+	}
 	if displayName == "" {
 		existingSession, existingErr := service.sessionRepository.Get(ctx)
 		if existingErr == nil {
@@ -146,9 +180,36 @@ func (service *Service) Connect(ctx context.Context, rawCredential string) (stri
 
 	hasSearchCredential, err := service.saveConnectedCredential(ctx, client.CookieHeader(), displayName, parsedCredential.SearchCredential)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
-	return displayName, hasSearchCredential, nil
+	if platformUserID != "" {
+		session, loadErr := service.sessionRepository.Get(ctx)
+		if loadErr == nil {
+			session.PlatformUserID = platformUserID
+			_ = service.sessionRepository.Save(ctx, session)
+		}
+	}
+	return displayName, platformUserID, hasSearchCredential, nil
+}
+
+// credentialPlatformUserID 从 Cookie 中读取稳定的闲鱼用户 ID。
+func credentialPlatformUserID(rawCookie string) string {
+	cookies := parseCookieHeader(rawCookie)
+	for _, key := range []string{"unb", "user_id", "userid", "uid"} {
+		if value := strings.TrimSpace(cookies[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// PlatformUserIDFromCredential 在不保存凭证的情况下读取稳定用户 ID。
+func PlatformUserIDFromCredential(rawCredential string) (string, error) {
+	parsedCredential, err := ParseCredential(rawCredential)
+	if err != nil {
+		return "", err
+	}
+	return credentialPlatformUserID(parsedCredential.Cookie), nil
 }
 
 // Connection 返回本地是否保存了闲鱼会话。
@@ -179,6 +240,11 @@ func (service *Service) Disconnect(ctx context.Context) error {
 
 // ListOnSaleItems 分页获取当前账号正在闲鱼出售的全部商品。
 func (service *Service) ListOnSaleItems(ctx context.Context) ([]OnSaleItem, error) {
+	return service.ListItemsByStatus(ctx, "0")
+}
+
+// ListItemsByStatus 分页读取卖家工作台指定状态组的商品。
+func (service *Service) ListItemsByStatus(ctx context.Context, itemStatus string) ([]OnSaleItem, error) {
 	client, displayName, err := service.loadClient(ctx)
 	if err != nil {
 		return nil, err
@@ -186,10 +252,13 @@ func (service *Service) ListOnSaleItems(ctx context.Context) ([]OnSaleItem, erro
 	defer func() {
 		persistenceContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName)
+		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName, client.CredentialVersion())
 	}()
 	if service.sellerWorkbench {
-		return listSellerWorkbenchOnSaleItems(ctx, client)
+		return listSellerWorkbenchItems(ctx, client, itemStatus)
+	}
+	if itemStatus != "0" {
+		return nil, errors.New("下架商品查询需要卖家工作台会话")
 	}
 
 	// 聚合后的当前在卖商品。
@@ -225,25 +294,30 @@ func (service *Service) ListOnSaleItems(ctx context.Context) ([]OnSaleItem, erro
 }
 
 // listSellerWorkbenchOnSaleItems 使用卖家工作台接口分页读取当前在售商品。
-func listSellerWorkbenchOnSaleItems(ctx context.Context, client *Client) ([]OnSaleItem, error) {
-	items := make([]OnSaleItem, 0)
+func listSellerWorkbenchItems(ctx context.Context, client *Client, itemStatus string) ([]OnSaleItem, error) {
 	const pageSize = 50
-	for pageNumber := 1; pageNumber <= 100; pageNumber++ {
+	type pageResult struct {
+		items []OnSaleItem
+		total int
+		err   error
+	}
+	fetchPage := func(pageNumber int) pageResult {
 		var response map[string]any
 		if err := client.Call(ctx, "mtop.alibaba.idle.seller.pc.common.item.search", "1.0", map[string]any{
 			"pageNo":        pageNumber,
 			"pageSize":      pageSize,
 			"bizType":       "commonPro",
 			"searchRequest": "{}",
-			"itemStatus":    "0",
+			"itemStatus":    itemStatus,
 		}, &response); err != nil {
-			return nil, fmt.Errorf("获取闲鱼卖家在售商品失败：%w", err)
+			return pageResult{err: fmt.Errorf("获取闲鱼卖家商品失败：%w", err)}
 		}
 		payload := mapValue(response["data"])
 		if len(payload) == 0 {
 			payload = response
 		}
 		pageItems := sliceValue(payload["itemSearchResponseList"])
+		items := make([]OnSaleItem, 0, len(pageItems))
 		for _, itemValue := range pageItems {
 			item := mapValue(itemValue)
 			itemID := firstNonEmptyString(item, "itemId", "id", "item_id")
@@ -256,12 +330,49 @@ func listSellerWorkbenchOnSaleItems(ctx context.Context, client *Client) ([]OnSa
 				PriceCents: parseSearchPriceCents(item),
 				ImageURL:   firstNonEmptyString(item, "mainPicUrl", "picUrl", "imageUrl"),
 				CategoryID: firstNonEmptyString(item, "categoryId", "catId"),
+				Status:     firstNonEmptyString(item, "itemStatus", "status"),
 			})
 		}
 		total, _ := strconv.Atoi(stringValue(payload["total"]))
-		if len(pageItems) == 0 || total == 0 || pageNumber*pageSize >= total {
-			break
+		return pageResult{items: items, total: total}
+	}
+	firstPage := fetchPage(1)
+	if firstPage.err != nil {
+		return nil, firstPage.err
+	}
+	if firstPage.total <= len(firstPage.items) {
+		return firstPage.items, nil
+	}
+	pageCount := (firstPage.total + pageSize - 1) / pageSize
+	pageResults := make([]pageResult, pageCount+1)
+	pageResults[1] = firstPage
+	pageSemaphore := make(chan struct{}, 4)
+	var pageWaitGroup sync.WaitGroup
+	for pageNumber := 2; pageNumber <= pageCount; pageNumber++ {
+		pageNumber := pageNumber
+		pageWaitGroup.Add(1)
+		go func() {
+			defer pageWaitGroup.Done()
+			select {
+			case pageSemaphore <- struct{}{}:
+				defer func() { <-pageSemaphore }()
+			case <-ctx.Done():
+				pageResults[pageNumber].err = ctx.Err()
+				return
+			}
+			pageResults[pageNumber] = fetchPage(pageNumber)
+		}()
+	}
+	pageWaitGroup.Wait()
+	items := make([]OnSaleItem, 0, firstPage.total)
+	for pageNumber := 1; pageNumber <= pageCount; pageNumber++ {
+		if pageResults[pageNumber].err != nil {
+			return nil, pageResults[pageNumber].err
 		}
+		items = append(items, pageResults[pageNumber].items...)
+	}
+	if len(items) != firstPage.total {
+		return nil, fmt.Errorf("闲鱼卖家商品分页不完整：期望%d件，实际%d件", firstPage.total, len(items))
 	}
 	return items, nil
 }
@@ -291,7 +402,7 @@ func (service *Service) OfflineItems(ctx context.Context, itemIDs []string) (Off
 	defer func() {
 		persistenceContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName)
+		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName, client.CredentialVersion())
 	}()
 
 	if len(normalizedItemIDs) == 1 {
@@ -366,7 +477,7 @@ func (service *Service) SearchItems(ctx context.Context, input SearchInput) ([]S
 	defer func() {
 		persistenceContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName)
+		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName, client.CredentialVersion())
 	}()
 
 	rowsPerPage := input.RowsPerPage
@@ -526,7 +637,7 @@ func (service *Service) Publish(ctx context.Context, input PublishInput) (Publis
 	defer func() {
 		persistenceContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName)
+		_ = service.saveCookie(persistenceContext, client.CookieHeader(), displayName, client.CredentialVersion())
 	}()
 
 	pregetAPI := "mtop.idle.pc.idleitem.preget"
@@ -844,6 +955,7 @@ func (service *Service) loadClient(ctx context.Context) (*Client, string, error)
 		return nil, "", err
 	}
 	client.SetSellerWorkbenchMode(service.sellerWorkbench)
+	client.SetCredentialVersion(session.CredentialVersion)
 	if session.EncryptedSearchCredential != "" {
 		decryptedCredential, decryptErr := service.sessionCipher.Decrypt(session.EncryptedSearchCredential)
 		if decryptErr != nil {
@@ -881,10 +993,14 @@ func (service *Service) saveConnectedCredential(
 		platform = model.XianyuSellerPlatform
 	}
 	session := model.XianyuSession{
-		Platform:        platform,
-		EncryptedCookie: encryptedCookie,
-		DisplayName:     displayName,
-		UpdatedAt:       time.Now(),
+		Platform:          platform,
+		EncryptedCookie:   encryptedCookie,
+		DisplayName:       displayName,
+		CredentialVersion: time.Now().UnixNano(),
+		UpdatedAt:         time.Now(),
+	}
+	if existingErr == nil {
+		session.PlatformUserID = existingSession.PlatformUserID
 	}
 	if searchCredential.Complete() {
 		encodedCredential, encodeErr := EncodeSearchCredential(searchCredential)
@@ -904,7 +1020,7 @@ func (service *Service) saveConnectedCredential(
 }
 
 // saveCookie 加密并保存最新 Cookie。
-func (service *Service) saveCookie(ctx context.Context, rawCookie string, displayName string) error {
+func (service *Service) saveCookie(ctx context.Context, rawCookie string, displayName string, credentialVersion int64) error {
 	encryptedCookie, err := service.sessionCipher.Encrypt(rawCookie)
 	if err != nil {
 		return err
@@ -913,12 +1029,19 @@ func (service *Service) saveCookie(ctx context.Context, rawCookie string, displa
 	if service.sellerWorkbench {
 		platform = model.XianyuSellerPlatform
 	}
-	return service.sessionRepository.Save(ctx, model.XianyuSession{
+	session := model.XianyuSession{
 		Platform:        platform,
 		EncryptedCookie: encryptedCookie,
 		DisplayName:     displayName,
 		UpdatedAt:       time.Now(),
-	})
+	}
+	if existingSession, existingErr := service.sessionRepository.Get(ctx); existingErr == nil {
+		session.EncryptedSearchCredential = existingSession.EncryptedSearchCredential
+		session.PlatformUserID = existingSession.PlatformUserID
+		session.CredentialVersion = existingSession.CredentialVersion
+	}
+	_, err = service.sessionRepository.SaveIfVersion(ctx, session, credentialVersion)
+	return err
 }
 
 // buildImageInfos 将上传响应转换为正式发布图片结构。
@@ -1223,6 +1346,18 @@ func readDisplayName(navigationResponse map[string]any) string {
 	module := mapValue(navigationResponse["module"])
 	base := mapValue(module["base"])
 	return stringValue(base["displayName"])
+}
+
+// readPlatformUserID 从用户导航响应中读取稳定的闲鱼用户 ID。
+func readPlatformUserID(navigationResponse map[string]any) string {
+	module := mapValue(navigationResponse["module"])
+	base := mapValue(module["base"])
+	for _, key := range []string{"userId", "userID", "userid", "uid", "id"} {
+		if value := stringValue(base[key]); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // uniqueCode 生成闲鱼网页格式的请求唯一标识。

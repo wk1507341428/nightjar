@@ -92,3 +92,14 @@ func TestManagedEditDropsMissingSizeAndPreservesExistingID(t *testing.T) {
 		t.Fatal("original snapshot modified")
 	}
 }
+
+func TestManagedRelistPayloadSetsOnSaleStatus(t *testing.T) {
+	detail := map[string]any{"itemId": "123", "itemStatus": "-2", "itemTextDTO": map[string]any{"title": "旧标题", "desc": "旧描述"}}
+	payload := ManagedRelistPayload(detail, PublishInput{Title: "新标题", Description: "新描述", PriceCents: 10000})
+	if stringValue(payload["itemStatus"]) != "0" {
+		t.Fatalf("relist status=%v want=0", payload["itemStatus"])
+	}
+	if stringValue(detail["itemStatus"]) != "-2" {
+		t.Fatal("original detail was modified")
+	}
+}

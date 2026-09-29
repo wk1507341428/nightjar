@@ -290,6 +290,7 @@ export interface RecentSearch {
 
 /** 闲鱼账号连接状态。 */
 export interface XianyuConnection {
+	accountId?: string;
 	platform: string;
 	status: 'not_connected' | 'waiting_login' | 'connected' | 'verification_required';
 	authenticated: boolean;
@@ -298,18 +299,34 @@ export interface XianyuConnection {
 	message?: string;
 }
 
-/** 平台 API 连接状态。 */
-export type PlatformConnection = XianyuConnection;
+/** 一个可独立发布、同步和对账的闲鱼账号。 */
+export interface XianyuAccount {
+	id: string;
+	name: string;
+	displayName?: string;
+	platformUserId?: string;
+	status: 'active' | 'paused' | 'disabled';
+	isDefault: boolean;
+	sessionConnected: boolean;
+	sellerConnected: boolean;
+	searchReady: boolean;
+	lastVerifiedAt?: string;
+	lastSellerVerifiedAt?: string;
+	lastSyncedAt?: string;
+	createdAt: string;
+	updatedAt: string;
+}
 
-/** 用户提供的拼多多商家后台 cURL 或 Cookie。 */
-export interface PinduoduoCredential {
-	credential: string;
+/** 闲鱼账号列表响应。 */
+export interface XianyuAccountListResponse {
+	list: XianyuAccount[];
 }
 
 /** 第三方渠道当前在售商品。 */
 export interface MarketplaceListing {
 	id: string;
-	platform: 'xianyu' | 'taobao' | 'pinduoduo' | string;
+	accountId: string;
+	platform: 'xianyu' | 'taobao' | string;
 	platformItemId: string;
 	sourceItemId?: string;
 	itemNo?: string;
@@ -326,6 +343,44 @@ export interface MarketplaceListingListResponse {
 	list: MarketplaceListing[];
 	total: number;
 	lastSyncedAt?: string;
+}
+
+/** 下架中心的一件闲鱼在售商品。 */
+export interface OfflineCenterCandidate {
+	platformItemId: string;
+	itemNo: string;
+	title: string;
+	priceCents: number;
+	marketPriceCents?: number;
+	discountRate?: number;
+	imageUrl?: string;
+	itemUrl?: string;
+	categoryIds?: string[];
+	categoryNames?: string[];
+	sourceRegions?: string[];
+}
+
+/** 下架中心预览结果。 */
+export interface OfflineCenterPreview {
+	accountId: string;
+	brandProfileId: string;
+	brandName: string;
+	total: number;
+	candidates: OfflineCenterCandidate[];
+}
+
+/** 下架中心筛选条件。 */
+export interface OfflineCenterFilters {
+	accountId: string;
+	brandProfileId?: string;
+	regionId?: string;
+	distributorId?: string;
+	brandName?: string;
+	categoryIds?: string[];
+	minPriceCents?: number;
+	maxPriceCents?: number;
+	minDiscountRate?: number;
+	maxDiscountRate?: number;
 }
 
 /** 渠道手动同步响应。 */
@@ -361,6 +416,7 @@ export interface PriceComparisonFilters {
 
 /** 统一比价请求。 */
 export interface CreatePriceComparisonRequest {
+	accountId?: string;
 	product: PriceComparisonProduct;
 	platforms: string[];
 	filters: PriceComparisonFilters;
@@ -409,6 +465,7 @@ export type PublishTaskStatus =
 
 /** 创建闲鱼发布任务参数。 */
 export interface CreatePublishTaskRequest {
+	accountId: string;
 	sourceItemId: string;
 	itemNo: string;
 	title: string;
@@ -432,7 +489,8 @@ export interface CreatePublishTaskRequest {
 
 /** 闲鱼发布任务。 */
 export interface PublishTask {
-	action?: 'publish' | 'update' | 'offline';
+	accountId: string;
+	action?: 'publish' | 'update' | 'offline' | 'relist';
 	changeReasons?: string[];
 	id: string;
 	status: PublishTaskStatus;
@@ -440,6 +498,7 @@ export interface PublishTask {
 	title: string;
 	brand?: string;
 	priceCents: number;
+	imageUrls?: string[];
 	xianyuItemId?: string;
 	xianyuUrl?: string;
 	errorMessage?: string;
@@ -456,9 +515,12 @@ export interface PublishBatchSkip {
 
 /** 当前品牌批量发布预览。 */
 export interface PublishBatchPreview {
+	accountId: string;
+	candidates?: Array<{ itemNo: string; title: string; priceCents: number; originalPriceCents: number; discountRate: number; imageUrl?: string; sourceRegions?: string[] }>;
 	previewId?: string;
 	unchanged?: number;
 	updates?: Array<PublishTask & { before?: { price?: string; quantity?: string }; variants?: Array<{ quantity: number; priceCents: number; properties: Array<{ name: string; value: string }> }> }>;
+	relists?: PublishTask[];
 	brandStoreId: string;
 	brandName: string;
 	categoryIds?: string[];
@@ -467,12 +529,13 @@ export interface PublishBatchPreview {
 	publishable: number;
 	selected: number;
 	skipped: PublishBatchSkip[];
-	offlineCandidates: Array<{ platformItemId: string; itemNo: string; title: string; priceCents: number; itemUrl?: string }>;
+	offlineCandidates: Array<{ platformItemId: string; itemNo: string; title: string; priceCents: number; imageUrl?: string; itemUrl?: string }>;
 }
 
 /** 当前品牌批量发布进度。 */
 export interface PublishBatch {
 	id: string;
+	accountId: string;
 	brandName: string;
 	categoryIds?: string[];
 	categoryNames?: string[];
@@ -518,10 +581,17 @@ export interface PublishOperationListResponse {
 
 /** 品牌批量发布的筛选与节奏配置。 */
 export interface PublishBatchSettings {
+	accountId: string;
 	previewId?: string;
+	/** 用户确认保留、不加入下架队列的闲鱼商品 ID。 */
+	preservedOfflinePlatformItemIds?: string[];
 	limit: number;
 	minDelaySeconds: number;
 	maxDelaySeconds: number;
+	minPriceCents?: number;
+	maxPriceCents?: number;
+	minDiscountRate?: number;
+	maxDiscountRate?: number;
 	categoryIds?: string[];
 	categoryNames?: string[];
 	sourceType?: 'live' | 'local';

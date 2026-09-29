@@ -30,8 +30,15 @@ func offlineMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.
 			writeError(responseWriter, http.StatusBadRequest, "单次最多下架 100 件商品")
 			return
 		}
+		accountID := strings.TrimSpace(request.URL.Query().Get("accountId"))
+		if accountID == "" {
+			accountID = model.DefaultXianyuAccountID
+		}
+		if !requireActiveSellerAccount(responseWriter, request, serviceContext, accountID) {
+			return
+		}
 
-		result, err := serviceContext.MarketplaceService.OfflineXianyuListings(request.Context(), body.ItemIDs)
+		result, err := serviceContext.MarketplaceService.OfflineXianyuListings(request.Context(), accountID, body.ItemIDs)
 		if err != nil {
 			logx.Errorf("offline xianyu listings: %v", err)
 			writeError(responseWriter, http.StatusBadGateway, "闲鱼商品下架失败："+err.Error())
@@ -55,6 +62,10 @@ func listMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.Han
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
 		// 请求渠道。
 		platform := strings.ToLower(strings.TrimSpace(request.URL.Query().Get("platform")))
+		accountID := strings.TrimSpace(request.URL.Query().Get("accountId"))
+		if accountID == "" {
+			accountID = model.DefaultXianyuAccountID
+		}
 		if platform == "" {
 			platform = "all"
 		}
@@ -63,9 +74,9 @@ func listMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.Han
 		var listings []model.MarketplaceListing
 		var err error
 		if len(itemNos) > 0 {
-			listings, err = serviceContext.ListingRepository.ListByItemNos(request.Context(), platform, itemNos)
+			listings, err = serviceContext.ListingRepository.ListByItemNos(request.Context(), accountID, platform, itemNos)
 		} else {
-			listings, err = serviceContext.ListingRepository.List(request.Context(), platform, 5000)
+			listings, err = serviceContext.ListingRepository.List(request.Context(), accountID, platform, 5000)
 		}
 		if err != nil {
 			logx.Errorf("list marketplace listings: %v", err)
@@ -80,7 +91,7 @@ func listMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.Han
 
 		lastSyncedAt := ""
 		if platform != "all" {
-			latestSyncTime, syncTimeErr := serviceContext.ListingRepository.LatestSyncTime(request.Context(), platform)
+			latestSyncTime, syncTimeErr := serviceContext.ListingRepository.LatestSyncTime(request.Context(), accountID, platform)
 			if syncTimeErr != nil {
 				logx.Errorf("read marketplace sync time: %v", syncTimeErr)
 			} else if !latestSyncTime.IsZero() {
@@ -108,18 +119,25 @@ func syncMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.Han
 			writeError(responseWriter, http.StatusNotImplemented, "该渠道暂未接入同步")
 			return
 		}
+		accountID := strings.TrimSpace(request.URL.Query().Get("accountId"))
+		if accountID == "" {
+			accountID = model.DefaultXianyuAccountID
+		}
+		if !requireActiveSellerAccount(responseWriter, request, serviceContext, accountID) {
+			return
+		}
 
 		// 手动同步最多等待 90 秒，避免请求无限占用连接。
 		syncContext, cancel := context.WithTimeout(request.Context(), 90*time.Second)
 		defer cancel()
-		syncedCount, err := serviceContext.MarketplaceService.SyncXianyu(syncContext)
+		syncedCount, err := serviceContext.MarketplaceService.SyncXianyu(syncContext, accountID)
 		if err != nil {
 			logx.Errorf("sync xianyu listings: %v", err)
 			writeError(responseWriter, http.StatusBadGateway, "同步闲鱼在售状态失败，请检查登录状态后重试")
 			return
 		}
 
-		lastSyncedAt, syncTimeErr := serviceContext.ListingRepository.LatestSyncTime(request.Context(), platform)
+		lastSyncedAt, syncTimeErr := serviceContext.ListingRepository.LatestSyncTime(request.Context(), accountID, platform)
 		if syncTimeErr != nil {
 			logx.Errorf("read xianyu sync time: %v", syncTimeErr)
 		}
@@ -135,6 +153,7 @@ func syncMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.Han
 func marketplaceListingToResponse(listing model.MarketplaceListing) types.MarketplaceListingResponse {
 	return types.MarketplaceListingResponse{
 		ID:             listing.ID,
+		AccountID:      listing.AccountID,
 		Platform:       listing.Platform,
 		PlatformItemID: listing.PlatformItemID,
 		SourceItemID:   listing.SourceItemID,

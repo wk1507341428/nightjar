@@ -13,9 +13,17 @@ import (
 type Config struct {
 	rest.RestConf
 	Mongo   MongoConfig
+	Redis   RedisConfig
 	Xianyu  XianyuConfig
 	Catalog CatalogConfig
 	Web     WebConfig
+}
+
+// RedisConfig 定义商详状态缓存连接。
+type RedisConfig struct {
+	Addr     string
+	Password string
+	DB       int
 }
 
 // MongoConfig 定义 MongoDB 连接信息。
@@ -63,6 +71,12 @@ func (serviceConfig *Config) ApplyEnvironment() error {
 	}
 	if mongoDatabase := os.Getenv("SIDEJOB_MONGO_DATABASE"); mongoDatabase != "" {
 		serviceConfig.Mongo.Database = mongoDatabase
+	}
+	if redisAddr := os.Getenv("SIDEJOB_REDIS_ADDR"); redisAddr != "" {
+		serviceConfig.Redis.Addr = redisAddr
+	}
+	if redisPassword := os.Getenv("SIDEJOB_REDIS_PASSWORD"); redisPassword != "" {
+		serviceConfig.Redis.Password = redisPassword
 	}
 	if sessionKeyPath := os.Getenv("SIDEJOB_SESSION_KEY_PATH"); sessionKeyPath != "" {
 		serviceConfig.Xianyu.SessionKeyPath = sessionKeyPath

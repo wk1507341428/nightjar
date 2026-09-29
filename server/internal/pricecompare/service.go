@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"sidejob-server/internal/pinduoduo"
 	"sidejob-server/internal/types"
 	"sidejob-server/internal/xianyu"
 )
@@ -19,8 +18,6 @@ import (
 const (
 	// xianyuPlatform 是闲鱼平台标识。
 	xianyuPlatform = "xianyu"
-	// pinduoduoPlatform 是拼多多平台标识。
-	pinduoduoPlatform = "pinduoduo"
 	// defaultResultLimit 是每个平台默认返回的候选数。
 	defaultResultLimit = 10
 	// maximumResultLimit 限制单平台返回数量，控制页面与上游请求成本。
@@ -39,13 +36,11 @@ type Adapter interface {
 }
 
 // NewService 创建当前可用的比价适配器集合。
-func NewService(xianyuService *xianyu.Service, pinduoduoService *pinduoduo.Service) *Service {
+func NewService(xianyuService *xianyu.Service) *Service {
 	xianyuAdapter := NewXianyuAdapter(xianyuService)
-	pinduoduoAdapter := NewPinduoduoAdapter(pinduoduoService)
 	return &Service{
 		adapters: map[string]Adapter{
-			xianyuAdapter.Platform():    xianyuAdapter,
-			pinduoduoAdapter.Platform(): pinduoduoAdapter,
+			xianyuAdapter.Platform(): xianyuAdapter,
 		},
 	}
 }
@@ -58,7 +53,7 @@ func (service *Service) Compare(
 	// 规范化后的平台清单。
 	platforms := normalizePlatforms(request.Platforms)
 	if len(platforms) == 0 {
-		platforms = []string{xianyuPlatform, pinduoduoPlatform}
+		platforms = []string{xianyuPlatform}
 	}
 	// 限制每个平台返回十条，保证各平台展示一致。
 	request.Filters.MaxResultsPerPlatform = normalizeResultLimit(request.Filters.MaxResultsPerPlatform)
@@ -106,69 +101,6 @@ func (service *Service) Compare(
 		Product:         request.Product,
 		PlatformResults: results,
 		CreatedAt:       time.Now().Format(time.RFC3339),
-	}, nil
-}
-
-// PinduoduoAdapter 将拼多多搜索结果映射为统一候选结构。
-type PinduoduoAdapter struct {
-	pinduoduoService *pinduoduo.Service
-}
-
-// NewPinduoduoAdapter 创建拼多多比价适配器。
-func NewPinduoduoAdapter(pinduoduoService *pinduoduo.Service) *PinduoduoAdapter {
-	return &PinduoduoAdapter{pinduoduoService: pinduoduoService}
-}
-
-// Platform 返回拼多多平台标识。
-func (adapter *PinduoduoAdapter) Platform() string {
-	return pinduoduoPlatform
-}
-
-// Compare 搜索拼多多并转换为统一候选结构。
-func (adapter *PinduoduoAdapter) Compare(
-	ctx context.Context,
-	product types.PriceComparisonProduct,
-	filters types.PriceComparisonFilters,
-) (types.PriceComparisonPlatformResult, error) {
-	keyword := strings.TrimSpace(product.ItemNo)
-	if keyword == "" {
-		keyword = strings.TrimSpace(product.Name)
-	}
-	if keyword == "" {
-		return types.PriceComparisonPlatformResult{}, fmt.Errorf("拼多多比价缺少商品关键词")
-	}
-	remoteItems, err := adapter.pinduoduoService.SearchItems(ctx, pinduoduo.SearchInput{
-		Keyword: keyword,
-		Page:    1,
-		Size:    20,
-	})
-	if err != nil {
-		return types.PriceComparisonPlatformResult{}, err
-	}
-	candidates := make([]types.PriceComparisonCandidate, 0, len(remoteItems))
-	for _, remoteItem := range remoteItems {
-		candidates = append(candidates, types.PriceComparisonCandidate{
-			Platform:       pinduoduoPlatform,
-			PlatformItemID: remoteItem.ChanceID,
-			Title:          remoteItem.Title,
-			PriceCents:     remoteItem.PriceCents,
-			ImageURL:       remoteItem.ImageURL,
-			ItemURL:        remoteItem.ItemURL,
-			MatchScore:     scoreCandidate(product, remoteItem.Title),
-			MatchReason:    matchReason(product, remoteItem.Title),
-			Attributes:     map[string]string{"hotIndex": remoteItem.HotIndex, "priceType": "商家后台参考价"},
-		})
-	}
-	sort.SliceStable(candidates, func(leftIndex, rightIndex int) bool {
-		return candidates[leftIndex].MatchScore > candidates[rightIndex].MatchScore
-	})
-	if len(candidates) > filters.MaxResultsPerPlatform {
-		candidates = candidates[:filters.MaxResultsPerPlatform]
-	}
-	return types.PriceComparisonPlatformResult{
-		Platform:   pinduoduoPlatform,
-		Status:     "completed",
-		Candidates: candidates,
 	}, nil
 }
 

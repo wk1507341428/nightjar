@@ -11,6 +11,7 @@ import (
 	"github.com/zeromicro/go-zero/core/logx"
 
 	"sidejob-server/internal/catalog"
+	"sidejob-server/internal/model"
 	"sidejob-server/internal/svc"
 	"sidejob-server/internal/types"
 )
@@ -99,7 +100,7 @@ func saveCatalogBrandStoreHandler(serviceContext *svc.ServiceContext) http.Handl
 func listCatalogOffersHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
 		query := request.URL.Query()
-		result, err := serviceContext.CatalogService.ListOffers(request.Context(), strings.TrimSpace(query.Get("regionId")), strings.TrimSpace(query.Get("brandStoreId")), strings.TrimSpace(query.Get("categoryId")), strings.TrimSpace(query.Get("keyword")), parsePositiveInt(query.Get("page"), 1), parsePositiveInt(query.Get("pageSize"), 24), query.Get("stockOnly") != "false", strings.TrimSpace(query.Get("sort")))
+		result, err := serviceContext.CatalogService.ListOffers(request.Context(), strings.TrimSpace(query.Get("accountId")), strings.TrimSpace(query.Get("regionId")), strings.TrimSpace(query.Get("brandStoreId")), strings.TrimSpace(query.Get("categoryId")), strings.TrimSpace(query.Get("keyword")), parsePositiveInt(query.Get("page"), 1), parsePositiveInt(query.Get("pageSize"), 24), query.Get("stockOnly") != "false", strings.TrimSpace(query.Get("sort")))
 		if err != nil {
 			logx.Errorf("list catalog offers: %v", err)
 			writeError(responseWriter, http.StatusInternalServerError, "读取本地商品库失败")
@@ -223,7 +224,11 @@ func listCatalogSyncChangesHandler(serviceContext *svc.ServiceContext) http.Hand
 		for _, change := range changes {
 			itemNos = append(itemNos, change.ItemNo)
 		}
-		listings, err := serviceContext.ListingRepository.ListByItemNos(request.Context(), "xianyu", itemNos)
+		accountID := strings.TrimSpace(query.Get("accountId"))
+		if accountID == "" {
+			accountID = model.DefaultXianyuAccountID
+		}
+		listings, err := serviceContext.ListingRepository.ListByItemNos(request.Context(), accountID, "xianyu", itemNos)
 		if err != nil {
 			logx.Errorf("list xianyu listings for sync changes: %v", err)
 			writeError(responseWriter, http.StatusInternalServerError, "读取闲鱼在售状态失败")

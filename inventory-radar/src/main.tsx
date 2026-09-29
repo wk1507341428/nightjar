@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { App } from './App';
+import { XianyuAccountProvider } from './XianyuAccountContext';
 import 'antd/dist/reset.css';
 import './styles.css';
 import './admin-theme.css';
@@ -54,7 +55,7 @@ createRoot(rootElement).render(
         },
       }}
     >
-      <App />
+      <XianyuAccountProvider><App /></XianyuAccountProvider>
     </ConfigProvider>
   </StrictMode>,
 );

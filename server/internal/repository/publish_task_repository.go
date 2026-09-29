@@ -30,7 +30,7 @@ func NewPublishTaskRepository(database *mongo.Database) *PublishTaskRepository {
 func (repository *PublishTaskRepository) EnsureIndexes(ctx context.Context) error {
 	_, err := repository.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "createdAt", Value: -1}}},
-		{Keys: bson.D{{Key: "itemNo", Value: 1}}},
+		{Keys: bson.D{{Key: "accountId", Value: 1}, {Key: "itemNo", Value: 1}}},
 		{Keys: bson.D{{Key: "batchId", Value: 1}, {Key: "createdAt", Value: 1}}},
 	})
 	return err
@@ -49,12 +49,16 @@ func (repository *PublishTaskRepository) ListByBatchID(ctx context.Context, batc
 }
 
 // ExistingItemNos 返回当前正在排队或发布中的货号集合。
-func (repository *PublishTaskRepository) ExistingItemNos(ctx context.Context, itemNos []string) (map[string]struct{}, error) {
+func (repository *PublishTaskRepository) ExistingItemNos(ctx context.Context, accountID string, itemNos []string) (map[string]struct{}, error) {
 	result := make(map[string]struct{})
 	if len(itemNos) == 0 {
 		return result, nil
 	}
-	cursor, err := repository.collection.Find(ctx, bson.M{"itemNo": bson.M{"$in": itemNos}, "status": bson.M{"$in": bson.A{model.PublishTaskQueued, model.PublishTaskPreparing, model.PublishTaskPublishing}}}, options.Find().SetProjection(bson.M{"itemNo": 1}))
+	accountFilter := bson.A{bson.M{"accountId": accountID}}
+	if accountID == model.DefaultXianyuAccountID {
+		accountFilter = append(accountFilter, bson.M{"accountId": bson.M{"$exists": false}})
+	}
+	cursor, err := repository.collection.Find(ctx, bson.M{"$or": accountFilter, "itemNo": bson.M{"$in": itemNos}, "status": bson.M{"$in": bson.A{model.PublishTaskQueued, model.PublishTaskPreparing, model.PublishTaskPublishing}}}, options.Find().SetProjection(bson.M{"itemNo": 1}))
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +75,9 @@ func (repository *PublishTaskRepository) ExistingItemNos(ctx context.Context, it
 
 // Create 新建发布任务。
 func (repository *PublishTaskRepository) Create(ctx context.Context, task model.PublishTask) error {
+	if task.AccountID == "" {
+		task.AccountID = model.DefaultXianyuAccountID
+	}
 	_, err := repository.collection.InsertOne(ctx, task)
 	return err
 }
@@ -101,10 +108,14 @@ func (repository *PublishTaskRepository) Get(ctx context.Context, taskID string)
 }
 
 // List 返回最近创建的发布任务。
-func (repository *PublishTaskRepository) List(ctx context.Context, limit int64) ([]model.PublishTask, error) {
+func (repository *PublishTaskRepository) List(ctx context.Context, accountID string, limit int64) ([]model.PublishTask, error) {
+	filter := bson.M{}
+	if accountID != "" {
+		filter["accountId"] = accountID
+	}
 	cursor, err := repository.collection.Find(
 		ctx,
-		bson.M{},
+		filter,
 		options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}}).SetLimit(limit),
 	)
 	if err != nil {
@@ -140,15 +151,18 @@ func (repository *PublishTaskRepository) FailInterruptedTasks(ctx context.Contex
 // FindByXianyuItemIDs 查询已记录闲鱼商品 ID 的发布任务。
 func (repository *PublishTaskRepository) FindByXianyuItemIDs(
 	ctx context.Context,
+	accountID string,
 	itemIDs []string,
 ) ([]model.PublishTask, error) {
 	if len(itemIDs) == 0 {
 		return []model.PublishTask{}, nil
 	}
 
-	cursor, err := repository.collection.Find(ctx, bson.M{
-		"xianyuItemId": bson.M{"$in": itemIDs},
-	})
+	accountFilter := bson.A{bson.M{"accountId": accountID}}
+	if accountID == model.DefaultXianyuAccountID {
+		accountFilter = append(accountFilter, bson.M{"accountId": bson.M{"$exists": false}})
+	}
+	cursor, err := repository.collection.Find(ctx, bson.M{"$or": accountFilter, "xianyuItemId": bson.M{"$in": itemIDs}})
 	if err != nil {
 		return nil, err
 	}
@@ -204,6 +218,15 @@ func (repository *PublishTaskRepository) UpdateStatus(
 		return ErrPublishTaskNotFound
 	}
 	return nil
+}
+
+// CancelByBatchID 取消批次中尚未执行的任务。
+func (repository *PublishTaskRepository) CancelByBatchID(ctx context.Context, batchID string) (int64, error) {
+	result, err := repository.collection.UpdateMany(ctx, bson.M{"batchId": batchID, "status": bson.M{"$in": bson.A{model.PublishTaskQueued, model.PublishTaskPreparing}}}, bson.M{"$set": bson.M{"status": model.PublishTaskFailed, "errorMessage": "用户取消队列，未执行", "cancelledAt": time.Now(), "updatedAt": time.Now()}})
+	if err != nil {
+		return 0, err
+	}
+	return result.ModifiedCount, nil
 }
 
 // UpdateContent 更新重试前重新生成的发布内容。

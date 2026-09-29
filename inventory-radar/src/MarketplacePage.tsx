@@ -1,6 +1,7 @@
 import { Button, Tag } from 'antd';
 import { ProCard, ProTable, type ProColumns } from '@ant-design/pro-components';
 import type { MarketplaceListing } from './types';
+import { useXianyuAccount } from './XianyuAccountContext';
 
 /** 人民币金额格式化器。 */
 const MARKETPLACE_CURRENCY_FORMATTER = new Intl.NumberFormat('zh-CN', {
@@ -47,6 +48,8 @@ export function MarketplacePage({
   onBack: () => void;
   onRefresh: () => void;
 }) {
+  // 当前渠道列表所属账号。
+  const { currentAccount } = useXianyuAccount();
   // 渠道商品列：保留货号、售价、同步时间和原平台跳转。
   const listingColumns: ProColumns<MarketplaceListing>[] = [
     { title: '商品', dataIndex: 'title', width: 460, render: (_, listing) => <div className="marketplace-product-cell">{listing.imageUrl ? <img src={listing.imageUrl} alt="" loading="lazy" /> : <span>闲</span>}<div><strong>{listing.title}</strong><small>{listing.itemNo || '未关联货号'}</small></div></div> },
@@ -58,7 +61,7 @@ export function MarketplacePage({
 
   return (
     <main className="marketplace-page">
-      <header className="workspace-page-heading"><div><span className="workspace-eyebrow">MARKETPLACE / LISTINGS</span><h1>渠道上架</h1><p>集中查看闲鱼当前在售商品，避免重复发布。</p></div><div className="workspace-page-actions"><Button onClick={onBack}>返回选品仓</Button><Button type="primary" onClick={onRefresh} loading={isLoading}>同步闲鱼状态</Button></div></header>
+      <header className="workspace-page-heading"><div><span className="workspace-eyebrow">MARKETPLACE / LISTINGS</span><h1>渠道上架</h1><p>当前账号：{currentAccount?.name ?? '未选择账号'} · 在售快照与下架操作按账号隔离。</p></div><div className="workspace-page-actions"><Button onClick={onBack}>返回选品仓</Button><Button type="primary" disabled={!currentAccount?.sellerConnected || currentAccount.status !== 'active'} onClick={onRefresh} loading={isLoading}>同步闲鱼状态</Button></div></header>
       <div className="workspace-overview marketplace-overview"><ProCard className="workspace-overview-card"><small>闲鱼在售</small><strong>{listings.length.toLocaleString('zh-CN')}</strong><span>已同步商品</span></ProCard><ProCard className="workspace-overview-card"><small>最近同步</small><strong className="workspace-overview-card__date">{formatMarketplaceDate(lastSyncedAt)}</strong><span>点击右上角可手动刷新</span></ProCard></div>
       <div className="marketplace-channel-tabs" aria-label="销售渠道"><Tag color="gold">闲鱼 · {listings.length}</Tag></div>
       {errorMessage ? <div className="notice notice--error">{errorMessage}</div> : null}

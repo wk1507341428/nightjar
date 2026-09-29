@@ -4,10 +4,10 @@ FROM golang:1.23-alpine AS builder
 WORKDIR /src
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN GOPROXY=https://goproxy.cn,direct go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/sidejob-api .
+RUN GOPROXY=https://goproxy.cn,direct CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/sidejob-api .
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata
@@ -19,4 +19,3 @@ COPY etc/sidejob-api.yaml /app/etc/sidejob-api.yaml
 
 EXPOSE 9800
 ENTRYPOINT ["/app/sidejob-api", "-f", "/app/etc/sidejob-api.yaml"]
-

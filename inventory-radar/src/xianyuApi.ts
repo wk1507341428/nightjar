@@ -1,5 +1,5 @@
 import { SIDEJOB_API_BASE_URL } from './constants';
-import type { CreatePriceComparisonRequest, CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceOfflineResponse, MarketplaceSyncResponse, PinduoduoCredential, PlatformConnection, PriceComparisonResponse, PublishBatch, PublishBatchPreview, PublishBatchSettings, PublishOperationListResponse, PublishTask, XianyuConnection } from './types';
+import type { BrandCategory, CreatePriceComparisonRequest, CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceOfflineResponse, MarketplaceSyncResponse, OfflineCenterFilters, OfflineCenterPreview, PriceComparisonResponse, PublishBatch, PublishBatchPreview, PublishBatchSettings, PublishOperationListResponse, PublishTask, XianyuAccount, XianyuAccountListResponse, XianyuConnection } from './types';
 
 /** 解析本地服务 JSON 响应并提取错误信息。 */
 async function requestSideJob<ResponseType>(path: string, init?: RequestInit): Promise<ResponseType> {
@@ -60,24 +60,34 @@ export function disconnectXianyuSeller(): Promise<XianyuConnection> {
   });
 }
 
-/** 查询拼多多连接状态。 */
-export function fetchPinduoduoConnection(): Promise<PlatformConnection> {
-  return requestSideJob<PlatformConnection>('/pinduoduo/connection');
+/** 查询全部闲鱼账号。 */
+export function fetchXianyuAccounts(): Promise<XianyuAccountListResponse> {
+  return requestSideJob<XianyuAccountListResponse>('/xianyu/accounts');
 }
 
-/** 校验并保存拼多多商家后台 cURL 或 Cookie。 */
-export function connectPinduoduo(credential: PinduoduoCredential): Promise<PlatformConnection> {
-  return requestSideJob<PlatformConnection>('/pinduoduo/session', {
-    method: 'POST',
-    body: JSON.stringify(credential),
-  });
+/** 新建闲鱼账号槽位。 */
+export function createXianyuAccount(name: string): Promise<XianyuAccount> {
+  return requestSideJob<XianyuAccount>('/xianyu/accounts', { method: 'POST', body: JSON.stringify({ name }) });
 }
 
-/** 删除本地保存的拼多多凭证。 */
-export function disconnectPinduoduo(): Promise<PlatformConnection> {
-  return requestSideJob<PlatformConnection>('/pinduoduo/session', {
-    method: 'DELETE',
-  });
+/** 更新账号备注或运行状态。 */
+export function updateXianyuAccount(accountId: string, update: { name?: string; status?: XianyuAccount['status'] }): Promise<XianyuAccount> {
+  return requestSideJob<XianyuAccount>(`/xianyu/accounts/${encodeURIComponent(accountId)}`, { method: 'PATCH', body: JSON.stringify(update) });
+}
+
+/** 保存指定账号的一类闲鱼凭证。 */
+export function connectXianyuAccount(accountId: string, kind: 'session' | 'seller', credential: string): Promise<XianyuAccount> {
+  return requestSideJob<XianyuAccount>(`/xianyu/accounts/${encodeURIComponent(accountId)}/sessions/${kind}`, { method: 'PUT', body: JSON.stringify({ credential }) });
+}
+
+/** 断开指定账号的一类闲鱼凭证。 */
+export function disconnectXianyuAccount(accountId: string, kind: 'session' | 'seller'): Promise<XianyuAccount> {
+  return requestSideJob<XianyuAccount>(`/xianyu/accounts/${encodeURIComponent(accountId)}/sessions/${kind}`, { method: 'DELETE' });
+}
+
+/** 实时验证指定闲鱼账号连接。 */
+export function verifyXianyuAccount(accountId: string): Promise<XianyuAccount> {
+  return requestSideJob<XianyuAccount>(`/xianyu/accounts/${encodeURIComponent(accountId)}/verify`, { method: 'POST' });
 }
 
 /** 创建闲鱼发布任务。 */
@@ -124,13 +134,35 @@ export function fetchPublishBatch(batchId: string): Promise<PublishBatch> {
 }
 
 /** 读取发布中心操作记录。 */
-export function fetchPublishOperations(page = 1, pageSize = 20): Promise<PublishOperationListResponse> {
-  return requestSideJob<PublishOperationListResponse>(`/xianyu/publish-operations?page=${page}&pageSize=${pageSize}`);
+export function fetchPublishOperations(page = 1, pageSize = 20, accountId = ''): Promise<PublishOperationListResponse> {
+  const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+  if (accountId) query.set('accountId', accountId);
+  return requestSideJob<PublishOperationListResponse>(`/xianyu/publish-operations?${query.toString()}`);
 }
 
 /** 读取一条发布操作及任务明细。 */
 export function fetchPublishOperation(operationId: string): Promise<PublishBatch> {
   return requestSideJob<PublishBatch>(`/xianyu/publish-operations/${encodeURIComponent(operationId)}`);
+}
+
+/** 取消一个正在运行的发布队列。 */
+export function cancelPublishOperation(operationId: string): Promise<{ id: string; status: string; message: string }> {
+  return requestSideJob<{ id: string; status: string; message: string }>(`/xianyu/publish-operations/${encodeURIComponent(operationId)}/cancel`, { method: 'POST' });
+}
+
+/** 读取合并品牌覆盖的全部小程序品类。 */
+export function fetchOfflineCenterCategories(brandProfileId: string): Promise<BrandCategory[]> {
+  return requestSideJob<BrandCategory[]>(`/catalog/brand-profiles/${encodeURIComponent(brandProfileId)}/categories`);
+}
+
+/** 读取当前账号满足条件的闲鱼下架候选商品。 */
+export function previewOfflineCenter(filters: OfflineCenterFilters): Promise<OfflineCenterPreview> {
+  return requestSideJob<OfflineCenterPreview>('/xianyu/offline-center/preview', { method: 'POST', body: JSON.stringify(filters) });
+}
+
+/** 把下架中心已选商品加入当前账号队列。 */
+export function createOfflineCenterOperation(request: { accountId: string; brandProfileId?: string; regionId?: string; distributorId?: string; brandName?: string; categoryIds?: string[]; categoryNames?: string[]; platformItemIds: string[] }): Promise<PublishBatch> {
+  return requestSideJob<PublishBatch>('/xianyu/offline-center/operations', { method: 'POST', body: JSON.stringify(request) });
 }
 
 /** 预览准备追加到发布中心的品牌任务。 */
@@ -139,7 +171,7 @@ export async function previewPublishOperation(brandStoreId: string, settings: Pu
   let result = await requestSideJob<PublishBatchPreview & { status?: string }>('/xianyu/publish-operations/preview', { method: 'POST', body: JSON.stringify({ brandStoreId, ...settings, previewId: undefined }) });
   while (result.status === 'preparing') {
     await new Promise((resolve) => window.setTimeout(resolve, 2000));
-    result = await requestSideJob<PublishBatchPreview & { status?: string }>('/xianyu/publish-operations/preview', { method: 'POST', body: JSON.stringify({ previewId: result.previewId }) });
+    result = await requestSideJob<PublishBatchPreview & { status?: string }>('/xianyu/publish-operations/preview', { method: 'POST', body: JSON.stringify({ accountId: settings.accountId, previewId: result.previewId }) });
   }
   return result;
 }
@@ -150,17 +182,19 @@ export function appendPublishOperation(brandStoreId: string, settings: PublishBa
 }
 
 /** 同步后自动对账的历史记录。 */
-export interface ReconcilePlanRecord { id: string; status: string; brandName: string; error?: string; updates: number; offline: number; createdAt: string; request: PublishBatchSettings }
+export interface ReconcilePlanRecord { id: string; accountId: string; status: string; brandName: string; error?: string; updates: number; offline: number; createdAt: string; request: PublishBatchSettings }
 
 /** 读取同步后生成的待确认对账记录。 */
-export async function fetchReconcileOverview() {
-  return requestSideJob<ReconcilePlanRecord[]>('/xianyu/reconcile-plans');
+export async function fetchReconcileOverview(accountId = '') {
+  const query = accountId ? `?accountId=${encodeURIComponent(accountId)}` : '';
+  return requestSideJob<ReconcilePlanRecord[]>(`/xianyu/reconcile-plans${query}`);
 }
 
 
 /** 查询指定渠道当前在售商品。 */
-export function fetchMarketplaceListings(platform = 'xianyu', itemNos: string[] = []): Promise<MarketplaceListingListResponse> {
+export function fetchMarketplaceListings(platform = 'xianyu', itemNos: string[] = [], accountId = ''): Promise<MarketplaceListingListResponse> {
   const query = new URLSearchParams({ platform });
+  if (accountId) query.set('accountId', accountId);
   if (itemNos.length > 0) {
     query.set('itemNos', itemNos.join(','));
   }
@@ -170,16 +204,19 @@ export function fetchMarketplaceListings(platform = 'xianyu', itemNos: string[] 
 }
 
 /** 手动同步指定渠道当前在售商品。 */
-export function syncMarketplaceListings(platform = 'xianyu'): Promise<MarketplaceSyncResponse> {
+export function syncMarketplaceListings(platform = 'xianyu', accountId = ''): Promise<MarketplaceSyncResponse> {
+  const query = new URLSearchParams({ platform });
+  if (accountId) query.set('accountId', accountId);
   return requestSideJob<MarketplaceSyncResponse>(
-    `/marketplace/sync?platform=${encodeURIComponent(platform)}`,
+    `/marketplace/sync?${query.toString()}`,
     { method: 'POST' },
   );
 }
 
 /** 下架一个或多个当前闲鱼在售商品。 */
-export function offlineMarketplaceListings(itemIds: string[]): Promise<MarketplaceOfflineResponse> {
-  return requestSideJob<MarketplaceOfflineResponse>('/marketplace/listings/offline', {
+export function offlineMarketplaceListings(itemIds: string[], accountId = ''): Promise<MarketplaceOfflineResponse> {
+  const query = accountId ? `?accountId=${encodeURIComponent(accountId)}` : '';
+  return requestSideJob<MarketplaceOfflineResponse>(`/marketplace/listings/offline${query}`, {
     method: 'POST',
     body: JSON.stringify({ itemIds }),
   });

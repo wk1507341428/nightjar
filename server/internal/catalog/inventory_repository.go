@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -88,6 +89,23 @@ type CatalogOffer struct {
 	InactiveAt      *time.Time     `bson:"inactiveAt,omitempty" json:"inactiveAt,omitempty"`
 }
 
+// SKUCategoryBinding 保存一个货号在品牌门店、地区和品类下的历史归属。
+type SKUCategoryBinding struct {
+	ID               string    `bson:"_id" json:"id"`
+	ItemNo           string    `bson:"itemNo" json:"itemNo"`
+	BrandProfileID   string    `bson:"brandProfileId,omitempty" json:"brandProfileId,omitempty"`
+	BrandStoreID     string    `bson:"brandStoreId" json:"brandStoreId"`
+	BrandName        string    `bson:"brandName,omitempty" json:"brandName,omitempty"`
+	RegionID         string    `bson:"regionId" json:"regionId"`
+	DistributorID    string    `bson:"distributorId" json:"distributorId"`
+	SourceItemID     string    `bson:"sourceItemId,omitempty" json:"sourceItemId,omitempty"`
+	CategoryID       string    `bson:"categoryId,omitempty" json:"categoryId,omitempty"`
+	CategoryName     string    `bson:"categoryName,omitempty" json:"categoryName,omitempty"`
+	MarketPriceCents int64     `bson:"marketPriceCents,omitempty" json:"marketPriceCents,omitempty"`
+	FirstSeenAt      time.Time `bson:"firstSeenAt" json:"firstSeenAt"`
+	LastSeenAt       time.Time `bson:"lastSeenAt" json:"lastSeenAt"`
+}
+
 // SKUPriceSnapshot 保存一个商品 SKU 在某次同步观察到的价格。
 type SKUPriceSnapshot struct {
 	ID                 string    `bson:"_id" json:"id"`
@@ -169,6 +187,7 @@ type InventoryRepository struct {
 	syncRuns            *mongo.Collection
 	priceHistory        *mongo.Collection
 	syncChanges         *mongo.Collection
+	skuCategoryBindings *mongo.Collection
 }
 
 // NewInventoryRepository 创建本地商品库仓储。
@@ -183,6 +202,7 @@ func NewInventoryRepository(database *mongo.Database) *InventoryRepository {
 		syncRuns:            database.Collection("catalog_sync_runs"),
 		priceHistory:        database.Collection("catalog_sku_price_history"),
 		syncChanges:         database.Collection("catalog_sync_changes"),
+		skuCategoryBindings: database.Collection("catalog_sku_category_bindings"),
 	}
 }
 
@@ -201,6 +221,7 @@ func (repository *InventoryRepository) EnsureIndexes(ctx context.Context) error 
 		{repository.syncRuns, []mongo.IndexModel{{Keys: bson.D{{Key: "startedAt", Value: -1}}}, {Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "startedAt", Value: -1}}}}},
 		{repository.priceHistory, []mongo.IndexModel{{Keys: bson.D{{Key: "offerId", Value: 1}, {Key: "skuId", Value: 1}, {Key: "observedAt", Value: 1}}}, {Keys: bson.D{{Key: "itemNo", Value: 1}, {Key: "observedAt", Value: -1}}}}},
 		{repository.syncChanges, []mongo.IndexModel{{Keys: bson.D{{Key: "runId", Value: 1}, {Key: "changedAt", Value: -1}}}, {Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "changedAt", Value: -1}}}, {Keys: bson.D{{Key: "itemNo", Value: 1}, {Key: "changeType", Value: 1}}}}},
+		{repository.skuCategoryBindings, []mongo.IndexModel{{Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "itemNo", Value: 1}, {Key: "sourceItemId", Value: 1}, {Key: "categoryId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "brandProfileId", Value: 1}, {Key: "categoryId", Value: 1}, {Key: "itemNo", Value: 1}}}, {Keys: bson.D{{Key: "itemNo", Value: 1}, {Key: "lastSeenAt", Value: -1}}}}},
 	}
 	for _, indexGroup := range indexGroups {
 		if _, err := indexGroup.collection.Indexes().CreateMany(ctx, indexGroup.models); err != nil {
@@ -208,6 +229,82 @@ func (repository *InventoryRepository) EnsureIndexes(ctx context.Context) error 
 		}
 	}
 	return nil
+}
+
+// FindBrandProfileIDByMember 返回一个地区品牌门店所属的合并品牌档案。
+func (repository *InventoryRepository) FindBrandProfileIDByMember(ctx context.Context, regionID, distributorID string) (string, error) {
+	var member BrandProfileMember
+	err := repository.brandProfileMembers.FindOne(ctx, bson.M{"regionId": regionID, "distributorId": distributorID}).Decode(&member)
+	if err == mongo.ErrNoDocuments {
+		return "", nil
+	}
+	return member.ProfileID, err
+}
+
+// UpsertSKUCategoryBinding 保存一条可重复刷新、不会因商品消失而删除的 SKU 品类归属。
+func (repository *InventoryRepository) UpsertSKUCategoryBinding(ctx context.Context, binding SKUCategoryBinding) error {
+	binding.ItemNo = strings.ToUpper(strings.TrimSpace(binding.ItemNo))
+	if binding.ItemNo == "" || binding.BrandStoreID == "" {
+		return nil
+	}
+	if binding.ID == "" {
+		binding.ID = hashID(binding.BrandStoreID, binding.ItemNo, binding.SourceItemID, binding.CategoryID)
+	}
+	if binding.FirstSeenAt.IsZero() {
+		binding.FirstSeenAt = binding.LastSeenAt
+	}
+	setFields := bson.M{
+		"itemNo": binding.ItemNo, "brandStoreId": binding.BrandStoreID,
+		"brandName": binding.BrandName, "regionId": binding.RegionID, "distributorId": binding.DistributorID,
+		"sourceItemId": binding.SourceItemID, "categoryId": binding.CategoryID, "categoryName": binding.CategoryName,
+		"marketPriceCents": binding.MarketPriceCents, "lastSeenAt": binding.LastSeenAt,
+	}
+	if binding.BrandProfileID != "" {
+		setFields["brandProfileId"] = binding.BrandProfileID
+	}
+	_, err := repository.skuCategoryBindings.UpdateOne(ctx, bson.M{"_id": binding.ID}, bson.M{
+		"$set":         setFields,
+		"$setOnInsert": bson.M{"firstSeenAt": binding.FirstSeenAt},
+	}, options.Update().SetUpsert(true))
+	return err
+}
+
+// ListSKUCategoryBindings 返回一个合并品牌及可选品类覆盖的历史 SKU 归属。
+func (repository *InventoryRepository) ListSKUCategoryBindings(ctx context.Context, profileID string, brandStoreIDs, categoryIDs []string) ([]SKUCategoryBinding, error) {
+	filter := bson.M{"brandStoreId": bson.M{"$in": brandStoreIDs}}
+	if profileID != "" {
+		filter = bson.M{"$or": bson.A{bson.M{"brandProfileId": profileID}, bson.M{"brandStoreId": bson.M{"$in": brandStoreIDs}}}}
+	}
+	if len(categoryIDs) > 0 {
+		filter["categoryId"] = bson.M{"$in": categoryIDs}
+	}
+	cursor, err := repository.skuCategoryBindings.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "lastSeenAt", Value: -1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	bindings := make([]SKUCategoryBinding, 0)
+	if err := cursor.All(ctx, &bindings); err != nil {
+		return nil, err
+	}
+	return bindings, nil
+}
+
+// ListOffersByBrandStores 返回指定品牌成员的当前及历史商品，用于首次补齐 SKU 品类归属。
+func (repository *InventoryRepository) ListOffersByBrandStores(ctx context.Context, brandStoreIDs []string) ([]CatalogOffer, error) {
+	if len(brandStoreIDs) == 0 {
+		return []CatalogOffer{}, nil
+	}
+	cursor, err := repository.offers.Find(ctx, bson.M{"brandStoreId": bson.M{"$in": brandStoreIDs}}, options.Find().SetSort(bson.D{{Key: "lastSeenAt", Value: -1}}))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	offers := make([]CatalogOffer, 0)
+	if err := cursor.All(ctx, &offers); err != nil {
+		return nil, err
+	}
+	return offers, nil
 }
 
 // InsertSyncChanges 批量保存同步变更明细。

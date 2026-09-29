@@ -32,40 +32,50 @@ const (
 	defaultMaxPublishDelaySeconds = 2
 	publishQueueCapacity          = 3000
 	publishRecoveryLimit          = 3000
+	maxConcurrentAccounts         = 2
 )
 
 // Service 串行消费闲鱼发布任务，避免账号接口并发触发风控。
 type Service struct {
-	PrepareRetry     func(context.Context, model.PublishTask) (model.PublishTask, error)
-	RefreshReconcile func(context.Context, model.PublishTask) (model.PublishTask, error)
-	repository       *repository.PublishTaskRepository
-	xianyuService    *xianyu.Service
-	marketplace      *marketplace.Service
-	httpClient       *http.Client
-	queue            chan string
-	startOnce        sync.Once
-	runtimeContext   context.Context
+	PrepareRetry        func(context.Context, model.PublishTask) (model.PublishTask, error)
+	PrepareOfflineBatch func(context.Context, []model.PublishTask) map[string]error
+	RefreshReconcile    func(context.Context, model.PublishTask) (model.PublishTask, error)
+	repository          *repository.PublishTaskRepository
+	accountRepository   *repository.XianyuAccountRepository
+	xianyuService       *xianyu.Service
+	marketplace         *marketplace.Service
+	httpClient          *http.Client
+	queue               chan string
+	accountQueues       map[string]chan string
+	accountQueueMutex   sync.Mutex
+	globalSlots         chan struct{}
+	startOnce           sync.Once
+	runtimeContext      context.Context
 }
 
 // NewService 创建发布任务服务并恢复排队记录，依赖就绪后由 Start 启动消费。
 func NewService(
 	runtimeContext context.Context,
 	taskRepository *repository.PublishTaskRepository,
+	accountRepository *repository.XianyuAccountRepository,
 	xianyuService *xianyu.Service,
 	marketplaceService *marketplace.Service,
 ) *Service {
 	service := &Service{
-		runtimeContext: runtimeContext,
-		repository:     taskRepository,
-		xianyuService:  xianyuService,
-		marketplace:    marketplaceService,
+		runtimeContext:    runtimeContext,
+		repository:        taskRepository,
+		accountRepository: accountRepository,
+		xianyuService:     xianyuService,
+		marketplace:       marketplaceService,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(request *http.Request, _ []*http.Request) error {
 				return validatePublicImageURL(request.URL.String())
 			},
 		},
-		queue: make(chan string, publishQueueCapacity),
+		queue:         make(chan string, publishQueueCapacity),
+		accountQueues: make(map[string]chan string),
+		globalSlots:   make(chan struct{}, maxConcurrentAccounts),
 	}
 	service.restoreQueue(runtimeContext)
 	return service
@@ -104,7 +114,7 @@ func (service *Service) Enqueue(taskID string) error {
 	}
 }
 
-// run 串行处理队列中的发布任务。
+// run 把任务分发给对应账号的串行 worker。
 func (service *Service) run(runtimeContext context.Context) {
 	for {
 		select {
@@ -116,10 +126,214 @@ func (service *Service) run(runtimeContext context.Context) {
 				logx.Errorf("load publish task %s: %v", taskID, err)
 				continue
 			}
-			service.processTask(runtimeContext, task)
-			if !waitForNextPublish(runtimeContext, task.MinDelaySeconds, task.MaxDelaySeconds) {
+			accountID := task.AccountID
+			if accountID == "" {
+				accountID = model.DefaultXianyuAccountID
+			}
+			select {
+			case service.queueForAccount(runtimeContext, accountID) <- taskID:
+			case <-runtimeContext.Done():
 				return
 			}
+		}
+	}
+}
+
+// queueForAccount 返回账号独立的串行任务通道。
+func (service *Service) queueForAccount(runtimeContext context.Context, accountID string) chan string {
+	service.accountQueueMutex.Lock()
+	defer service.accountQueueMutex.Unlock()
+	accountQueue := service.accountQueues[accountID]
+	if accountQueue == nil {
+		accountQueue = make(chan string, publishQueueCapacity)
+		service.accountQueues[accountID] = accountQueue
+		go service.runAccount(runtimeContext, accountID, accountQueue)
+	}
+	return accountQueue
+}
+
+// runAccount 串行执行一个账号的任务，不阻塞其他账号。
+func (service *Service) runAccount(runtimeContext context.Context, accountID string, accountQueue <-chan string) {
+	// 暂存被批量收集器提前读出的非下架任务，保持原队列顺序。
+	pendingTasks := make([]model.PublishTask, 0)
+	for {
+		var task model.PublishTask
+		if len(pendingTasks) > 0 {
+			task = pendingTasks[0]
+			pendingTasks = pendingTasks[1:]
+		} else {
+			select {
+			case <-runtimeContext.Done():
+				return
+			case taskID := <-accountQueue:
+				loadedTask, err := service.repository.Get(runtimeContext, taskID)
+				if err != nil {
+					logx.Errorf("load publish task %s: %v", taskID, err)
+					continue
+				}
+				task = loadedTask
+			}
+		}
+		if !service.waitForAccount(runtimeContext, accountID) {
+			return
+		}
+
+		// 扫描当前账号队列，把下架任务集中出来，修改任务暂存到队列头部。
+		offlineTasks := make([]model.PublishTask, 0, 100)
+		nonOfflineTasks := make([]model.PublishTask, 0)
+		if task.Action == "offline" {
+			offlineTasks = append(offlineTasks, task)
+		} else {
+			nonOfflineTasks = append(nonOfflineTasks, task)
+		}
+		for scannedCount := 0; scannedCount < publishQueueCapacity && len(offlineTasks) < 100; scannedCount++ {
+			select {
+			case nextTaskID := <-accountQueue:
+				nextTask, nextErr := service.repository.Get(runtimeContext, nextTaskID)
+				if nextErr != nil {
+					continue
+				}
+				if nextTask.Action == "offline" {
+					offlineTasks = append(offlineTasks, nextTask)
+				} else {
+					nonOfflineTasks = append(nonOfflineTasks, nextTask)
+				}
+			default:
+				goto accountQueueScanned
+			}
+		}
+	accountQueueScanned:
+		if len(offlineTasks) > 0 {
+			pendingTasks = append(nonOfflineTasks, pendingTasks...)
+			select {
+			case service.globalSlots <- struct{}{}:
+				service.processOfflineBatch(runtimeContext, offlineTasks)
+				<-service.globalSlots
+			case <-runtimeContext.Done():
+				return
+			}
+			if !waitForNextPublish(runtimeContext, offlineTasks[0].MinDelaySeconds, offlineTasks[0].MaxDelaySeconds) {
+				return
+			}
+			continue
+		}
+		if len(nonOfflineTasks) > 1 {
+			pendingTasks = append(nonOfflineTasks[1:], pendingTasks...)
+		}
+
+		select {
+		case service.globalSlots <- struct{}{}:
+			service.processTask(runtimeContext, task)
+			<-service.globalSlots
+		case <-runtimeContext.Done():
+			return
+		}
+		if !waitForNextPublish(runtimeContext, task.MinDelaySeconds, task.MaxDelaySeconds) {
+			return
+		}
+	}
+}
+
+// processOfflineBatch 使用闲鱼批量下架接口处理一组连续的下架任务。
+func (service *Service) processOfflineBatch(runtimeContext context.Context, tasks []model.PublishTask) {
+	if len(tasks) == 0 {
+		return
+	}
+	itemIDs := make([]string, 0, len(tasks))
+	tasksByItemID := make(map[string]model.PublishTask, len(tasks))
+	for _, task := range tasks {
+		_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskPublishing, "", "", "")
+		itemIDs = append(itemIDs, task.XianyuItemID)
+		tasksByItemID[task.XianyuItemID] = task
+	}
+	accountID := tasks[0].AccountID
+	hasRetryRequested := false
+	for _, task := range tasks {
+		if task.RetryRequested {
+			hasRetryRequested = true
+			break
+		}
+	}
+	if hasRetryRequested && service.PrepareOfflineBatch != nil {
+		checkResults := service.PrepareOfflineBatch(runtimeContext, tasks)
+		eligibleTasks := make([]model.PublishTask, 0, len(tasks))
+		for _, task := range tasks {
+			if !task.RetryRequested {
+				eligibleTasks = append(eligibleTasks, task)
+				continue
+			}
+			if checkErr := checkResults[task.ID]; checkErr != nil {
+				_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskFailed, checkErr.Error(), "", "")
+				continue
+			}
+			_ = service.repository.FinishRetryPreparation(runtimeContext, task)
+			eligibleTasks = append(eligibleTasks, task)
+		}
+		tasks = eligibleTasks
+		if len(tasks) == 0 {
+			return
+		}
+		itemIDs = itemIDs[:0]
+		tasksByItemID = make(map[string]model.PublishTask, len(tasks))
+		for _, task := range tasks {
+			itemIDs = append(itemIDs, task.XianyuItemID)
+			tasksByItemID[task.XianyuItemID] = task
+		}
+	}
+	result, err := service.marketplace.OfflineXianyuListings(runtimeContext, accountID, itemIDs)
+	if err != nil {
+		if errors.Is(err, xianyu.ErrSessionExpired) {
+			if account, accountErr := service.accountRepository.Get(runtimeContext, accountID); accountErr == nil {
+				_ = service.accountRepository.UpdateConnection(runtimeContext, accountID, "seller", account.DisplayName, account.PlatformUserID, false, false)
+			}
+			_ = service.accountRepository.Update(runtimeContext, accountID, "", model.XianyuAccountPaused)
+			for _, task := range tasks {
+				_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskNeedsLogin, "闲鱼登录已失效，请重新连接该账号", "", "")
+			}
+			return
+		}
+		for _, task := range tasks {
+			_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskFailed, err.Error(), "", "")
+		}
+		return
+	}
+	succeeded := make(map[string]struct{}, len(result.SucceededItemIDs))
+	for _, itemID := range result.SucceededItemIDs {
+		succeeded[itemID] = struct{}{}
+	}
+	failed := make(map[string]struct{}, len(result.FailedItemIDs))
+	for _, itemID := range result.FailedItemIDs {
+		failed[itemID] = struct{}{}
+	}
+	for itemID, task := range tasksByItemID {
+		if _, ok := succeeded[itemID]; ok {
+			_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskSucceeded, "", task.XianyuItemID, task.XianyuURL)
+			continue
+		}
+		if _, ok := failed[itemID]; ok {
+			_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskFailed, "闲鱼批量下架失败", "", "")
+			continue
+		}
+		_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskFailed, "闲鱼未返回下架结果", "", "")
+	}
+}
+
+// waitForAccount 在账号暂停时保留队首任务，恢复后继续执行。
+func (service *Service) waitForAccount(runtimeContext context.Context, accountID string) bool {
+	for {
+		account, err := service.accountRepository.Get(runtimeContext, accountID)
+		if err != nil || account.Status == model.XianyuAccountDisabled {
+			return true
+		}
+		if account.Status == model.XianyuAccountActive {
+			return true
+		}
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-runtimeContext.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
 		}
 	}
 }
@@ -153,6 +367,18 @@ func nextPublishDelay(minDelaySeconds, maxDelaySeconds int) time.Duration {
 
 // processTask 完成图片暂存、表单填写和结果持久化。
 func (service *Service) processTask(runtimeContext context.Context, task model.PublishTask) {
+	// 取消、成功或失败任务即使残留在内存队列中，也不能再次执行。
+	if task.Status != model.PublishTaskQueued && task.Status != model.PublishTaskPreparing && task.Status != model.PublishTaskPublishing {
+		return
+	}
+	if task.AccountID == "" {
+		task.AccountID = model.DefaultXianyuAccountID
+	}
+	account, accountErr := service.accountRepository.Get(runtimeContext, task.AccountID)
+	if accountErr != nil || account.Status == model.XianyuAccountDisabled {
+		service.failTask(runtimeContext, task.ID, "闲鱼账号不可用")
+		return
+	}
 	if task.RetryRequested {
 		if service.PrepareRetry == nil {
 			service.failTask(runtimeContext, task.ID, "重试服务未就绪")
@@ -177,6 +403,22 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 		service.processReconcileTask(runtimeContext, task)
 		return
 	}
+	if task.Action == "relist" {
+		if service.RefreshReconcile == nil {
+			service.failTask(runtimeContext, task.ID, "恢复前商详核对服务未就绪")
+			return
+		}
+		refreshedTask, refreshErr := service.RefreshReconcile(runtimeContext, task)
+		if refreshErr != nil {
+			service.failTask(runtimeContext, task.ID, refreshErr.Error())
+			return
+		}
+		task = refreshedTask
+		if err := service.repository.UpdateContent(runtimeContext, task); err != nil {
+			service.failTask(runtimeContext, task.ID, err.Error())
+			return
+		}
+	}
 	if err := service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskPreparing, "", "", ""); err != nil {
 		logx.Errorf("mark publish task %s preparing: %v", task.ID, err)
 		return
@@ -195,8 +437,30 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 		logx.Errorf("mark publish task %s publishing: %v", task.ID, err)
 		return
 	}
+	if task.Action == "relist" {
+		input := xianyu.PublishInput{Quantity: task.Quantity, Title: task.Title, Description: task.Description, PriceCents: task.PriceCents, OriginalPriceCents: task.OriginalPriceCents, ImagePaths: imagePaths, RegionID: task.RegionID, Brand: task.Brand, Condition: task.Condition, AvailableSizes: task.AvailableSizes, Variants: xianyuPublishVariants(task.Variants), IsFootwear: task.IsFootwear}
+		if err := service.xianyuService.ForAccount(task.AccountID).ReactivateManagedItem(runtimeContext, task.XianyuItemID, input, task.Before); err != nil {
+			if errors.Is(err, xianyu.ErrSessionExpired) {
+				_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskNeedsLogin, "闲鱼登录已失效，请重新连接该账号", "", "")
+				_ = service.accountRepository.UpdateConnection(runtimeContext, task.AccountID, "seller", account.DisplayName, account.PlatformUserID, false, false)
+				_ = service.accountRepository.Update(runtimeContext, task.AccountID, "", model.XianyuAccountPaused)
+				return
+			}
+			service.failTask(runtimeContext, task.ID, "恢复历史商品失败："+err.Error())
+			return
+		}
+		if err := service.marketplace.DeleteXianyuHistory(runtimeContext, task.AccountID, task.DuplicateXianyuItemIDs); err != nil {
+			service.failTask(runtimeContext, task.ID, "历史商品已恢复，但清理重复商品失败："+err.Error())
+			return
+		}
+		if err := service.marketplace.MarkXianyuPublished(runtimeContext, task, xianyu.PublishResult{ItemID: task.XianyuItemID, URL: task.XianyuURL}); err != nil {
+			logx.Errorf("mark relisted xianyu item %s: %v", task.XianyuItemID, err)
+		}
+		_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskSucceeded, "", task.XianyuItemID, task.XianyuURL)
+		return
+	}
 
-	publishResult, err := service.xianyuService.Publish(runtimeContext, xianyu.PublishInput{
+	publishResult, err := service.xianyuService.ForAccount(task.AccountID).Publish(runtimeContext, xianyu.PublishInput{
 		Title:              task.Title,
 		Description:        task.Description,
 		PriceCents:         task.PriceCents,
@@ -211,7 +475,9 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 	})
 	if err != nil {
 		if errors.Is(err, xianyu.ErrSessionExpired) {
-			service.failTask(runtimeContext, task.ID, "闲鱼登录已失效，发布队列任务失败")
+			_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskNeedsLogin, "闲鱼登录已失效，请重新连接该账号", "", "")
+			_ = service.accountRepository.UpdateConnection(runtimeContext, task.AccountID, "seller", account.DisplayName, account.PlatformUserID, false, false)
+			_ = service.accountRepository.Update(runtimeContext, task.AccountID, "", model.XianyuAccountPaused)
 			return
 		}
 		service.failTask(runtimeContext, task.ID, fmt.Sprintf("闲鱼发布失败：%v", err))

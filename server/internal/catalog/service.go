@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	redisclient "github.com/redis/go-redis/v9"
+	"golang.org/x/sync/singleflight"
+
 	"sidejob-server/internal/config"
 	"sidejob-server/internal/repository"
 )
@@ -20,21 +23,30 @@ type Service struct {
 	config              config.CatalogConfig
 	httpClient          *http.Client
 	liveOfferSemaphore  chan struct{}
+	detailSemaphore     chan struct{}
+	detailGroup         singleflight.Group
+	detailCache         *redisclient.Client
 	inventoryRepository *InventoryRepository
 	listingRepository   *repository.MarketplaceListingRepository
 }
 
 // NewService 创建商品目录服务。
-func NewService(serviceConfig config.CatalogConfig, inventoryRepository *InventoryRepository, listingRepository *repository.MarketplaceListingRepository) *Service {
+func NewService(serviceConfig config.CatalogConfig, inventoryRepository *InventoryRepository, listingRepository *repository.MarketplaceListingRepository, cacheClients ...*redisclient.Client) *Service {
 	// 外部接口超时时间。
 	timeoutSeconds := serviceConfig.RequestTimeout
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 15
 	}
 
+	var detailCache *redisclient.Client
+	if len(cacheClients) > 0 {
+		detailCache = cacheClients[0]
+	}
 	return &Service{
 		config:              serviceConfig,
 		liveOfferSemaphore:  make(chan struct{}, 12),
+		detailSemaphore:     make(chan struct{}, 10),
+		detailCache:         detailCache,
 		inventoryRepository: inventoryRepository,
 		listingRepository:   listingRepository,
 		httpClient: &http.Client{

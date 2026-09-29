@@ -9,6 +9,8 @@ import (
 
 	"github.com/zeromicro/go-zero/core/logx"
 
+	"sidejob-server/internal/model"
+	"sidejob-server/internal/pricecompare"
 	"sidejob-server/internal/svc"
 	"sidejob-server/internal/types"
 )
@@ -24,6 +26,10 @@ func createPriceComparisonHandler(serviceContext *svc.ServiceContext) http.Handl
 		}
 		comparisonRequest.Product.Name = strings.TrimSpace(comparisonRequest.Product.Name)
 		comparisonRequest.Product.ItemNo = strings.TrimSpace(comparisonRequest.Product.ItemNo)
+		comparisonRequest.AccountID = strings.TrimSpace(comparisonRequest.AccountID)
+		if comparisonRequest.AccountID == "" {
+			comparisonRequest.AccountID = model.DefaultXianyuAccountID
+		}
 		if comparisonRequest.Product.Name == "" && comparisonRequest.Product.ItemNo == "" {
 			writeError(responseWriter, http.StatusBadRequest, "请提供商品名称或货号")
 			return
@@ -32,7 +38,8 @@ func createPriceComparisonHandler(serviceContext *svc.ServiceContext) http.Handl
 		// 远端搜索最多等待 30 秒，避免页面长期卡住。
 		comparisonContext, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 		defer cancel()
-		comparisonResponse, err := serviceContext.PriceCompareService.Compare(comparisonContext, comparisonRequest)
+		comparisonService := pricecompare.NewService(serviceContext.XianyuService.ForAccount(comparisonRequest.AccountID))
+		comparisonResponse, err := comparisonService.Compare(comparisonContext, comparisonRequest)
 		if err != nil {
 			logx.Errorf("create price comparison: %v", err)
 			writeError(responseWriter, http.StatusBadGateway, "比价查询失败，请检查平台连接状态后重试")
