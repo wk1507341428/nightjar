@@ -56,6 +56,7 @@ type PublishTask struct {
 type PublishVariant struct {
 	PriceCents int64                    `bson:"priceCents" json:"priceCents"`
 	Quantity   int64                    `bson:"quantity" json:"quantity"`
+	ImageURL   string                   `bson:"imageUrl,omitempty" json:"imageUrl,omitempty"`
 	Properties []PublishVariantProperty `bson:"properties" json:"properties"`
 }
 

@@ -424,7 +424,7 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 		return
 	}
 
-	temporaryDirectory, imagePaths, err := service.downloadImages(runtimeContext, task.ImageURLs)
+	temporaryDirectory, imagePaths, variantImagePaths, err := service.downloadPublishImages(runtimeContext, task.ImageURLs, task.Variants, true)
 	if temporaryDirectory != "" {
 		defer os.RemoveAll(temporaryDirectory)
 	}
@@ -438,7 +438,7 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 		return
 	}
 	if task.Action == "relist" {
-		input := xianyu.PublishInput{Quantity: task.Quantity, Title: task.Title, Description: task.Description, PriceCents: task.PriceCents, OriginalPriceCents: task.OriginalPriceCents, ImagePaths: imagePaths, RegionID: task.RegionID, Brand: task.Brand, Condition: task.Condition, AvailableSizes: task.AvailableSizes, Variants: xianyuPublishVariants(task.Variants), IsFootwear: task.IsFootwear}
+		input := xianyu.PublishInput{Quantity: task.Quantity, Title: task.Title, Description: task.Description, PriceCents: task.PriceCents, OriginalPriceCents: task.OriginalPriceCents, ImagePaths: imagePaths, RegionID: task.RegionID, Brand: task.Brand, Condition: task.Condition, AvailableSizes: task.AvailableSizes, Variants: xianyuPublishVariants(task.Variants, variantImagePaths), IsFootwear: task.IsFootwear}
 		if err := service.xianyuService.ForAccount(task.AccountID).ReactivateManagedItem(runtimeContext, task.XianyuItemID, input, task.Before); err != nil {
 			if errors.Is(err, xianyu.ErrSessionExpired) {
 				_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskNeedsLogin, "闲鱼登录已失效，请重新连接该账号", "", "")
@@ -470,7 +470,7 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 		Brand:              task.Brand,
 		Condition:          task.Condition,
 		AvailableSizes:     task.AvailableSizes,
-		Variants:           xianyuPublishVariants(task.Variants),
+		Variants:           xianyuPublishVariants(task.Variants, variantImagePaths),
 		IsFootwear:         task.IsFootwear,
 	})
 	if err != nil {
@@ -500,14 +500,14 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 }
 
 // xianyuPublishVariants 将持久化规格转换为闲鱼发布接口参数。
-func xianyuPublishVariants(variants []model.PublishVariant) []xianyu.PublishVariant {
+func xianyuPublishVariants(variants []model.PublishVariant, imagePathsByURL map[string]string) []xianyu.PublishVariant {
 	result := make([]xianyu.PublishVariant, 0, len(variants))
 	for _, variant := range variants {
 		properties := make([]xianyu.PublishVariantProperty, 0, len(variant.Properties))
 		for _, property := range variant.Properties {
 			properties = append(properties, xianyu.PublishVariantProperty{Name: property.Name, Value: property.Value})
 		}
-		result = append(result, xianyu.PublishVariant{PriceCents: variant.PriceCents, Quantity: variant.Quantity, Properties: properties})
+		result = append(result, xianyu.PublishVariant{PriceCents: variant.PriceCents, Quantity: variant.Quantity, ImagePath: imagePathsByURL[variant.ImageURL], ImageURL: variant.ImageURL, Properties: properties})
 	}
 	return result
 }
@@ -521,8 +521,14 @@ func (service *Service) failTask(runtimeContext context.Context, taskID string, 
 
 // downloadImages 将远程商品图下载到单次任务临时目录。
 func (service *Service) downloadImages(ctx context.Context, imageURLs []string) (string, []string, error) {
+	temporaryDirectory, imagePaths, _, err := service.downloadImagesWithSources(ctx, imageURLs)
+	return temporaryDirectory, imagePaths, err
+}
+
+// downloadImagesWithSources 下载商品主图并保留来源地址到本地文件的映射。
+func (service *Service) downloadImagesWithSources(ctx context.Context, imageURLs []string) (string, []string, map[string]string, error) {
 	if len(imageURLs) == 0 {
-		return "", nil, errors.New("至少需要一张商品图片")
+		return "", nil, nil, errors.New("至少需要一张商品图片")
 	}
 	if len(imageURLs) > maxImageCount {
 		imageURLs = imageURLs[:maxImageCount]
@@ -530,10 +536,11 @@ func (service *Service) downloadImages(ctx context.Context, imageURLs []string) 
 
 	temporaryDirectory, err := os.MkdirTemp("", "sidejob-publish-*")
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
 	imagePaths := make([]string, 0, len(imageURLs))
+	imagePathsByURL := make(map[string]string, len(imageURLs))
 	var lastDownloadError error
 	for imageIndex, imageURL := range imageURLs {
 		imagePath, downloadErr := service.downloadImage(ctx, temporaryDirectory, imageIndex, imageURL)
@@ -542,14 +549,53 @@ func (service *Service) downloadImages(ctx context.Context, imageURLs []string) 
 			continue
 		}
 		imagePaths = append(imagePaths, imagePath)
+		imagePathsByURL[imageURL] = imagePath
 	}
 	if len(imagePaths) == 0 {
 		if lastDownloadError == nil {
 			lastDownloadError = errors.New("没有可用的商品图片")
 		}
-		return temporaryDirectory, nil, lastDownloadError
+		return temporaryDirectory, nil, imagePathsByURL, lastDownloadError
 	}
-	return temporaryDirectory, imagePaths, nil
+	return temporaryDirectory, imagePaths, imagePathsByURL, nil
+}
+
+// downloadPublishImages 下载主图及规格图；规格图存在时必须成功，避免静默丢失买家选择图片。
+func (service *Service) downloadPublishImages(ctx context.Context, imageURLs []string, variants []model.PublishVariant, requireMainImages bool) (string, []string, map[string]string, error) {
+	var temporaryDirectory string
+	var imagePaths []string
+	imagePathsByURL := make(map[string]string)
+	if len(imageURLs) > 0 {
+		var err error
+		temporaryDirectory, imagePaths, imagePathsByURL, err = service.downloadImagesWithSources(ctx, imageURLs)
+		if err != nil {
+			return temporaryDirectory, nil, nil, err
+		}
+	} else if requireMainImages {
+		return "", nil, nil, errors.New("至少需要一张商品图片")
+	}
+
+	nextImageIndex := len(imageURLs)
+	for _, variant := range variants {
+		imageURL := strings.TrimSpace(variant.ImageURL)
+		if imageURL == "" || imagePathsByURL[imageURL] != "" {
+			continue
+		}
+		if temporaryDirectory == "" {
+			var err error
+			temporaryDirectory, err = os.MkdirTemp("", "sidejob-publish-*")
+			if err != nil {
+				return "", nil, nil, err
+			}
+		}
+		imagePath, err := service.downloadImage(ctx, temporaryDirectory, nextImageIndex, imageURL)
+		if err != nil {
+			return temporaryDirectory, nil, nil, fmt.Errorf("下载规格图失败：%w", err)
+		}
+		imagePathsByURL[imageURL] = imagePath
+		nextImageIndex++
+	}
+	return temporaryDirectory, imagePaths, imagePathsByURL, nil
 }
 
 // downloadImage 安全下载单张公网图片并限制响应体大小。

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	redisclient "github.com/redis/go-redis/v9"
+	"github.com/zeromicro/go-zero/core/logx"
 	"golang.org/x/sync/singleflight"
 
 	"sidejob-server/internal/config"
@@ -26,6 +27,7 @@ type Service struct {
 	detailSemaphore     chan struct{}
 	detailGroup         singleflight.Group
 	detailCache         *redisclient.Client
+	ingestQueue         chan []PublishSourceSnapshot
 	inventoryRepository *InventoryRepository
 	listingRepository   *repository.MarketplaceListingRepository
 }
@@ -42,16 +44,60 @@ func NewService(serviceConfig config.CatalogConfig, inventoryRepository *Invento
 	if len(cacheClients) > 0 {
 		detailCache = cacheClients[0]
 	}
-	return &Service{
+	service := &Service{
 		config:              serviceConfig,
 		liveOfferSemaphore:  make(chan struct{}, 12),
 		detailSemaphore:     make(chan struct{}, 10),
 		detailCache:         detailCache,
+		ingestQueue:         make(chan []PublishSourceSnapshot, 16),
 		inventoryRepository: inventoryRepository,
 		listingRepository:   listingRepository,
 		httpClient: &http.Client{
 			Timeout: time.Duration(timeoutSeconds) * time.Second,
 		},
+	}
+	go service.runPublishSnapshotIngestion()
+	return service
+}
+
+// PublishSourceSnapshot 是发布中心已经完整读取的一家来源门店快照。
+type PublishSourceSnapshot struct {
+	BrandProfileID string
+	BrandName      string
+	RegionID       string
+	DistributorID  string
+	Products       []map[string]any
+	Complete       bool
+}
+
+// IngestPublishSnapshotsAsync 把发布中心货源快照交给单消费者批量落库。
+func (service *Service) IngestPublishSnapshotsAsync(snapshots []PublishSourceSnapshot) {
+	if len(snapshots) == 0 {
+		return
+	}
+	encoded, err := json.Marshal(snapshots)
+	if err != nil {
+		return
+	}
+	var clonedSnapshots []PublishSourceSnapshot
+	if json.Unmarshal(encoded, &clonedSnapshots) != nil {
+		return
+	}
+	select {
+	case service.ingestQueue <- clonedSnapshots:
+	default:
+		logx.Error("publish snapshot ingest queue is full, skip stale snapshot")
+	}
+}
+
+// runPublishSnapshotIngestion 顺序处理批量快照，避免多个预览并发写同一门店。
+func (service *Service) runPublishSnapshotIngestion() {
+	for snapshots := range service.ingestQueue {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		if err := service.IngestPublishSnapshots(ctx, snapshots); err != nil {
+			logx.Errorf("ingest publish snapshots: %v", err)
+		}
+		cancel()
 	}
 }
 

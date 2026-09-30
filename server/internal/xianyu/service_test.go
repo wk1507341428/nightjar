@@ -10,6 +10,19 @@ func TestParseSellerReservePrice(t *testing.T) {
 	}
 }
 
+func TestParseSellerPriceRangeUsesLowestSKUPrice(t *testing.T) {
+	priceCents := parseSearchPriceCents(map[string]any{
+		"reservePrice": "709.00~709.90",
+		"idleItemSkuList": []any{
+			map[string]any{"priceInCent": float64(70990)},
+			map[string]any{"priceInCent": float64(70900)},
+		},
+	})
+	if priceCents != 70900 {
+		t.Fatalf("parse seller SKU price = %d, want 70900", priceCents)
+	}
+}
+
 // TestExtractCategoryFallback 验证分类预测为空时使用已选分类卡片。
 func TestExtractCategoryFallback(t *testing.T) {
 	response := map[string]any{
@@ -56,20 +69,25 @@ func TestBuildPublishPayloadIncludesSellerVariants(t *testing.T) {
 		Description: "商品描述",
 		PriceCents:  42490,
 		Variants: []PublishVariant{
-			{PriceCents: 42490, Quantity: 8, Properties: []PublishVariantProperty{{Name: "鞋码", Value: "42"}}},
-			{PriceCents: 42490, Quantity: 3, Properties: []PublishVariantProperty{{Name: "鞋码", Value: "43"}}},
+			{PriceCents: 42490, Quantity: 8, ImageURL: "https://example.com/black.jpg", Properties: []PublishVariantProperty{{Name: "鞋码", Value: "42"}, {Name: "颜色", Value: "黑色"}}},
+			{PriceCents: 42490, Quantity: 3, ImageURL: "https://example.com/gray.jpg", Properties: []PublishVariantProperty{{Name: "鞋码", Value: "42"}, {Name: "颜色", Value: "灰色"}}},
+			{PriceCents: 42490, Quantity: 2, ImageURL: "https://example.com/gray.jpg", Properties: []PublishVariantProperty{{Name: "鞋码", Value: "43"}, {Name: "颜色", Value: "灰色"}}},
 		},
 	}
 	payload := buildPublishPayload(input, map[string]any{}, nil, map[string]any{"catId": "123"}, nil)
-	if stringValue(payload["quantity"]) != "11" {
+	if stringValue(payload["quantity"]) != "13" {
 		t.Fatalf("unexpected total quantity: %#v", payload["quantity"])
 	}
 	skus := sliceValue(payload["itemSkuList"])
-	if len(skus) != 2 || stringValue(mapValue(skus[0])["priceInCent"]) != "42490" {
+	if len(skus) != 3 || stringValue(mapValue(skus[0])["priceInCent"]) != "42490" {
 		t.Fatalf("unexpected sku payload: %#v", payload["itemSkuList"])
 	}
 	properties := sliceValue(payload["itemProperties"])
-	if len(properties) != 1 || stringValue(mapValue(properties[0])["propertyName"]) != "鞋码" {
+	if len(properties) != 2 || stringValue(mapValue(properties[0])["propertyName"]) != "鞋码" || boolValue(mapValue(properties[0])["supportImage"]) || !boolValue(mapValue(properties[1])["supportImage"]) {
 		t.Fatalf("unexpected property payload: %#v", payload["itemProperties"])
+	}
+	propertyImages := sliceValue(payload["propertyImageList"])
+	if len(propertyImages) != 2 || stringValue(mapValue(mapValue(propertyImages[0])["property"])["propertyText"]) != "颜色" {
+		t.Fatalf("unexpected property image payload: %#v", payload["propertyImageList"])
 	}
 }

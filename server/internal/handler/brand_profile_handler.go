@@ -179,33 +179,6 @@ func deleteBrandProfileHandler(serviceContext *svc.ServiceContext) http.HandlerF
 	}
 }
 
-// syncBrandProfileHandler 顺序同步品牌档案下的全部地区成员。
-func syncBrandProfileHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
-	return func(responseWriter http.ResponseWriter, request *http.Request) {
-		profileID := catalogRouteID(request, "/api/catalog/brand-profiles/", "/sync")
-		profile, members, err := serviceContext.InventoryRepository.GetBrandProfile(request.Context(), profileID)
-		if err != nil {
-			writeError(responseWriter, http.StatusNotFound, "品牌档案不存在")
-			return
-		}
-		go func() {
-			syncContext, cancel := context.WithTimeout(context.Background(), 3*time.Hour)
-			defer cancel()
-			for _, member := range members {
-				brandStore, saveErr := serviceContext.CatalogService.SaveBrandStore(syncContext, catalog.BrandStoreCandidate{RegionID: member.RegionID, DistributorID: member.DistributorID, BrandName: member.SourceName}, true)
-				if saveErr != nil {
-					logx.Errorf("save brand profile member %s: %v", member.ID, saveErr)
-					continue
-				}
-				if _, syncErr := serviceContext.CatalogService.SyncBrandStore(syncContext, brandStore.ID); syncErr != nil {
-					logx.Errorf("sync brand profile member %s: %v", member.ID, syncErr)
-				}
-			}
-		}()
-		writeJSON(responseWriter, http.StatusAccepted, map[string]any{"profileId": profile.ID, "profileName": profile.Name, "memberCount": len(members), "status": "running"})
-	}
-}
-
 // brandProfileResponses 组装品牌档案及成员响应。
 func brandProfileResponses(profiles []catalog.BrandProfile, members []catalog.BrandProfileMember) []types.BrandProfileResponse {
 	membersByProfile := make(map[string][]types.BrandProfileMemberRequest)

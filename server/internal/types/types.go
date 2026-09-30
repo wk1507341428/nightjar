@@ -224,6 +224,7 @@ type OfflineCenterCandidate struct {
 	ItemNo           string   `json:"itemNo"`
 	Title            string   `json:"title"`
 	PriceCents       int64    `json:"priceCents"`
+	SourcePriceCents int64    `json:"sourcePriceCents,omitempty"`
 	MarketPriceCents int64    `json:"marketPriceCents,omitempty"`
 	DiscountRate     int      `json:"discountRate,omitempty"`
 	ImageURL         string   `json:"imageUrl,omitempty"`
@@ -387,6 +388,7 @@ type CreatePublishTaskRequest struct {
 type CreatePublishVariantRequest struct {
 	PriceCents int64                                 `json:"priceCents"`
 	Quantity   int64                                 `json:"quantity"`
+	ImageURL   string                                `json:"imageUrl,omitempty"`
 	Properties []CreatePublishVariantPropertyRequest `json:"properties"`
 }
 

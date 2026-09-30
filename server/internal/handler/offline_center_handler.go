@@ -262,7 +262,7 @@ func refreshOfflineCenterBindings(ctx context.Context, serviceContext *svc.Servi
 			if categoryName == "" {
 				categoryName = categoryNameByID[categoryID]
 			}
-			binding := catalog.SKUCategoryBinding{ItemNo: firstProductString(product, "item_no"), BrandProfileID: profile.ID, BrandStoreID: brandStoreID, BrandName: profile.Name, RegionID: result.member.RegionID, DistributorID: result.member.DistributorID, SourceItemID: firstProductString(product, "default_item_id", "item_id", "goods_id"), CategoryID: categoryID, CategoryName: categoryName, MarketPriceCents: productNumber(product, "market_price"), LastSeenAt: time.Now()}
+			binding := catalog.SKUCategoryBinding{ItemNo: firstProductString(product, "item_no"), BrandProfileID: profile.ID, BrandStoreID: brandStoreID, BrandName: profile.Name, RegionID: result.member.RegionID, DistributorID: result.member.DistributorID, SourceItemID: firstProductString(product, "default_item_id", "item_id", "goods_id"), CategoryID: categoryID, CategoryName: categoryName, SourcePriceCents: offlineSourcePrice(product), MarketPriceCents: productNumber(product, "market_price"), LastSeenAt: time.Now()}
 			if err := serviceContext.InventoryRepository.UpsertSKUCategoryBinding(ctx, binding); err != nil {
 				return err
 			}
@@ -281,7 +281,7 @@ func refreshOfflineCenterBindings(ctx context.Context, serviceContext *svc.Servi
 		if categoryName == "" {
 			categoryName = categoryNameByID[categoryID]
 		}
-		binding := catalog.SKUCategoryBinding{ItemNo: offer.ItemNo, BrandProfileID: profile.ID, BrandStoreID: offer.BrandStoreID, BrandName: profile.Name, RegionID: offer.RegionID, DistributorID: offer.DistributorID, SourceItemID: offer.SourceItemID, CategoryID: categoryID, CategoryName: categoryName, MarketPriceCents: offer.MarketCents, FirstSeenAt: offer.FirstSeenAt, LastSeenAt: offer.LastSeenAt}
+		binding := catalog.SKUCategoryBinding{ItemNo: offer.ItemNo, BrandProfileID: profile.ID, BrandStoreID: offer.BrandStoreID, BrandName: profile.Name, RegionID: offer.RegionID, DistributorID: offer.DistributorID, SourceItemID: offer.SourceItemID, CategoryID: categoryID, CategoryName: categoryName, SourcePriceCents: firstPositivePrice(offer.ActivityCents, offer.PriceCents), MarketPriceCents: offer.MarketCents, FirstSeenAt: offer.FirstSeenAt, LastSeenAt: offer.LastSeenAt}
 		if err := serviceContext.InventoryRepository.UpsertSKUCategoryBinding(ctx, binding); err != nil {
 			return err
 		}
@@ -333,26 +333,27 @@ func buildOfflineCenterCandidates(ctx context.Context, serviceContext *svc.Servi
 	candidates := make([]types.OfflineCenterCandidate, 0, len(listingByID))
 	for _, listing := range listingByID {
 		itemBindings := bindingsByItemNo[strings.ToUpper(strings.TrimSpace(listing.ItemNo))]
+		sourcePriceCents := int64(0)
 		marketPriceCents := int64(0)
+		discountRate := 0
 		categoryIDs := make([]string, 0)
 		categoryNames := make([]string, 0)
 		regions := append([]string{}, listing.SourceRegions...)
 		for _, binding := range itemBindings {
-			if binding.MarketPriceCents > marketPriceCents {
+			bindingDiscountRate := smallProgramDiscountRate(binding.SourcePriceCents, binding.MarketPriceCents)
+			if bindingDiscountRate > 0 && (discountRate == 0 || bindingDiscountRate < discountRate) {
+				sourcePriceCents = binding.SourcePriceCents
 				marketPriceCents = binding.MarketPriceCents
+				discountRate = bindingDiscountRate
 			}
 			categoryIDs = appendUniqueText(categoryIDs, binding.CategoryID)
 			categoryNames = appendUniqueText(categoryNames, binding.CategoryName)
 			regions = appendUniqueText(regions, binding.RegionID)
 		}
-		discountRate := 0
-		if marketPriceCents > 0 {
-			discountRate = int((listing.PriceCents*100 + marketPriceCents/2) / marketPriceCents)
-		}
 		if !matchesOfflineCenterRange(listing.PriceCents, discountRate, body) {
 			continue
 		}
-		candidates = append(candidates, types.OfflineCenterCandidate{PlatformItemID: listing.PlatformItemID, ItemNo: listing.ItemNo, Title: listing.Title, PriceCents: listing.PriceCents, MarketPriceCents: marketPriceCents, DiscountRate: discountRate, ImageURL: listing.ImageURL, ItemURL: listing.ItemURL, CategoryIDs: categoryIDs, CategoryNames: categoryNames, SourceRegions: regions})
+		candidates = append(candidates, types.OfflineCenterCandidate{PlatformItemID: listing.PlatformItemID, ItemNo: listing.ItemNo, Title: listing.Title, PriceCents: listing.PriceCents, SourcePriceCents: sourcePriceCents, MarketPriceCents: marketPriceCents, DiscountRate: discountRate, ImageURL: listing.ImageURL, ItemURL: listing.ItemURL, CategoryIDs: categoryIDs, CategoryNames: categoryNames, SourceRegions: regions})
 	}
 	sort.Slice(candidates, func(leftIndex, rightIndex int) bool {
 		return candidates[leftIndex].ItemNo < candidates[rightIndex].ItemNo
@@ -430,17 +431,61 @@ func matchesOfflineCenterRange(priceCents int64, discountRate int, body types.Of
 	return true
 }
 
+// offlineSourcePrice 返回小程序实际售价，活动价优先于普通售价。
+func offlineSourcePrice(product map[string]any) int64 {
+	return firstPositivePrice(productNumber(product, "activity_price"), productNumber(product, "act_price"), productNumber(product, "price"))
+}
+
+func firstPositivePrice(prices ...int64) int64 {
+	for _, price := range prices {
+		if price > 0 {
+			return price
+		}
+	}
+	return 0
+}
+
+// smallProgramDiscountRate 使用小程序售价除以小程序原价计算百分比折扣。
+func smallProgramDiscountRate(sourcePriceCents, marketPriceCents int64) int {
+	if sourcePriceCents <= 0 || marketPriceCents <= 0 {
+		return 0
+	}
+	return int((sourcePriceCents*100 + marketPriceCents/2) / marketPriceCents)
+}
+
 // offlineProductCategory 读取小程序商品主品类。
 func offlineProductCategory(product map[string]any) (string, string) {
 	categoryValue := product["item_category_main"]
-	category, validCategory := categoryValue.(map[string]any)
-	if !validCategory {
-		if bsonCategory, validBSONCategory := categoryValue.(bson.M); validBSONCategory {
-			category = map[string]any(bsonCategory)
+	categories := make([]map[string]any, 0)
+	appendCategory := func(rawCategory any) {
+		switch category := rawCategory.(type) {
+		case map[string]any:
+			categories = append(categories, category)
+		case bson.M:
+			categories = append(categories, map[string]any(category))
 		}
 	}
-	if category == nil {
+	switch hierarchy := categoryValue.(type) {
+	case []any:
+		for _, category := range hierarchy {
+			appendCategory(category)
+		}
+	case bson.A:
+		for _, category := range hierarchy {
+			appendCategory(category)
+		}
+	default:
+		appendCategory(categoryValue)
+	}
+	if len(categories) == 0 {
 		return "", ""
 	}
-	return firstProductString(category, "category_id", "id"), firstProductString(category, "category_name", "name")
+	selectedCategory := categories[len(categories)-1]
+	for _, category := range categories {
+		if firstProductString(category, "category_level") == "2" {
+			selectedCategory = category
+			break
+		}
+	}
+	return firstProductString(selectedCategory, "category_id", "id"), firstProductString(selectedCategory, "category_name", "name")
 }

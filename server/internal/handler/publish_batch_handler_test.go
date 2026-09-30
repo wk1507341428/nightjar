@@ -71,8 +71,8 @@ func TestBuildBatchPublishTaskMatchesSingleDefaults(t *testing.T) {
 // TestProductPublishVariantsMergesFootwearSpecs 验证鞋类 SKU 转为买家可选鞋码及真实库存。
 func TestProductPublishVariantsMergesFootwearSpecs(t *testing.T) {
 	product := map[string]any{"spec_items": []any{
-		map[string]any{"store": "8", "price": "38440", "approve_status": "onsale", "item_spec": []any{map[string]any{"spec_name": "尺码", "spec_value_name": "42"}, map[string]any{"spec_name": "颜色", "spec_value_name": "黑色"}}},
-		map[string]any{"store": "3", "price": "38440", "approve_status": "onsale", "item_spec": []any{map[string]any{"spec_name": "尺码", "spec_value_name": "43"}, map[string]any{"spec_name": "颜色", "spec_value_name": "黑色"}}},
+		map[string]any{"store": "8", "price": "38440", "approve_status": "onsale", "sku_img_url": "https://example.com/black.jpg", "item_spec": []any{map[string]any{"spec_name": "尺码", "spec_value_name": "42"}, map[string]any{"spec_name": "颜色", "spec_value_name": "黑色"}}},
+		map[string]any{"store": "3", "price": "38440", "approve_status": "onsale", "sku_img_url": "https://example.com/black.jpg", "item_spec": []any{map[string]any{"spec_name": "尺码", "spec_value_name": "43"}, map[string]any{"spec_name": "颜色", "spec_value_name": "黑色"}}},
 	}}
 	variants := productPublishVariants(product, true, 42490)
 	if len(variants) != 2 || variants[0].Quantity != 8 || variants[0].PriceCents != 42490 {
@@ -80,5 +80,40 @@ func TestProductPublishVariantsMergesFootwearSpecs(t *testing.T) {
 	}
 	if len(variants[0].Properties) != 1 || variants[0].Properties[0].Name != "鞋码" || variants[0].Properties[0].Value != "42" {
 		t.Fatalf("unexpected footwear property: %#v", variants[0].Properties)
+	}
+	if variants[0].ImageURL != "https://example.com/black.jpg" {
+		t.Fatalf("unexpected footwear image: %q", variants[0].ImageURL)
+	}
+}
+
+// TestProductPublishVariantsKeepsVisualImages 验证同一货号的颜色图片随销售规格进入发布任务。
+func TestProductPublishVariantsKeepsVisualImages(t *testing.T) {
+	product := map[string]any{"spec_items": []any{
+		map[string]any{"store": "3", "price": "11950", "approve_status": "onsale", "sku_img_url": "https://example.com/black.jpg", "item_spec": []any{map[string]any{"spec_name": "尺码", "spec_value_name": "M"}, map[string]any{"spec_name": "颜色", "spec_value_name": "BK黑色"}}},
+		map[string]any{"store": "18", "price": "9000", "approve_status": "onsale", "sku_img_url": "https://example.com/gray.jpg", "item_spec": []any{map[string]any{"spec_name": "尺码", "spec_value_name": "S"}, map[string]any{"spec_name": "颜色", "spec_value_name": "暗灰"}}},
+		map[string]any{"store": "15", "price": "9000", "approve_status": "onsale", "sku_img_url": "https://example.com/gray.jpg", "item_spec": []any{map[string]any{"spec_name": "尺码", "spec_value_name": "M"}, map[string]any{"spec_name": "颜色", "spec_value_name": "暗灰"}}},
+	}}
+	variants := productPublishVariants(product, false, 13000)
+	if len(variants) != 3 || variants[0].ImageURL != "https://example.com/black.jpg" || variants[1].ImageURL != "https://example.com/gray.jpg" {
+		t.Fatalf("unexpected visual variants: %#v", variants)
+	}
+	if len(variants[0].Properties) != 2 || variants[0].Properties[1].Name != "颜色" || variants[0].Properties[1].Value != "BK黑色" {
+		t.Fatalf("unexpected visual properties: %#v", variants[0].Properties)
+	}
+}
+
+// TestEnrichProductSpecImages 验证商详图片补入列表 SKU 时不会改写库存和价格。
+func TestEnrichProductSpecImages(t *testing.T) {
+	listSKU := map[string]any{"store": "3", "price": "11950", "item_spec": []any{map[string]any{"spec_name": "尺码", "spec_value_name": "M"}, map[string]any{"spec_name": "颜色", "spec_value_name": "BK黑色"}}}
+	product := map[string]any{"spec_items": []any{listSKU}, "_merged_spec_items": []any{listSKU}}
+	detail := map[string]any{"spec_items": []any{
+		map[string]any{"store": "99", "price": "99999", "sku_img_url": "https://example.com/black.jpg", "item_spec": []any{map[string]any{"spec_name": "尺码", "spec_value_name": "M"}, map[string]any{"spec_name": "颜色", "spec_value_name": "BK黑色"}}},
+	}}
+	enrichProductSpecImages(product, detail)
+	if productString(listSKU, "sku_img_url") != "https://example.com/black.jpg" {
+		t.Fatalf("spec image was not enriched: %#v", listSKU)
+	}
+	if productNumber(listSKU, "store") != 3 || productNumber(listSKU, "price") != 11950 {
+		t.Fatalf("list inventory or price was overwritten: %#v", listSKU)
 	}
 }

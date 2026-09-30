@@ -238,8 +238,115 @@ func (service *Service) GetLiveProductDetail(ctx context.Context, sourceProduct 
 	return service.fetchProductDetail(ctx, sourceProduct, regionID)
 }
 
+// IngestPublishSnapshots 把发布中心已经获取的实时货源批量写入商品库和价格趋势。
+func (service *Service) IngestPublishSnapshots(ctx context.Context, snapshots []PublishSourceSnapshot) error {
+	for _, snapshot := range snapshots {
+		brandStore, err := service.SaveBrandStore(ctx, BrandStoreCandidate{RegionID: snapshot.RegionID, DistributorID: snapshot.DistributorID, BrandName: snapshot.BrandName})
+		if err != nil {
+			return err
+		}
+		if err := service.ingestPublishSourceSnapshot(ctx, brandStore, snapshot); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ingestPublishSourceSnapshot 使用无序批量写入更新一家来源门店。
+func (service *Service) ingestPublishSourceSnapshot(ctx context.Context, brandStore BrandStore, snapshot PublishSourceSnapshot) error {
+	if snapshot.Complete && len(snapshot.Products) == 0 {
+		return nil
+	}
+	now := time.Now()
+	cursor, err := service.inventoryRepository.offers.Find(ctx, bson.M{"brandStoreId": brandStore.ID})
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(ctx)
+	existingOffers := make([]CatalogOffer, 0)
+	if err := cursor.All(ctx, &existingOffers); err != nil {
+		return err
+	}
+	existingByID := make(map[string]CatalogOffer, len(existingOffers))
+	for _, offer := range existingOffers {
+		existingByID[offer.ID] = offer
+	}
+	offerWrites := make([]mongo.WriteModel, 0, len(snapshot.Products))
+	bindingWrites := make([]mongo.WriteModel, 0, len(snapshot.Products))
+	priceSnapshots := make([]SKUPriceSnapshot, 0)
+	activeOfferIDs := make([]string, 0, len(snapshot.Products))
+	for _, sourceProduct := range snapshot.Products {
+		itemNo := mapString(sourceProduct, "item_no")
+		sourceItemID := firstNonEmpty(mapString(sourceProduct, "item_id"), mapString(sourceProduct, "default_item_id"), mapString(sourceProduct, "goods_id"))
+		if sourceItemID == "" || itemNo == "" {
+			continue
+		}
+		brandName := firstNonEmpty(mapString(sourceProduct, "goods_brand"), snapshot.BrandName)
+		offerID := buildOfferID(brandStore.ID, sourceItemID)
+		existingOffer, existed := existingByID[offerID]
+		firstSeenAt := existingOffer.FirstSeenAt
+		if firstSeenAt.IsZero() {
+			firstSeenAt = now
+		}
+		offer := CatalogOffer{ID: offerID, ProductID: buildProductID(brandName, itemNo, sourceItemID), BrandStoreID: brandStore.ID, RegionID: snapshot.RegionID, DistributorID: snapshot.DistributorID, SourceGoodsID: mapString(sourceProduct, "goods_id"), SourceItemID: sourceItemID, SourceDefaultID: mapString(sourceProduct, "default_item_id"), ItemNo: itemNo, Name: mapString(sourceProduct, "item_name"), BrandName: brandName, PriceCents: mapInt64(sourceProduct, "price"), ActivityCents: firstPositive(mapInt64(sourceProduct, "activity_price"), mapInt64(sourceProduct, "act_price")), MarketCents: mapInt64(sourceProduct, "market_price"), Stock: productStock(sourceProduct), SaleStatus: firstNonEmpty(mapString(sourceProduct, "approve_status"), "onsale"), SyncState: "onsale", MissingRuns: 0, SourceData: sourceProduct, FirstSeenAt: firstSeenAt, LastSeenAt: now, LastSyncedAt: now}
+		currentPriceSnapshots := buildSKUPriceSnapshots(offer, sourceProduct, "", now)
+		priceSnapshots = append(priceSnapshots, changedPublishPriceSnapshots(existingOffer, offer, currentPriceSnapshots, existed)...)
+		offerWrites = append(offerWrites, mongo.NewUpdateOneModel().SetFilter(bson.M{"_id": offerID}).SetUpdate(bson.M{"$set": offer, "$unset": bson.M{"inactiveAt": ""}}).SetUpsert(true))
+		activeOfferIDs = append(activeOfferIDs, offerID)
+		categoryID, categoryName := productCategory(sourceProduct)
+		bindingID := hashID(brandStore.ID, strings.ToUpper(strings.TrimSpace(itemNo)), sourceItemID, categoryID)
+		bindingFields := bson.M{"itemNo": strings.ToUpper(strings.TrimSpace(itemNo)), "brandProfileId": snapshot.BrandProfileID, "brandStoreId": brandStore.ID, "brandName": brandName, "regionId": snapshot.RegionID, "distributorId": snapshot.DistributorID, "sourceItemId": sourceItemID, "categoryId": categoryID, "categoryName": categoryName, "sourcePriceCents": firstPositive(offer.ActivityCents, offer.PriceCents), "marketPriceCents": offer.MarketCents, "lastSeenAt": now}
+		bindingFilter := skuCategoryBindingUniqueFilter(brandStore.ID, itemNo, sourceItemID, categoryID)
+		bindingWrites = append(bindingWrites, mongo.NewUpdateOneModel().SetFilter(bindingFilter).SetUpdate(bson.M{"$set": bindingFields, "$setOnInsert": bson.M{"_id": bindingID, "firstSeenAt": firstSeenAt}}).SetUpsert(true))
+	}
+	if len(offerWrites) > 0 {
+		if _, err := service.inventoryRepository.offers.BulkWrite(ctx, offerWrites, options.BulkWrite().SetOrdered(false)); err != nil {
+			return err
+		}
+	}
+	if len(bindingWrites) > 0 {
+		if _, err := service.inventoryRepository.skuCategoryBindings.BulkWrite(ctx, bindingWrites, options.BulkWrite().SetOrdered(false)); err != nil {
+			return err
+		}
+	}
+	if len(priceSnapshots) > 0 {
+		if err := service.inventoryRepository.InsertPriceSnapshots(ctx, priceSnapshots); err != nil {
+			return err
+		}
+	}
+	if snapshot.Complete {
+		filter := bson.M{"brandStoreId": brandStore.ID, "_id": bson.M{"$nin": activeOfferIDs}, "inactiveAt": bson.M{"$exists": false}}
+		_, err := service.inventoryRepository.offers.UpdateMany(ctx, filter, bson.M{"$set": bson.M{"saleStatus": "offsale", "syncState": "off_shelf", "inactiveAt": now, "lastSyncedAt": now}})
+		if err != nil {
+			return err
+		}
+	}
+	_, _ = service.inventoryRepository.brandStores.UpdateOne(ctx, bson.M{"_id": brandStore.ID}, bson.M{"$set": bson.M{"lastSyncedAt": now, "updatedAt": now}})
+	return nil
+}
+
+// changedPublishPriceSnapshots 只在首次看到 SKU 或价格变化时追加趋势点。
+func changedPublishPriceSnapshots(previousOffer, currentOffer CatalogOffer, currentSnapshots []SKUPriceSnapshot, existed bool) []SKUPriceSnapshot {
+	if !existed {
+		return currentSnapshots
+	}
+	previousSnapshots := buildSKUPriceSnapshots(previousOffer, previousOffer.SourceData, "", previousOffer.LastSyncedAt)
+	previousBySKU := make(map[string]SKUPriceSnapshot, len(previousSnapshots))
+	for _, snapshot := range previousSnapshots {
+		previousBySKU[snapshot.SKUID] = snapshot
+	}
+	changedSnapshots := make([]SKUPriceSnapshot, 0)
+	for _, currentSnapshot := range currentSnapshots {
+		previousSnapshot, found := previousBySKU[currentSnapshot.SKUID]
+		if !found || currentSnapshot.PriceCents != previousSnapshot.PriceCents || currentSnapshot.SourcePriceCents != previousSnapshot.SourcePriceCents || currentSnapshot.ActivityPriceCents != previousSnapshot.ActivityPriceCents || currentSnapshot.MarketPriceCents != previousSnapshot.MarketPriceCents {
+			changedSnapshots = append(changedSnapshots, currentSnapshot)
+		}
+	}
+	return changedSnapshots
+}
+
 // SaveBrandStore 保存品牌门店同步开关。
-func (service *Service) SaveBrandStore(ctx context.Context, candidate BrandStoreCandidate, syncEnabled bool) (BrandStore, error) {
+func (service *Service) SaveBrandStore(ctx context.Context, candidate BrandStoreCandidate) (BrandStore, error) {
 	now := time.Now()
 	brandID := normalizeBrandID(candidate.BrandName)
 	region := CatalogRegion{ID: candidate.RegionID, Name: regionDisplayName(candidate.RegionID), Enabled: true, UpdatedAt: now}
@@ -258,7 +365,6 @@ func (service *Service) SaveBrandStore(ctx context.Context, candidate BrandStore
 		BrandName:     candidate.BrandName,
 		ShopCode:      candidate.ShopCode,
 		StoreName:     candidate.StoreName,
-		SyncEnabled:   syncEnabled,
 		UpdatedAt:     now,
 	}
 	brandStoreFields := bson.M{
@@ -268,7 +374,6 @@ func (service *Service) SaveBrandStore(ctx context.Context, candidate BrandStore
 		"brandName":     brandStore.BrandName,
 		"shopCode":      brandStore.ShopCode,
 		"storeName":     brandStore.StoreName,
-		"syncEnabled":   brandStore.SyncEnabled,
 		"updatedAt":     brandStore.UpdatedAt,
 	}
 	_, err := service.inventoryRepository.brandStores.UpdateOne(ctx, bson.M{"_id": brandStore.ID}, bson.M{
@@ -298,26 +403,6 @@ func (service *Service) ListOffers(ctx context.Context, accountID, regionID, bra
 	}
 	if brandStoreID != "" && brandStoreID != "all" {
 		filter["brandStoreId"] = brandStoreID
-	} else {
-		// 仅展示当前已启用同步的品牌门店，关闭同步的历史数据保留但不进入商品库列表。
-		brandStoreFilter := bson.M{"syncEnabled": true}
-		if regionID != "" && regionID != "all" {
-			brandStoreFilter["regionId"] = regionID
-		}
-		cursor, findErr := service.inventoryRepository.brandStores.Find(ctx, brandStoreFilter, options.Find().SetProjection(bson.M{"_id": 1}))
-		if findErr != nil {
-			return OfferListResult{}, findErr
-		}
-		defer cursor.Close(ctx)
-		enabledBrandStores := make([]BrandStore, 0)
-		if decodeErr := cursor.All(ctx, &enabledBrandStores); decodeErr != nil {
-			return OfferListResult{}, decodeErr
-		}
-		enabledBrandStoreIDs := make([]string, 0, len(enabledBrandStores))
-		for _, enabledBrandStore := range enabledBrandStores {
-			enabledBrandStoreIDs = append(enabledBrandStoreIDs, enabledBrandStore.ID)
-		}
-		filter["brandStoreId"] = bson.M{"$in": enabledBrandStoreIDs}
 	}
 	if stockOnly {
 		filter["stock"] = bson.M{"$gt": 0}
@@ -787,7 +872,7 @@ func (service *Service) upsertOffer(ctx context.Context, brandStoreID, regionID,
 		return false, false, err
 	}
 	categoryID, categoryName := productCategory(sourceProduct)
-	binding := SKUCategoryBinding{ItemNo: itemNo, BrandProfileID: profileID, BrandStoreID: brandStoreID, BrandName: brandName, RegionID: regionID, DistributorID: distributorID, SourceItemID: sourceItemID, CategoryID: categoryID, CategoryName: categoryName, MarketPriceCents: offer.MarketCents, FirstSeenAt: offer.FirstSeenAt, LastSeenAt: seenAt}
+	binding := SKUCategoryBinding{ItemNo: itemNo, BrandProfileID: profileID, BrandStoreID: brandStoreID, BrandName: brandName, RegionID: regionID, DistributorID: distributorID, SourceItemID: sourceItemID, CategoryID: categoryID, CategoryName: categoryName, SourcePriceCents: firstPositive(offer.ActivityCents, offer.PriceCents), MarketPriceCents: offer.MarketCents, FirstSeenAt: offer.FirstSeenAt, LastSeenAt: seenAt}
 	if err := service.inventoryRepository.UpsertSKUCategoryBinding(ctx, binding); err != nil {
 		return false, false, err
 	}
@@ -1086,18 +1171,47 @@ func mapString(source map[string]any, key string) string {
 // productCategory 读取小程序商品所属的主品类。
 func productCategory(source map[string]any) (string, string) {
 	categoryValue := source["item_category_main"]
-	category, validCategory := categoryValue.(map[string]any)
-	if !validCategory {
-		if bsonCategory, validBSONCategory := categoryValue.(bson.M); validBSONCategory {
-			category = map[string]any(bsonCategory)
-		}
-	}
-	if category == nil {
+	categories := categoryMaps(categoryValue)
+	if len(categories) == 0 {
 		return "", ""
 	}
-	categoryID := firstNonEmpty(mapString(category, "category_id"), mapString(category, "id"))
-	categoryName := firstNonEmpty(mapString(category, "category_name"), mapString(category, "name"))
+	// 品牌门店筛选项使用二级类目；接口缺少层级时退回最末级节点。
+	selectedCategory := categories[len(categories)-1]
+	for _, category := range categories {
+		if mapString(category, "category_level") == "2" {
+			selectedCategory = category
+			break
+		}
+	}
+	categoryID := firstNonEmpty(mapString(selectedCategory, "category_id"), mapString(selectedCategory, "id"))
+	categoryName := firstNonEmpty(mapString(selectedCategory, "category_name"), mapString(selectedCategory, "name"))
 	return categoryID, categoryName
+}
+
+// categoryMaps 兼容实时接口数组、历史单对象以及 MongoDB BSON 数组。
+func categoryMaps(value any) []map[string]any {
+	result := make([]map[string]any, 0)
+	appendCategory := func(categoryValue any) {
+		switch category := categoryValue.(type) {
+		case map[string]any:
+			result = append(result, category)
+		case bson.M:
+			result = append(result, map[string]any(category))
+		}
+	}
+	switch categories := value.(type) {
+	case []any:
+		for _, category := range categories {
+			appendCategory(category)
+		}
+	case bson.A:
+		for _, category := range categories {
+			appendCategory(category)
+		}
+	default:
+		appendCategory(value)
+	}
+	return result
 }
 func mapInt64(source map[string]any, key string) int64 {
 	switch value := source[key].(type) {

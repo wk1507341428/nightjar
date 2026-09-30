@@ -149,9 +149,9 @@ function interleaveProductLists(productLists: ProductSummary[][]): ProductSummar
 /** 按地区加载小程序品牌馆的完整在售品牌门店。 */
 export async function fetchBrandOptions(regionId: string): Promise<BrandOption[]> {
   // 当前地区已启用的本地品牌门店。
-  const response = await requestCatalog<Array<{ id?: string; brandName?: string; distributorId?: string; shopCode?: string; syncEnabled?: boolean }>>('/catalog/brand-stores', { regionId });
+  const response = await requestCatalog<Array<{ id?: string; brandName?: string; distributorId?: string; shopCode?: string }>>('/catalog/brand-stores', { regionId });
   return (response ?? [])
-    .filter((brandStore) => brandStore?.syncEnabled && Boolean(brandStore?.id) && Boolean(brandStore?.brandName))
+    .filter((brandStore) => Boolean(brandStore?.id) && Boolean(brandStore?.brandName))
     .map((brandStore) => ({ value: brandStore.id ?? '', label: brandStore.brandName ?? '', shopCode: brandStore.shopCode, categoryDistributorId: brandStore.distributorId, distributorIds: brandStore.id ? [brandStore.id] : [] }))
     .sort((firstBrand, secondBrand) => firstBrand.label.localeCompare(secondBrand.label, 'zh-CN'));
 }

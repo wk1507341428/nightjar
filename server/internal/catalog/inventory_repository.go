@@ -101,6 +101,7 @@ type SKUCategoryBinding struct {
 	SourceItemID     string    `bson:"sourceItemId,omitempty" json:"sourceItemId,omitempty"`
 	CategoryID       string    `bson:"categoryId,omitempty" json:"categoryId,omitempty"`
 	CategoryName     string    `bson:"categoryName,omitempty" json:"categoryName,omitempty"`
+	SourcePriceCents int64     `bson:"sourcePriceCents,omitempty" json:"sourcePriceCents,omitempty"`
 	MarketPriceCents int64     `bson:"marketPriceCents,omitempty" json:"marketPriceCents,omitempty"`
 	FirstSeenAt      time.Time `bson:"firstSeenAt" json:"firstSeenAt"`
 	LastSeenAt       time.Time `bson:"lastSeenAt" json:"lastSeenAt"`
@@ -214,13 +215,11 @@ func (repository *InventoryRepository) EnsureIndexes(ctx context.Context) error 
 	}{
 		{repository.regions, []mongo.IndexModel{{Keys: bson.D{{Key: "enabled", Value: 1}}}}},
 		{repository.brands, []mongo.IndexModel{{Keys: bson.D{{Key: "normalizedName", Value: 1}}, Options: options.Index().SetUnique(true)}}},
-		{repository.brandStores, []mongo.IndexModel{{Keys: bson.D{{Key: "regionId", Value: 1}, {Key: "distributorId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "syncEnabled", Value: 1}, {Key: "regionId", Value: 1}}}}},
+		{repository.brandStores, []mongo.IndexModel{{Keys: bson.D{{Key: "regionId", Value: 1}, {Key: "distributorId", Value: 1}}, Options: options.Index().SetUnique(true)}}},
 		{repository.brandProfiles, []mongo.IndexModel{{Keys: bson.D{{Key: "updatedAt", Value: -1}}}}},
 		{repository.brandProfileMembers, []mongo.IndexModel{{Keys: bson.D{{Key: "regionId", Value: 1}, {Key: "distributorId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "profileId", Value: 1}}}}},
 		{repository.offers, []mongo.IndexModel{{Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "sourceItemId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "regionId", Value: 1}, {Key: "itemNo", Value: 1}}}, {Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "lastSeenAt", Value: -1}}}}},
-		{repository.syncRuns, []mongo.IndexModel{{Keys: bson.D{{Key: "startedAt", Value: -1}}}, {Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "startedAt", Value: -1}}}}},
 		{repository.priceHistory, []mongo.IndexModel{{Keys: bson.D{{Key: "offerId", Value: 1}, {Key: "skuId", Value: 1}, {Key: "observedAt", Value: 1}}}, {Keys: bson.D{{Key: "itemNo", Value: 1}, {Key: "observedAt", Value: -1}}}}},
-		{repository.syncChanges, []mongo.IndexModel{{Keys: bson.D{{Key: "runId", Value: 1}, {Key: "changedAt", Value: -1}}}, {Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "changedAt", Value: -1}}}, {Keys: bson.D{{Key: "itemNo", Value: 1}, {Key: "changeType", Value: 1}}}}},
 		{repository.skuCategoryBindings, []mongo.IndexModel{{Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "itemNo", Value: 1}, {Key: "sourceItemId", Value: 1}, {Key: "categoryId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "brandProfileId", Value: 1}, {Key: "categoryId", Value: 1}, {Key: "itemNo", Value: 1}}}, {Keys: bson.D{{Key: "itemNo", Value: 1}, {Key: "lastSeenAt", Value: -1}}}}},
 	}
 	for _, indexGroup := range indexGroups {
@@ -253,20 +252,31 @@ func (repository *InventoryRepository) UpsertSKUCategoryBinding(ctx context.Cont
 	if binding.FirstSeenAt.IsZero() {
 		binding.FirstSeenAt = binding.LastSeenAt
 	}
+	filter := skuCategoryBindingUniqueFilter(binding.BrandStoreID, binding.ItemNo, binding.SourceItemID, binding.CategoryID)
 	setFields := bson.M{
 		"itemNo": binding.ItemNo, "brandStoreId": binding.BrandStoreID,
 		"brandName": binding.BrandName, "regionId": binding.RegionID, "distributorId": binding.DistributorID,
 		"sourceItemId": binding.SourceItemID, "categoryId": binding.CategoryID, "categoryName": binding.CategoryName,
-		"marketPriceCents": binding.MarketPriceCents, "lastSeenAt": binding.LastSeenAt,
+		"sourcePriceCents": binding.SourcePriceCents, "marketPriceCents": binding.MarketPriceCents, "lastSeenAt": binding.LastSeenAt,
 	}
 	if binding.BrandProfileID != "" {
 		setFields["brandProfileId"] = binding.BrandProfileID
 	}
-	_, err := repository.skuCategoryBindings.UpdateOne(ctx, bson.M{"_id": binding.ID}, bson.M{
+	_, err := repository.skuCategoryBindings.UpdateOne(ctx, filter, bson.M{
 		"$set":         setFields,
-		"$setOnInsert": bson.M{"firstSeenAt": binding.FirstSeenAt},
+		"$setOnInsert": bson.M{"_id": binding.ID, "firstSeenAt": binding.FirstSeenAt},
 	}, options.Update().SetUpsert(true))
 	return err
+}
+
+// skuCategoryBindingUniqueFilter 与 Mongo 唯一索引保持一致，保证不同写入路径都能幂等更新。
+func skuCategoryBindingUniqueFilter(brandStoreID, itemNo, sourceItemID, categoryID string) bson.M {
+	return bson.M{
+		"brandStoreId": brandStoreID,
+		"itemNo":       strings.ToUpper(strings.TrimSpace(itemNo)),
+		"sourceItemId": sourceItemID,
+		"categoryId":   categoryID,
+	}
 }
 
 // ListSKUCategoryBindings 返回一个合并品牌及可选品类覆盖的历史 SKU 归属。

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Input, Modal, Select, Space, Tag } from 'antd';
 import { ProTable, type ProColumns } from '@ant-design/pro-components';
-import { deleteBrandProfile, fetchBrandMaintenance, saveBrandProfile, syncBrandProfile } from './catalogManagementApi';
+import { deleteBrandProfile, fetchBrandMaintenance, saveBrandProfile } from './catalogManagementApi';
 import { REGION_OPTIONS, getWarehouseShortName } from './constants';
 import type { BrandMaintenanceSource, BrandProfile } from './types';
 
@@ -36,8 +36,6 @@ export function BrandMaintenancePage() {
   const [isLoading, setIsLoading] = useState(true);
   // 保存状态。
   const [isSaving, setIsSaving] = useState(false);
-  // 合并品牌同步状态。
-  const [syncingProfileId, setSyncingProfileId] = useState('');
   // 页面错误文案。
   const [errorMessage, setErrorMessage] = useState('');
   // 页面成功提示。
@@ -167,19 +165,6 @@ export function BrandMaintenancePage() {
     Modal.confirm({ title: `删除品牌档案“${profile.name}”？`, content: '只删除合并配置，不删除商品、发布任务或闲鱼商品档案。', okText: '删除', okButtonProps: { danger: true }, cancelText: '取消', onOk: async () => { await deleteBrandProfile(profile.id); await loadMaintenance(); } });
   }
 
-  /** 启动品牌档案全部地区成员同步。 */
-  async function handleSyncProfile(profile: BrandProfile) {
-    setSyncingProfileId(profile.id);
-    try {
-      const response = await syncBrandProfile(profile.id);
-      setSuccessMessage(`${response.profileName} 已开始顺序同步 ${response.memberCount} 个地区成员`);
-      setIsMergeOpen(false);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '合并品牌同步失败');
-    } finally {
-      setSyncingProfileId('');
-    }
-  }
 
   // 实时品牌列表列定义。
   const columns: ProColumns<BrandMaintenanceSource>[] = [
@@ -228,7 +213,7 @@ export function BrandMaintenancePage() {
         </section>
       </div>
       <div className="brand-editor-review"><Space><Tag color="success">新增 {addedCount} 家</Tag><Tag color="warning">移除 {removedCount} 家</Tag><span>保存仅更新品牌配置，闲鱼商品需另行预览并确认。</span></Space></div>
-      {editingProfile ? <Space><Button disabled={isSaving || addedCount > 0 || removedCount > 0} loading={syncingProfileId === editingProfile.id} onClick={() => void handleSyncProfile(editingProfile)}>同步已保存的门店</Button><Button disabled={isSaving} danger onClick={() => handleDeleteProfile(editingProfile)}>删除品牌档案</Button></Space> : null}
+      {editingProfile ? <Button disabled={isSaving} danger onClick={() => handleDeleteProfile(editingProfile)}>删除品牌档案</Button> : null}
     </Modal>
   </main>;
 }

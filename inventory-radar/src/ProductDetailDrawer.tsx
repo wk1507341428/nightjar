@@ -148,7 +148,6 @@ export function ProductDetailDrawer({
   marketplacePlatforms,
   isLocalCatalog,
   onClose,
-  onRefresh,
   onPublish,
   onCompare,
   onPriceHistory,
@@ -159,7 +158,6 @@ export function ProductDetailDrawer({
   marketplacePlatforms: string[];
   isLocalCatalog: boolean;
   onClose: () => void;
-  onRefresh: (product: ProductDetail) => void;
   onPublish: (product: ProductDetail) => void;
   onCompare: (product: ProductDetail) => void;
   onPriceHistory: (product: ProductDetail) => void;
@@ -204,7 +202,6 @@ export function ProductDetailDrawer({
   // 抽屉底部统一操作区；避免操作按钮混入商品信息内容。
   const drawerFooter = !isLoading && !errorMessage && product ? (
     <div className="detail-drawer-actions">
-      {isLocalCatalog ? <Button onClick={() => onRefresh(product)}>刷新商品</Button> : null}
       {isLocalCatalog ? <Button onClick={() => onPriceHistory(product)}>价格走势</Button> : null}
       <Button onClick={() => onCompare(product)}>一键比价</Button>
       <Button type="primary" onClick={() => onPublish(product)}>发布到闲鱼</Button>
@@ -329,7 +326,7 @@ export function ProductDetailDrawer({
           </section>
 
           {isLocalCatalog ? <section className="detail-local-sync">
-            <div><small>LOCAL CATALOG</small><strong>本地数据同步于 {product?.last_synced_at ? new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(product.last_synced_at)) : '尚未同步'}</strong><span>可通过底部“刷新商品”实时核对价格、库存和尺码。</span></div>
+            <div><small>LOCAL CATALOG</small><strong>发布中心最近采集于 {product?.last_synced_at ? new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(product.last_synced_at)) : '尚未采集'}</strong><span>商品库会在发布中心读取实时货源后自动更新。</span></div>
           </section> : null}
 
           {detailImageUrls.length > 0 || hasPurchaseNotice ? (

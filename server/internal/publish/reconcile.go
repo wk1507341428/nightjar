@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sidejob-server/internal/model"
 	"sidejob-server/internal/xianyu"
 )
@@ -37,7 +38,15 @@ func (service *Service) processReconcileTask(ctx context.Context, task model.Pub
 			err = fmt.Errorf("闲鱼未确认下架成功")
 		}
 	} else {
-		err = service.xianyuService.ForAccount(task.AccountID).EditManagedItem(ctx, task.XianyuItemID, xianyu.PublishInput{Quantity: task.Quantity, Title: task.Title, Description: task.Description, PriceCents: task.PriceCents, OriginalPriceCents: task.OriginalPriceCents, Variants: xianyuPublishVariants(task.Variants)}, task.Before)
+		temporaryDirectory, _, variantImagePaths, prepareErr := service.downloadPublishImages(ctx, nil, task.Variants, false)
+		if temporaryDirectory != "" {
+			defer os.RemoveAll(temporaryDirectory)
+		}
+		if prepareErr != nil {
+			err = prepareErr
+		} else {
+			err = service.xianyuService.ForAccount(task.AccountID).EditManagedItem(ctx, task.XianyuItemID, xianyu.PublishInput{Quantity: task.Quantity, Title: task.Title, Description: task.Description, PriceCents: task.PriceCents, OriginalPriceCents: task.OriginalPriceCents, Variants: xianyuPublishVariants(task.Variants, variantImagePaths)}, task.Before)
+		}
 		if err == nil {
 			err = service.marketplace.MarkXianyuPublished(ctx, task, xianyu.PublishResult{ItemID: task.XianyuItemID, URL: task.XianyuURL})
 		}

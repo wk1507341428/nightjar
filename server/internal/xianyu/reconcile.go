@@ -30,14 +30,41 @@ func ManagedState(detail map[string]any) map[string]any {
 		rows = append(rows, strings.Join(props, "|")+":"+stringValue(sku["priceInCent"])+":"+stringValue(sku["quantity"]))
 	}
 	sort.Strings(rows)
-	return map[string]any{"title": stringValue(text["title"]), "description": stringValue(text["desc"]), "price": stringValue(price["priceInCent"]), "originalPrice": stringValue(price["origPriceInCent"]), "quantity": stringValue(detail["quantity"]), "skus": rows}
+	propertyImages := make([]string, 0)
+	for _, raw := range sliceValue(detail["propertyImageList"]) {
+		image := mapValue(raw)
+		property := mapValue(image["property"])
+		propertyName := stringValue(property["propertyText"])
+		propertyValue := stringValue(property["valueText"])
+		if propertyName != "" && propertyValue != "" && stringValue(image["url"]) != "" {
+			propertyImages = append(propertyImages, propertyName+"="+propertyValue)
+		}
+	}
+	sort.Strings(propertyImages)
+	return map[string]any{"title": stringValue(text["title"]), "description": stringValue(text["desc"]), "price": stringValue(price["priceInCent"]), "originalPrice": stringValue(price["origPriceInCent"]), "quantity": stringValue(detail["quantity"]), "skus": rows, "propertyImages": propertyImages}
 }
 
 // SameManagedState 兼容 Mongo 数组类型和 JSON 数组类型。
 func SameManagedState(a, b map[string]any) bool {
+	if _, exists := a["propertyImages"]; !exists {
+		a = cloneManagedState(a)
+		a["propertyImages"] = []string{}
+	}
+	if _, exists := b["propertyImages"]; !exists {
+		b = cloneManagedState(b)
+		b["propertyImages"] = []string{}
+	}
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
+}
+
+func cloneManagedState(state map[string]any) map[string]any {
+	result := make(map[string]any, len(state)+1)
+	for key, value := range state {
+		result[key] = value
+	}
+	return result
 }
 
 // actionableState 只将库存是否可售用于对账，原始精确库存仍保留用于并发校验和编辑回读。
@@ -123,7 +150,7 @@ func ManagedEditPayload(detail map[string]any, input PublishInput) map[string]an
 	}
 	payload["itemSkuList"] = buildPublishSKUList(input.Variants)
 	payload["itemProperties"] = buildPublishProperties(input.Variants)
-	payload["propertyImageList"] = nil
+	payload["propertyImageList"] = buildPublishPropertyImages(input.Variants)
 	// 沿用完全相同的规格组合 ID，新增规格交给闲鱼创建。
 	oldIDs := map[string]map[string]any{}
 	for _, v := range sliceValue(detail["itemSkuList"]) {
@@ -140,6 +167,33 @@ func ManagedEditPayload(detail map[string]any, input PublishInput) map[string]an
 		}
 	}
 	return payload
+}
+
+// hydrateVariantImagesFromDetail 没有上游规格图时沿用闲鱼原有绑定，避免普通编辑误删图片。
+func hydrateVariantImagesFromDetail(variants []PublishVariant, detail map[string]any) []PublishVariant {
+	propertyImages := make(map[string]string)
+	for _, rawImage := range sliceValue(detail["propertyImageList"]) {
+		image := mapValue(rawImage)
+		property := mapValue(image["property"])
+		key := stringValue(property["propertyText"]) + "\x00" + stringValue(property["valueText"])
+		if key != "\x00" && stringValue(image["url"]) != "" {
+			propertyImages[key] = stringValue(image["url"])
+		}
+	}
+	result := append([]PublishVariant(nil), variants...)
+	for variantIndex := range result {
+		if strings.TrimSpace(result[variantIndex].ImageURL) != "" || strings.TrimSpace(result[variantIndex].ImagePath) != "" {
+			continue
+		}
+		for _, property := range result[variantIndex].Properties {
+			key := strings.TrimSpace(property.Name) + "\x00" + strings.TrimSpace(property.Value)
+			if propertyImages[key] != "" {
+				result[variantIndex].ImageURL = propertyImages[key]
+				break
+			}
+		}
+	}
+	return result
 }
 
 // ManagedRelistPayload 使用编辑发布页相同语义，把下架商品状态切回正式在售。
@@ -168,8 +222,9 @@ func (service *Service) EditManagedItem(ctx context.Context, itemID string, inpu
 	if err != nil {
 		return err
 	}
-	payload := ManagedEditPayload(detail, input)
-	desired := ManagedState(payload)
+	input.Variants = hydrateVariantImagesFromDetail(input.Variants, detail)
+	plannedPayload := ManagedEditPayload(detail, input)
+	desired := ManagedState(plannedPayload)
 	current := ManagedState(detail)
 	if SameActionableState(current, desired) {
 		return nil
@@ -181,6 +236,11 @@ func (service *Service) EditManagedItem(ctx context.Context, itemID string, inpu
 	if err != nil {
 		return err
 	}
+	input.Variants, err = uploadVariantImages(ctx, client, input.Variants, nil)
+	if err != nil {
+		return fmt.Errorf("上传闲鱼规格图失败：%w", err)
+	}
+	payload := ManagedEditPayload(detail, input)
 	var response map[string]any
 	callErr := client.Call(ctx, "mtop.idle.pc.backend.idleitem.edit", "1.0", map[string]any{"inputJson": mustJSON(payload)}, &response)
 	_ = service.saveCookie(ctx, client.CookieHeader(), name, client.CredentialVersion())
@@ -221,6 +281,9 @@ func StateChangeReasons(before, after map[string]any) []string {
 		reasons = append(reasons, "商品可售状态："+availabilityLabel(stringValue(before["quantity"]))+" → "+availabilityLabel(stringValue(after["quantity"])))
 	}
 	oldSKUs, newSKUs := reasonSKUs(before), reasonSKUs(after)
+	if !reflect.DeepEqual(before["propertyImages"], after["propertyImages"]) {
+		reasons = append(reasons, "补充或更新规格图片")
+	}
 	keys := []string{}
 	for key := range oldSKUs {
 		keys = append(keys, key)

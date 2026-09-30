@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Drawer, Input, Segmented, Select, Spin, Switch, Tag } from 'antd';
 import { ProCard, ProLayout, ProTable, type ProColumns } from '@ant-design/pro-components';
 import { fetchBrandOptions, fetchLiveBrandCategories, fetchLiveBrandOptions, fetchLiveProductDetail, fetchLocalBrandCategories, fetchProductDetail, searchLiveProducts, searchProducts } from './api';
-import { refreshCatalogOffer } from './catalogManagementApi';
 import { INITIAL_SEARCH_STATE, PRODUCT_PAGE_SIZE, REGION_OPTIONS, getWarehouseShortName } from './constants';
 import { clearLegacyBrandOptionCache, loadRecentSearches, saveRecentSearch } from './storage';
 import { PublishProductModal } from './PublishProductModal';
@@ -10,11 +9,8 @@ import { ProductDetailDrawer } from './ProductDetailDrawer';
 import { MarketplacePage } from './MarketplacePage';
 import { PriceComparisonModal } from './PriceComparisonModal';
 import { XianyuConnectionControl } from './XianyuConnectionControl';
-import { CatalogSyncPage } from './CatalogSyncPage';
 import { BrandPublishPage } from './BrandPublishDrawer';
 import { PriceHistoryPage } from './PriceHistoryPage';
-import { SyncRunPage } from './SyncRunPage';
-import { SyncHistoryPage } from './SyncHistoryPage';
 import { PublishCenterPage } from './PublishCenterPage';
 import { OfflineCenterPage } from './OfflineCenterPage';
 import { BrandSelectOption } from './BrandSelectOption';
@@ -54,14 +50,13 @@ const WORKSPACE_ROUTES = [
   { path: '/offline-center', name: '下架中心', icon: <WorkspaceNavIcon kind="offline" /> },
   { path: '/brand-maintenance', name: '品牌维护', icon: <WorkspaceNavIcon kind="brand" /> },
   { path: '/marketplace', name: '渠道上架', icon: <WorkspaceNavIcon kind="marketplace" /> },
-  { path: '/sync', name: '同步配置', icon: <WorkspaceNavIcon kind="sync" /> },
 ];
 
 /** 商品排序方式。 */
 type SortMode = 'default' | 'priceAsc' | 'priceDesc' | 'discount' | 'xianyuLast';
 
 /** 商品列表展示模式。 */
-type CatalogMode = 'standard' | 'marketplace' | 'sync' | 'syncRun' | 'syncHistory' | 'publishCenter' | 'offlineCenter' | 'brandMaintenance' | 'batchPublish' | 'priceHistory';
+type CatalogMode = 'standard' | 'marketplace' | 'publishCenter' | 'offlineCenter' | 'brandMaintenance' | 'batchPublish' | 'priceHistory';
 
 /** 商品数据来源。 */
 type CatalogDataSource = 'live' | 'local';
@@ -73,7 +68,6 @@ type ProductViewMode = 'table' | 'grid';
 function getWorkspaceMenuPath(mode: CatalogMode, source: CatalogDataSource): string {
   if (mode === 'standard') return source === 'live' ? '/home' : '/library';
   if (mode === 'batchPublish' || mode === 'priceHistory') return '/library';
-  if (mode === 'sync' || mode === 'syncRun' || mode === 'syncHistory') return '/sync';
   if (mode === 'publishCenter') return '/publish-center';
   if (mode === 'offlineCenter') return '/offline-center';
   if (mode === 'brandMaintenance') return '/brand-maintenance';
@@ -185,25 +179,6 @@ function getBackendGoodsSort(sortMode: SortMode): number | undefined {
 /** 判断当前地址是否为独立渠道上架页。 */
 function isMarketplacePageRoute(): boolean {
   return window.location.hash === '#/marketplace';
-}
-
-/** 判断当前地址是否为同步配置页。 */
-function isCatalogSyncPageRoute(): boolean {
-  return window.location.hash === '#/sync';
-}
-
-/** 判断当前地址是否为同步历史页。 */
-function isSyncHistoryPageRoute(): boolean {
-  return window.location.hash === '#/sync-history';
-}
-
-/** 解析同步任务结果页 ID。 */
-function getSyncRunRouteID(): string {
-  const routeValue = window.location.hash.replace(/^#/, '');
-  if (!routeValue.startsWith('/sync-runs/')) {
-    return '';
-  }
-  return decodeURIComponent(routeValue.replace('/sync-runs/', '').split('?', 1)[0]).trim();
 }
 
 /** 解析发布中心详情页操作 ID。 */
@@ -508,8 +483,6 @@ export function App() {
   const [publishBatchRoute, setPublishBatchRoute] = useState<PublishBatchRoute | null>(() => getPublishBatchRoute());
   // 当前价格走势页面路由。
   const [priceHistoryRoute, setPriceHistoryRoute] = useState<PriceHistoryRoute | null>(() => getPriceHistoryRoute());
-  // 当前同步任务结果页 ID。
-  const [syncRunRouteID, setSyncRunRouteID] = useState(() => getSyncRunRouteID());
   // 当前发布中心操作详情 ID。
   const [publishOperationRouteID, setPublishOperationRouteID] = useState(() => getPublishOperationRouteID());
   // 品牌列表加载状态。
@@ -829,18 +802,6 @@ export function App() {
       setActiveCategory('发布中心');
       return;
     }
-    const initialSyncRunID = getSyncRunRouteID();
-    if (initialSyncRunID) {
-      setSyncRunRouteID(initialSyncRunID);
-      setCatalogMode('syncRun');
-      setActiveCategory('同步配置');
-      return;
-    }
-    if (isSyncHistoryPageRoute()) {
-      setCatalogMode('syncHistory');
-      setActiveCategory('同步配置');
-      return;
-    }
     const initialPriceHistoryRoute = getPriceHistoryRoute();
     if (initialPriceHistoryRoute) {
       setPriceHistoryRoute(initialPriceHistoryRoute);
@@ -857,11 +818,6 @@ export function App() {
       setActiveCategory('我的商品库');
       setBrandCategories([]);
       setBrandCategoryId('');
-      return;
-    }
-    if (isCatalogSyncPageRoute()) {
-      setCatalogMode('sync');
-      setActiveCategory('同步配置');
       return;
     }
     if (isLocalCatalogPageRoute()) {
@@ -908,21 +864,6 @@ export function App() {
       return;
     }
     setPublishOperationRouteID('');
-    const nextSyncRunID = getSyncRunRouteID();
-    if (nextSyncRunID) {
-      setSyncRunRouteID(nextSyncRunID);
-      setCatalogMode('syncRun');
-      setActiveCategory('同步配置');
-      setQuery('');
-      return;
-    }
-    setSyncRunRouteID('');
-    if (isSyncHistoryPageRoute()) {
-      setCatalogMode('syncHistory');
-      setActiveCategory('同步配置');
-      setQuery('');
-      return;
-    }
     const nextPriceHistoryRoute = getPriceHistoryRoute();
     if (nextPriceHistoryRoute) {
       setPriceHistoryRoute(nextPriceHistoryRoute);
@@ -943,12 +884,6 @@ export function App() {
       return;
     }
     setPublishBatchRoute(null);
-    if (isCatalogSyncPageRoute()) {
-      setCatalogMode('sync');
-      setActiveCategory('同步配置');
-      setQuery('');
-      return;
-    }
     if (isLocalCatalogPageRoute()) {
       setCatalogMode('standard');
       setCatalogDataSource('local');
@@ -988,14 +923,6 @@ export function App() {
     }
 
     window.location.hash = '/marketplace';
-  }
-
-  /** 打开品牌同步配置页。 */
-  function handleOpenCatalogSyncPage() {
-    if (isCatalogSyncPageRoute()) {
-      return;
-    }
-    window.location.hash = '/sync';
   }
 
   /** 打开本地商品库页面。 */
@@ -1115,11 +1042,6 @@ export function App() {
       handleOpenMarketplacePage();
       return;
     }
-    if (categoryName === '同步配置') {
-      handleOpenCatalogSyncPage();
-      return;
-    }
-
     // 全部分类对应的空关键词。
     const categoryQuery = categoryName === '全部货源' ? '' : categoryName;
 
@@ -1275,25 +1197,6 @@ export function App() {
     window.location.hash = `/price-history/${encodeURIComponent(product.catalog_offer_id)}`;
   }
 
-  /** 刷新当前本地商品并重新读取详情。 */
-  async function handleRefreshSelectedProduct(product: ProductDetail) {
-    const offerId = product.catalog_offer_id;
-    if (!offerId) {
-      return;
-    }
-    setIsDetailLoading(true);
-    setDetailErrorMessage('');
-    try {
-      await refreshCatalogOffer(offerId);
-      const refreshedProduct = await fetchProductDetail(offerId, product.regionauth_id ?? regionId);
-      setSelectedProduct(refreshedProduct);
-    } catch (error) {
-      setDetailErrorMessage(error instanceof Error ? error.message : '商品刷新失败');
-    } finally {
-      setIsDetailLoading(false);
-    }
-  }
-
   // 商品表格列；原有商品详情、货号复制和渠道状态入口均保留。
   const productColumns: ProColumns<ProductSummary>[] = [
     {
@@ -1338,7 +1241,7 @@ export function App() {
         avatarProps={false}
         actionsRender={false}
         menuExtraRender={() => <div className="workspace-menu-caption">OPERATIONS <span>运营工作台</span></div>}
-        menuFooterRender={() => <div className="workspace-menu-footer"><span className="workspace-menu-footer__dot" /><div><strong>SideJob Console</strong><small>选品 · 发布 · 同步</small></div></div>}
+        menuFooterRender={() => <div className="workspace-menu-footer"><span className="workspace-menu-footer__dot" /><div><strong>SideJob Console</strong><small>选品 · 发布 · 商品库</small></div></div>}
         menuItemRender={(item, defaultDom) => <a href={`#${item.path}`} onClick={(event) => { event.preventDefault(); handleSelectCategory(String(item.name ?? '')); }}>{defaultDom}</a>}
         onMenuHeaderClick={() => { window.location.hash = '/home'; }}
       >
@@ -1350,18 +1253,12 @@ export function App() {
         <BrandPublishPage key={publishBatchRoute.routeKey} batchId={publishBatchRoute.batchId} brandStoreId={publishBatchRoute.brandStoreId} brandName={publishBatchRoute.brandName} onBack={() => { window.location.hash = '/library'; }} />
       ) : catalogMode === 'priceHistory' && priceHistoryRoute ? (
         <PriceHistoryPage offerId={priceHistoryRoute.offerId} onBack={() => { window.location.hash = '/library'; }} />
-      ) : catalogMode === 'syncRun' && syncRunRouteID ? (
-        <SyncRunPage runId={syncRunRouteID} onBack={() => { window.location.hash = '/sync'; }} />
-      ) : catalogMode === 'syncHistory' ? (
-        <SyncHistoryPage onBack={() => { window.location.hash = '/sync'; }} />
       ) : catalogMode === 'publishCenter' ? (
         <PublishCenterPage operationId={publishOperationRouteID || undefined} />
       ) : catalogMode === 'offlineCenter' ? (
         <OfflineCenterPage />
       ) : catalogMode === 'brandMaintenance' ? (
         <BrandMaintenancePage />
-      ) : catalogMode === 'sync' ? (
-        <CatalogSyncPage onBack={handleReturnToStorefront} />
       ) : catalogMode === 'marketplace' ? (
         <MarketplacePage
           listings={marketplaceListings}
@@ -1433,7 +1330,6 @@ export function App() {
           marketplacePlatforms={getProductMarketplacePlatforms(selectedProduct?.item_no)}
           isLocalCatalog={catalogDataSource === 'local'}
           onClose={handleCloseDetail}
-          onRefresh={handleRefreshSelectedProduct}
           onPublish={handleOpenPublish}
           onCompare={handleCompareProduct}
           onPriceHistory={handleOpenPriceHistory}

@@ -12,8 +12,9 @@ func (service *Service) ReactivateManagedItem(ctx context.Context, itemID string
 	if err != nil {
 		return err
 	}
-	payload := ManagedRelistPayload(detail, input)
-	desiredState := ManagedState(payload)
+	input.Variants = hydrateVariantImagesFromDetail(input.Variants, detail)
+	plannedPayload := ManagedRelistPayload(detail, input)
+	desiredState := ManagedState(plannedPayload)
 	currentState := ManagedState(detail)
 	if len(before) > 0 && !SameManagedState(currentState, before) && !SameActionableState(currentState, desiredState) {
 		return fmt.Errorf("闲鱼历史商品已发生变化，请重新生成预览")
@@ -25,15 +26,24 @@ func (service *Service) ReactivateManagedItem(ctx context.Context, itemID string
 	defer func() {
 		_ = service.saveCookie(context.WithoutCancel(ctx), client.CookieHeader(), displayName, client.CredentialVersion())
 	}()
+	uploadedURLByPath := make(map[string]string, len(input.ImagePaths))
+	uploadedImages := make([]UploadedImage, 0, len(input.ImagePaths))
 	if len(input.ImagePaths) > 0 {
-		uploadedImages := make([]UploadedImage, 0, len(input.ImagePaths))
 		for _, imagePath := range input.ImagePaths {
 			uploadedImage, uploadErr := client.UploadImage(ctx, imagePath)
 			if uploadErr != nil {
 				return uploadErr
 			}
 			uploadedImages = append(uploadedImages, uploadedImage)
+			uploadedURLByPath[imagePath] = uploadedImage.URL
 		}
+	}
+	input.Variants, err = uploadVariantImages(ctx, client, input.Variants, uploadedURLByPath)
+	if err != nil {
+		return fmt.Errorf("上传闲鱼规格图失败：%w", err)
+	}
+	payload := ManagedRelistPayload(detail, input)
+	if len(uploadedImages) > 0 {
 		payload["imageInfoDOList"] = buildImageInfos(uploadedImages)
 	}
 	var editResponse map[string]any

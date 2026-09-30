@@ -113,7 +113,7 @@ func publishVariantsFromRequest(requestVariants []types.CreatePublishVariantRequ
 		if len(properties) == 0 {
 			continue
 		}
-		variants = append(variants, model.PublishVariant{PriceCents: requestVariant.PriceCents, Quantity: requestVariant.Quantity, Properties: properties})
+		variants = append(variants, model.PublishVariant{PriceCents: requestVariant.PriceCents, Quantity: requestVariant.Quantity, ImageURL: strings.TrimSpace(requestVariant.ImageURL), Properties: properties})
 	}
 	if len(variants) < 2 {
 		return nil

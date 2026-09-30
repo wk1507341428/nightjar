@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Form, Input, InputNumber, Modal, Progress, Select } from 'antd';
 import { getWarehouseShortName } from './constants';
 import { createPublishTask, fetchPublishTask, retryPublishTask } from './xianyuApi';
-import type { ProductDetail, ProductSku, ProductSummary, PublishTask, PublishTaskStatus } from './types';
+import type { CreatePublishTaskRequest, ProductDetail, ProductSku, ProductSummary, PublishTask, PublishTaskStatus } from './types';
 import { useXianyuAccount } from './XianyuAccountContext';
 
 /** 发布任务轮询间隔。 */
@@ -136,6 +136,73 @@ function getInStockVariantText(variantLabels: string[]): string {
 /** 判断当前商品是否属于鞋靴类。 */
 function isFootwearProduct(product: ProductDetail): boolean {
   return /鞋|靴|sneaker|loafer|boot/i.test(product?.item_name ?? '');
+}
+
+/** 统一闲鱼买家端展示的规格名称。 */
+function normalizePublishPropertyName(propertyName: string, isFootwear: boolean): string {
+  if (isFootwear && /尺码|鞋码/.test(propertyName)) {
+    return '鞋码';
+  }
+  return propertyName.trim();
+}
+
+/** 从实时 SKU 生成带库存和规格图的闲鱼销售规格。 */
+function getPublishVariants(product: ProductDetail, priceCents: number, isFootwear: boolean): NonNullable<CreatePublishTaskRequest['variants']> {
+  // 有库存的实时 SKU 候选项。
+  const skuCandidates: Array<{ quantity: number; imageUrl?: string; properties: Map<string, string> }> = [];
+  // 各规格维度出现过的值集合。
+  const propertyValues = new Map<string, Set<string>>();
+  // 规格维度原始顺序。
+  const propertyOrder: string[] = [];
+
+  for (const sku of product?.spec_items ?? []) {
+    // 当前 SKU 库存。
+    const quantity = Number(sku?.store ?? 0);
+    if (quantity <= 0 || sku?.approve_status === 'offsale') {
+      continue;
+    }
+    // 当前 SKU 的规格键值。
+    const properties = new Map<string, string>();
+    for (const itemSpec of sku?.item_spec ?? []) {
+      // 规格名称。
+      const propertyName = normalizePublishPropertyName(itemSpec?.spec_name ?? '', isFootwear);
+      // 规格值。
+      const propertyValue = itemSpec?.spec_value_name?.trim() ?? '';
+      if (!propertyName || !propertyValue) {
+        continue;
+      }
+      properties.set(propertyName, propertyValue);
+      if (!propertyValues.has(propertyName)) {
+        propertyValues.set(propertyName, new Set<string>());
+        propertyOrder.push(propertyName);
+      }
+      propertyValues.get(propertyName)?.add(propertyValue);
+    }
+    skuCandidates.push({ quantity, imageUrl: sku?.sku_img_url?.trim() || undefined, properties });
+  }
+
+  // 闲鱼最多使用两个真正变化的规格维度，鞋码即使单值也保留。
+  const varyingProperties = propertyOrder
+    .filter((propertyName) => (propertyValues.get(propertyName)?.size ?? 0) > 1 || propertyName.includes('码'))
+    .slice(0, 2);
+
+  if (varyingProperties.length === 0) {
+    return [];
+  }
+
+  // 可发布的完整 SKU 规格。
+  const publishVariants: NonNullable<CreatePublishTaskRequest['variants']> = [];
+  for (const skuCandidate of skuCandidates) {
+    // 当前 SKU 的闲鱼规格值。
+    const properties = varyingProperties
+      .map((propertyName) => ({ name: propertyName, value: skuCandidate.properties.get(propertyName) ?? '' }))
+      .filter((property) => Boolean(property.value));
+    if (properties.length !== varyingProperties.length) {
+      continue;
+    }
+    publishVariants.push({ priceCents, quantity: skuCandidate.quantity, imageUrl: skuCandidate.imageUrl, properties });
+  }
+  return publishVariants;
 }
 
 /** 返回发布任务对应的进度百分比。 */
@@ -286,6 +353,7 @@ export function PublishProductModal({
         brand: product?.goods_brand ?? product?.distributor_info?.name ?? '',
         condition: '全新',
         availableSizes: isFootwear ? inStockVariantLabels : [],
+		variants: getPublishVariants(product, Math.round(values.price * 100), isFootwear),
         isFootwear,
       });
       setPublishTask(nextTask);

@@ -181,15 +181,6 @@ export function appendPublishOperation(brandStoreId: string, settings: PublishBa
   return requestSideJob<PublishBatch>('/xianyu/publish-operations', { method: 'POST', body: JSON.stringify({ brandStoreId, ...settings }) });
 }
 
-/** 同步后自动对账的历史记录。 */
-export interface ReconcilePlanRecord { id: string; accountId: string; status: string; brandName: string; error?: string; updates: number; offline: number; createdAt: string; request: PublishBatchSettings }
-
-/** 读取同步后生成的待确认对账记录。 */
-export async function fetchReconcileOverview(accountId = '') {
-  const query = accountId ? `?accountId=${encodeURIComponent(accountId)}` : '';
-  return requestSideJob<ReconcilePlanRecord[]>(`/xianyu/reconcile-plans${query}`);
-}
-
 
 /** 查询指定渠道当前在售商品。 */
 export function fetchMarketplaceListings(platform = 'xianyu', itemNos: string[] = [], accountId = ''): Promise<MarketplaceListingListResponse> {

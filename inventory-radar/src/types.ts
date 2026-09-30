@@ -159,23 +159,6 @@ export interface ProductPurchaseNoticeResponse {
   message?: string;
 }
 
-/** 上游发现的一家品牌门店。 */
-export interface CatalogBrandStoreCandidate {
-  regionId: string;
-  distributorId: string;
-  brandName: string;
-  shopCode?: string;
-  storeName?: string;
-}
-
-/** 本地保存的品牌门店同步配置。 */
-export interface CatalogBrandStore extends CatalogBrandStoreCandidate {
-  id: string;
-  brandId: string;
-  syncEnabled: boolean;
-  lastSyncedAt?: string;
-}
-
 /** 品牌档案中的一个地区品牌成员。 */
 export interface BrandProfileMember {
 	regionId: string;
@@ -206,67 +189,6 @@ export interface BrandMaintenanceSource {
 export interface BrandMaintenanceResponse {
 	profiles: BrandProfile[];
 	sources: BrandMaintenanceSource[];
-}
-
-/** 本地商品库同步任务摘要。 */
-export interface CatalogSyncRun {
-  id: string;
-  scopeType: string;
-  brandStoreId?: string;
-  brandName?: string;
-  regionId?: string;
-  offerId?: string;
-  status: string;
-  totalCount: number;
-  processedCount: number;
-  createdCount: number;
-  updatedCount: number;
-  inactiveCount: number;
-  suspectedCount: number;
-  errorMessage?: string;
-  startedAt: string;
-  finishedAt?: string;
-}
-
-/** SKU 同步变更前后的关键值。 */
-export interface CatalogSyncChangeValue {
-	priceCents: number;
-	sourcePriceCents: number;
-	activityPriceCents: number;
-	marketPriceCents: number;
-	stock: number;
-	status?: string;
-}
-
-/** 一条可审计的 SKU 同步变更。 */
-export interface CatalogSyncChange {
-	id: string;
-	runId: string;
-	offerId: string;
-	itemNo: string;
-	productName: string;
-	imageUrl?: string;
-	skuId: string;
-	skuCode?: string;
-	variantLabel: string;
-	changeType: string;
-	before: CatalogSyncChangeValue;
-	after: CatalogSyncChangeValue;
-	changedAt: string;
-	xianyuListings: MarketplaceListing[];
-}
-
-/** 同步历史分页数据。 */
-export interface CatalogSyncRunListResponse {
-	list: CatalogSyncRun[];
-	total: number;
-}
-
-/** 一次同步的变更详情分页数据。 */
-export interface CatalogSyncChangeListResponse {
-	run: CatalogSyncRun;
-	list: CatalogSyncChange[];
-	total: number;
 }
 
 /** 搜索结果状态。 */
@@ -351,6 +273,7 @@ export interface OfflineCenterCandidate {
 	itemNo: string;
 	title: string;
 	priceCents: number;
+	sourcePriceCents?: number;
 	marketPriceCents?: number;
 	discountRate?: number;
 	imageUrl?: string;
@@ -480,6 +403,7 @@ export interface CreatePublishTaskRequest {
 	variants?: Array<{
 		priceCents: number;
 		quantity: number;
+		imageUrl?: string;
 		properties: Array<{ name: string; value: string }>;
 	}>;
 	isFootwear: boolean;
@@ -519,7 +443,7 @@ export interface PublishBatchPreview {
 	candidates?: Array<{ itemNo: string; title: string; priceCents: number; originalPriceCents: number; discountRate: number; imageUrl?: string; sourceRegions?: string[] }>;
 	previewId?: string;
 	unchanged?: number;
-	updates?: Array<PublishTask & { before?: { price?: string; quantity?: string }; variants?: Array<{ quantity: number; priceCents: number; properties: Array<{ name: string; value: string }> }> }>;
+	updates?: Array<PublishTask & { before?: { price?: string; quantity?: string }; variants?: Array<{ quantity: number; priceCents: number; imageUrl?: string; properties: Array<{ name: string; value: string }> }> }>;
 	relists?: PublishTask[];
 	brandStoreId: string;
 	brandName: string;

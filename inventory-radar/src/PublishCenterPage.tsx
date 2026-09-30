@@ -7,7 +7,6 @@ import { appendPublishOperation, cancelPublishOperation, fetchPublishOperation, 
 import type { BrandCategory, BrandOption, PublishBatch, PublishBatchPreview, PublishBatchSettings, PublishTask } from './types';
 import { BrandSelectOption } from './BrandSelectOption';
 import { fetchBrandMaintenance } from './catalogManagementApi';
-import { fetchReconcileOverview, type ReconcilePlanRecord } from './xianyuApi';
 import { retryFailedOperation } from './xianyuApi';
 import { useXianyuAccount } from './XianyuAccountContext';
 
@@ -102,8 +101,6 @@ function renderSkuImage(imageUrl?: string, title?: string) {
 export function PublishCenterPage({ operationId }: { operationId?: string }) {
   // 当前账号决定列表、预览和新建队列的隔离范围。
   const { accounts, currentAccount, currentAccountId } = useXianyuAccount();
-  // 同步后等待确认的历史计划。
-  const [reconcilePlans, setReconcilePlans] = useState<ReconcilePlanRecord[]>([]);
   // 发布操作列表。
   const [operations, setOperations] = useState<PublishBatch[]>([]);
   // 当前操作详情。
@@ -175,7 +172,6 @@ export function PublishCenterPage({ operationId }: { operationId?: string }) {
   async function loadOperations(silent = false) {
     const requestVersion = operationRequestVersion.current + 1;
     operationRequestVersion.current = requestVersion;
-    const requestAccountId = currentAccountId;
     if (!silent) setIsLoading(true);
     try {
       const response = await fetchPublishOperations(1, 100, currentAccountId);
@@ -183,9 +179,6 @@ export function PublishCenterPage({ operationId }: { operationId?: string }) {
       setOperations(response.list);
       setOperationTotal(response.total);
       setErrorMessage('');
-      const plans = await fetchReconcileOverview(currentAccountId);
-      if (requestVersion !== operationRequestVersion.current || requestAccountId !== currentAccountId) return;
-      setReconcilePlans(plans);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '读取发布操作记录失败');
     } finally {
@@ -300,7 +293,6 @@ export function PublishCenterPage({ operationId }: { operationId?: string }) {
 	clearPreview();
 	setBrandId('');
 	setOperations([]);
-	setReconcilePlans([]);
     if (operationId) void loadOperation();
     else void loadOperations();
   }, [operationId, currentAccountId]);
@@ -463,16 +455,6 @@ export function PublishCenterPage({ operationId }: { operationId?: string }) {
       setIsPlanning(false);
     }
   }
-
-
-  /** 同步后的计划重新核对实时货源后再交给用户确认。 */
-  async function handleReviewReconcile(record: ReconcilePlanRecord) {
-    setIsAddBrandOpen(true); clearPreview(); setIsPlanning(true);
-    try { setPreview(await previewPublishOperation('', record.request)); }
-    catch (error) { setErrorMessage(error instanceof Error ? error.message : '对账失败'); }
-    finally { setIsPlanning(false); }
-  }
-
   /** 按本次显示的失败集合重新入队，不包含运行中、成功或后来新增的失败任务。 */
   async function handleRetryFailed(action = '') {
     if (!operation || retryingGroup || retryingTaskId) return;
@@ -536,7 +518,6 @@ export function PublishCenterPage({ operationId }: { operationId?: string }) {
   return (
     <main className="publish-center-page">
       <header className="workspace-page-heading"><div><span className="workspace-eyebrow">PUBLISH / OPERATIONS</span><h1>{operationId ? '队列任务详情' : '发布中心'}</h1><p>当前账号：{displayedAccountName} · 所有发布、修改、下架与重试均绑定该账号。</p></div><div className="workspace-page-actions">{operationId ? <><Popconfirm title="确认取消这个队列？" description="已完成任务会保留，未执行任务将停止。" okText="确认取消" cancelText="返回" onConfirm={() => operation && void handleCancelOperation(operation.id)}><Button danger disabled={!operation || (operation.status !== 'running' && operation.status !== 'preparing')} loading={cancellingOperationId === operation?.id}>取消队列</Button></Popconfirm><Button onClick={() => { window.location.hash = '/publish-center'; }}>返回队列列表</Button></> : <Button type="primary" disabled={!targetAccount?.sellerConnected || targetAccount.status !== 'active'} onClick={handleOpenAddBrand}>加入品牌到队列</Button>}</div></header>
-      {reconcilePlans.length > 0 ? <section className="publish-center-dashboard"><div className="workspace-list-heading"><div><strong>同步对账记录</strong><span>{reconcilePlans.length} 条待核对计划</span></div></div><ProTable<ReconcilePlanRecord> rowKey="id" search={false} options={false} dataSource={reconcilePlans} pagination={{ pageSize: 5 }} headerTitle="同步对账记录" columns={[{ title: '品牌', dataIndex: 'brandName' }, { title: '状态', dataIndex: 'status' }, { title: '待修改', dataIndex: 'updates' }, { title: '待下架', dataIndex: 'offline' }, { title: '失败原因', dataIndex: 'error' }, { title: '操作', render: (_, record) => <Button onClick={() => void handleReviewReconcile(record)}>重新核对并预览</Button> }]} /></section> : null}
       {errorMessage ? <Alert type="error" showIcon closable onClose={() => setErrorMessage('')} message={errorMessage} /> : null}
       {!operationId ? <section className="publish-center-dashboard">
         <div className="publish-center-metrics"><article><span>操作记录</span><strong>{operationTotal}</strong></article><article><span>当前队列容量</span><strong>{activeOperation?.limit ?? 0}<em> / 3000</em></strong></article><article><span>剩余可追加</span><strong>{remainingCapacity}</strong></article><article className="publish-center-metrics__live"><span>队列状态</span><strong>{activeOperation ? '运行中' : '空闲'}</strong></article></div>

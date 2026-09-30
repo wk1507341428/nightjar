@@ -15,7 +15,6 @@ func RegisterHandlers(server *rest.Server, serviceContext *svc.ServiceContext) {
 	serviceContext.PublishService.RefreshReconcile = func(ctx context.Context, task model.PublishTask) (model.PublishTask, error) {
 		return refreshReconcileTask(ctx, serviceContext, task)
 	}
-	registerAutoReconcile(serviceContext)
 	serviceContext.PublishService.PrepareRetry = func(ctx context.Context, task model.PublishTask) (model.PublishTask, error) {
 		return prepareRetryContent(ctx, serviceContext, task)
 	}
@@ -35,28 +34,19 @@ func RegisterHandlers(server *rest.Server, serviceContext *svc.ServiceContext) {
 		{Method: http.MethodGet, Path: "/api/catalog/brand-profiles/:id/categories", Handler: listOfflineCenterCategoriesHandler(serviceContext)},
 		{Method: http.MethodPost, Path: "/api/xianyu/offline-center/preview", Handler: previewOfflineCenterHandler(serviceContext)},
 		{Method: http.MethodPost, Path: "/api/xianyu/offline-center/operations", Handler: createOfflineCenterOperationHandler(serviceContext)},
-		{Method: http.MethodGet, Path: "/api/xianyu/reconcile-plans", Handler: automaticPlansHandler(serviceContext)},
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/healthz",
 			Handler: healthHandler(),
 		},
-		{Method: http.MethodGet, Path: "/api/catalog/brand-stores/discover", Handler: discoverCatalogBrandStoresHandler(serviceContext)},
 		{Method: http.MethodGet, Path: "/api/catalog/brand-stores", Handler: listCatalogBrandStoresHandler(serviceContext)},
 		{Method: http.MethodGet, Path: "/api/catalog/brand-stores/:id/categories", Handler: listCatalogBrandCategoriesHandler(serviceContext)},
-		{Method: http.MethodPut, Path: "/api/catalog/brand-stores", Handler: saveCatalogBrandStoreHandler(serviceContext)},
 		{Method: http.MethodGet, Path: "/api/catalog/brand-maintenance", Handler: getBrandMaintenanceHandler(serviceContext)},
 		{Method: http.MethodPut, Path: "/api/catalog/brand-profiles", Handler: saveBrandProfileHandler(serviceContext)},
 		{Method: http.MethodDelete, Path: "/api/catalog/brand-profiles/:id", Handler: deleteBrandProfileHandler(serviceContext)},
-		{Method: http.MethodPost, Path: "/api/catalog/brand-profiles/:id/sync", Handler: syncBrandProfileHandler(serviceContext)},
 		{Method: http.MethodGet, Path: "/api/catalog/offers", Handler: listCatalogOffersHandler(serviceContext)},
 		{Method: http.MethodGet, Path: "/api/catalog/offers/:id", Handler: getCatalogOfferHandler(serviceContext)},
 		{Method: http.MethodGet, Path: "/api/catalog/offers/:id/price-history", Handler: getCatalogOfferPriceHistoryHandler(serviceContext)},
-		{Method: http.MethodPost, Path: "/api/catalog/brand-stores/:id/sync", Handler: syncCatalogBrandStoreHandler(serviceContext)},
-		{Method: http.MethodGet, Path: "/api/catalog/sync-runs/:id", Handler: getCatalogSyncRunHandler(serviceContext)},
-		{Method: http.MethodGet, Path: "/api/catalog/sync-runs", Handler: listCatalogSyncRunsHandler(serviceContext)},
-		{Method: http.MethodGet, Path: "/api/catalog/sync-runs/:id/changes", Handler: listCatalogSyncChangesHandler(serviceContext)},
-		{Method: http.MethodPost, Path: "/api/catalog/offers/:id/refresh", Handler: refreshCatalogOfferHandler(serviceContext)},
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/marketplace/listings",

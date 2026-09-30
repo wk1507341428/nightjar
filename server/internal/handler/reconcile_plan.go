@@ -90,7 +90,7 @@ func taskPublishInput(task model.PublishTask) xianyu.PublishInput {
 		for _, p := range sku.Properties {
 			props = append(props, xianyu.PublishVariantProperty{Name: p.Name, Value: p.Value})
 		}
-		variants = append(variants, xianyu.PublishVariant{PriceCents: sku.PriceCents, Quantity: sku.Quantity, Properties: props})
+		variants = append(variants, xianyu.PublishVariant{PriceCents: sku.PriceCents, Quantity: sku.Quantity, ImageURL: sku.ImageURL, Properties: props})
 	}
 	return xianyu.PublishInput{Quantity: task.Quantity, Title: task.Title, Description: task.Description, PriceCents: task.PriceCents, OriginalPriceCents: task.OriginalPriceCents, Variants: variants}
 }
@@ -184,7 +184,7 @@ func refreshReconcileTask(ctx context.Context, sc *svc.ServiceContext, task mode
 		return task, fmt.Errorf("全部来源已无货，请重新预览并确认下架")
 	}
 	product := merged[0]
-	if task.Action == "" || task.Action == "publish" || task.Action == "relist" {
+	if task.Action != "offline" {
 		product, err = retryPublishDetail(ctx, sc.CatalogService.GetLiveProductDetail, product, task)
 		if err != nil {
 			return task, err
@@ -227,6 +227,7 @@ func retryPublishDetail(ctx context.Context, fetch func(context.Context, map[str
 			detail[key] = value
 		}
 	}
+	enrichProductSpecImages(source, detail)
 	if specs, ok := source["_merged_spec_items"]; ok {
 		detail["spec_items"] = specs
 	}

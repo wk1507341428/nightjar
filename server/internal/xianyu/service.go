@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,8 @@ type PublishInput struct {
 type PublishVariant struct {
 	PriceCents int64
 	Quantity   int64
+	ImagePath  string
+	ImageURL   string
 	Properties []PublishVariantProperty
 }
 
@@ -592,7 +595,33 @@ func parseSearchPriceCents(result map[string]any) int64 {
 			return priceCents
 		}
 	}
+	if priceCents := parseSellerSKUPriceCents(result["idleItemSkuList"]); priceCents > 0 {
+		return priceCents
+	}
 	return 0
+}
+
+// parseSellerSKUPriceCents 读取多规格商品的最低 SKU 售价，接口数值单位已经是分。
+func parseSellerSKUPriceCents(value any) int64 {
+	minimumPriceCents := int64(0)
+	for _, rawSKU := range sliceValue(value) {
+		sku := mapValue(rawSKU)
+		priceCents := int64(0)
+		for _, key := range []string{"priceInCent", "price"} {
+			parsedPrice, err := strconv.ParseInt(stringValue(sku[key]), 10, 64)
+			if err == nil && parsedPrice > 0 {
+				priceCents = parsedPrice
+				break
+			}
+		}
+		if priceCents == 0 {
+			priceCents = parseYuanPriceCents(stringValue(mapValue(sku["features"])["priceYuan"]))
+		}
+		if priceCents > 0 && (minimumPriceCents == 0 || priceCents < minimumPriceCents) {
+			minimumPriceCents = priceCents
+		}
+	}
+	return minimumPriceCents
 }
 
 // parsePriceComponents 解析 PC 搜索卡片的 sign/integer/decimal 价格组件。
@@ -655,12 +684,18 @@ func (service *Service) Publish(ctx context.Context, input PublishInput) (Publis
 	}
 
 	uploadedImages := make([]UploadedImage, 0, len(input.ImagePaths))
+	uploadedURLByPath := make(map[string]string, len(input.ImagePaths))
 	for _, imagePath := range input.ImagePaths {
 		uploadedImage, uploadErr := client.UploadImage(ctx, imagePath)
 		if uploadErr != nil {
 			return PublishResult{}, uploadErr
 		}
 		uploadedImages = append(uploadedImages, uploadedImage)
+		uploadedURLByPath[imagePath] = uploadedImage.URL
+	}
+	input.Variants, err = uploadVariantImages(ctx, client, input.Variants, uploadedURLByPath)
+	if err != nil {
+		return PublishResult{}, fmt.Errorf("上传闲鱼规格图失败：%w", err)
 	}
 	imageInfos := buildImageInfos(uploadedImages)
 
@@ -741,6 +776,31 @@ func (service *Service) Publish(ctx context.Context, input PublishInput) (Publis
 		ItemID: itemID,
 		URL:    "https://www.goofish.com/item?id=" + itemID,
 	}, nil
+}
+
+// uploadVariantImages 上传规格图并复用已经作为商品主图上传过的本地文件。
+func uploadVariantImages(ctx context.Context, client *Client, variants []PublishVariant, uploadedURLByPath map[string]string) ([]PublishVariant, error) {
+	result := append([]PublishVariant(nil), variants...)
+	if uploadedURLByPath == nil {
+		uploadedURLByPath = make(map[string]string)
+	}
+	for variantIndex := range result {
+		imagePath := strings.TrimSpace(result[variantIndex].ImagePath)
+		if imagePath == "" {
+			continue
+		}
+		imageURL := uploadedURLByPath[imagePath]
+		if imageURL == "" {
+			uploadedImage, err := client.UploadImage(ctx, imagePath)
+			if err != nil {
+				return nil, err
+			}
+			imageURL = uploadedImage.URL
+			uploadedURLByPath[imagePath] = imageURL
+		}
+		result[variantIndex].ImageURL = imageURL
+	}
+	return result, nil
 }
 
 // applyOptionalAttributes 尽可能补充品牌、成色和鞋码，匹配失败时不阻断发布。
@@ -1125,7 +1185,7 @@ func buildPublishPayload(
 		"itemGroupDTO":      map[string]any{"groupId": ""},
 		"itemProperties":    buildPublishProperties(input.Variants),
 		"itemSkuList":       buildPublishSKUList(input.Variants),
-		"propertyImageList": nil,
+		"propertyImageList": buildPublishPropertyImages(input.Variants),
 		"defaultPrice":      false,
 		"aiHostUsed":        false,
 		"aigc":              "",
@@ -1134,6 +1194,89 @@ func buildPublishPayload(
 		"yhbItemInfoDTO":    map[string]any{"idleAppraiseScene": "", "settingsPreferences": map[string]string{"assumeRule": "", "tradeRule": ""}, "useYhbService": false},
 	}
 	return payload
+}
+
+type variantImageProperty struct {
+	name      string
+	valueURLs map[string]string
+	score     int
+}
+
+// selectVariantImageProperty 选择最能代表商品外观的一条规格维度，避免把颜色图错误绑定到尺码。
+func selectVariantImageProperty(variants []PublishVariant) variantImageProperty {
+	propertyOrder := make([]string, 0, 2)
+	candidates := make(map[string]map[string]string)
+	conflicts := make(map[string]bool)
+	for _, variant := range variants {
+		imageURL := strings.TrimSpace(variant.ImageURL)
+		if imageURL == "" {
+			continue
+		}
+		for _, property := range variant.Properties {
+			name := strings.TrimSpace(property.Name)
+			value := strings.TrimSpace(property.Value)
+			if name == "" || value == "" {
+				continue
+			}
+			if candidates[name] == nil {
+				candidates[name] = make(map[string]string)
+				propertyOrder = append(propertyOrder, name)
+			}
+			if existingURL := candidates[name][value]; existingURL != "" && existingURL != imageURL {
+				conflicts[name] = true
+				continue
+			}
+			candidates[name][value] = imageURL
+		}
+	}
+
+	selected := variantImageProperty{}
+	for propertyIndex, propertyName := range propertyOrder {
+		if conflicts[propertyName] || len(candidates[propertyName]) == 0 {
+			continue
+		}
+		uniqueImageURLs := make(map[string]struct{}, len(candidates[propertyName]))
+		for _, imageURL := range candidates[propertyName] {
+			uniqueImageURLs[imageURL] = struct{}{}
+		}
+		if len(uniqueImageURLs) < 2 {
+			continue
+		}
+		score := len(candidates[propertyName])*10 - propertyIndex
+		switch {
+		case strings.Contains(propertyName, "颜色") || strings.Contains(propertyName, "色号") || strings.Contains(propertyName, "花色"):
+			score += 1000
+		case strings.Contains(propertyName, "款式") || strings.Contains(propertyName, "型号"):
+			score += 500
+		case strings.Contains(propertyName, "码"):
+			score -= 100
+		}
+		if selected.name == "" || score > selected.score {
+			selected = variantImageProperty{name: propertyName, valueURLs: candidates[propertyName], score: score}
+		}
+	}
+	return selected
+}
+
+// buildPublishPropertyImages 生成闲鱼规格值与图片的绑定关系。
+func buildPublishPropertyImages(variants []PublishVariant) any {
+	selected := selectVariantImageProperty(variants)
+	if selected.name == "" {
+		return nil
+	}
+	values := make([]string, 0, len(selected.valueURLs))
+	for value := range selected.valueURLs {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	images := make([]any, 0, len(values))
+	for _, value := range values {
+		images = append(images, map[string]any{
+			"property": map[string]any{"propertyText": selected.name, "valueText": value},
+			"url":      selected.valueURLs[value],
+		})
+	}
+	return images
 }
 
 // publishQuantity 汇总所有规格库存；普通商品保持一件库存。
@@ -1207,6 +1350,7 @@ func buildPublishProperties(variants []PublishVariant) any {
 			propertyValues[name] = appendUniqueString(propertyValues[name], value)
 		}
 	}
+	selectedImageProperty := selectVariantImageProperty(variants)
 	properties := make([]any, 0, len(propertyOrder))
 	for _, propertyName := range propertyOrder {
 		values := propertyValues[propertyName]
@@ -1219,7 +1363,7 @@ func buildPublishProperties(variants []PublishVariant) any {
 		}
 		properties = append(properties, map[string]any{
 			"propertyName":   propertyName,
-			"supportImage":   false,
+			"supportImage":   propertyName == selectedImageProperty.name,
 			"propertyValues": propertyValueList,
 		})
 	}

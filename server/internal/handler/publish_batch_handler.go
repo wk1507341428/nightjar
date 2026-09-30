@@ -335,6 +335,7 @@ func decodePublishBatchRequest(responseWriter http.ResponseWriter, request *http
 // buildPublishBatchPlan 计算候选商品与自动跳过项。
 func buildPublishBatchPlan(ctx context.Context, serviceContext *svc.ServiceContext, requestBody types.CreatePublishBatchRequest) (publishBatchPlan, error) {
 	var products []map[string]any
+	catalogSnapshots := make([]catalog.PublishSourceSnapshot, 0)
 	// 全品类货源快照只用于缺货对账，避免选择品类时误判其他品类商品下架。
 	var allScopeProducts []map[string]any
 	account, accountErr := serviceContext.XianyuAccountRepository.Get(ctx, requestBody.AccountID)
@@ -403,6 +404,7 @@ func buildPublishBatchPlan(ctx context.Context, serviceContext *svc.ServiceConte
 				product["_primary_region"] = member.RegionID
 				allScopeProducts = append(allScopeProducts, product)
 			}
+			catalogSnapshots = append(catalogSnapshots, catalog.PublishSourceSnapshot{BrandProfileID: profile.ID, BrandName: member.SourceName, RegionID: member.RegionID, DistributorID: member.DistributorID, Products: memberResult.allProducts, Complete: true})
 		}
 		products = mergePublishProductsByItemNo(products)
 		allScopeProducts = mergePublishProductsByItemNo(allScopeProducts)
@@ -420,6 +422,7 @@ func buildPublishBatchPlan(ctx context.Context, serviceContext *svc.ServiceConte
 		} else {
 			allScopeProducts = products
 		}
+		catalogSnapshots = append(catalogSnapshots, catalog.PublishSourceSnapshot{BrandName: requestBody.BrandName, RegionID: requestBody.RegionID, DistributorID: requestBody.DistributorID, Products: allScopeProducts, Complete: true})
 	} else {
 		brandStore, err := serviceContext.CatalogService.GetBrandStore(ctx, requestBody.BrandStoreID)
 		if err != nil {
@@ -466,6 +469,7 @@ func buildPublishBatchPlan(ctx context.Context, serviceContext *svc.ServiceConte
 			}
 		}
 	}
+	serviceContext.CatalogService.IngestPublishSnapshotsAsync(catalogSnapshots)
 	if plan.BrandProfileID == "" {
 		plan.SourceRegions = []string{plan.RegionID}
 		plan.SourceMemberIDs = []string{plan.RegionID + ":" + plan.DistributorID}
@@ -1166,6 +1170,7 @@ func validatePublishProductDetails(ctx context.Context, serviceContext *svc.Serv
 				regionID := firstProductString(candidate, "_primary_region", "regionauth_id")
 				detail, detailErr := serviceContext.CatalogService.GetLiveProductDetail(ctx, candidate, regionID)
 				if detailErr == nil && strings.EqualFold(productString(detail, "item_no"), itemNo) {
+					enrichProductSpecImages(product, detail)
 					resultsMutex.Lock()
 					results[itemNo] = publishDetailValidation{}
 					resultsMutex.Unlock()
@@ -1193,6 +1198,38 @@ func validatePublishProductDetails(ctx context.Context, serviceContext *svc.Serv
 	return results
 }
 
+// enrichProductSpecImages 把商详 SKU 图片补入列表 SKU，不改变多地区合并后的库存和价格。
+func enrichProductSpecImages(product, detail map[string]any) {
+	detailItems, _ := detail["spec_items"].([]any)
+	if len(detailItems) == 0 {
+		return
+	}
+	imageBySpecLabel := make(map[string]string)
+	for _, rawItem := range detailItems {
+		item, _ := rawItem.(map[string]any)
+		label := productSpecLabel(item)
+		imageURL := productString(item, "sku_img_url")
+		if label != "" && imageURL != "" {
+			imageBySpecLabel[label] = imageURL
+		}
+	}
+	if len(imageBySpecLabel) == 0 {
+		return
+	}
+	for _, key := range []string{"_merged_spec_items", "spec_items"} {
+		items, _ := product[key].([]any)
+		for _, rawItem := range items {
+			item, _ := rawItem.(map[string]any)
+			if productString(item, "sku_img_url") != "" {
+				continue
+			}
+			if imageURL := imageBySpecLabel[productSpecLabel(item)]; imageURL != "" {
+				item["sku_img_url"] = imageURL
+			}
+		}
+	}
+}
+
 // mergeProductSpecItems 按规格值去重合并多个地区的 SKU，并累加库存。
 func mergeProductSpecItems(existingValue, nextValue any) []any {
 	mergedByLabel := make(map[string]map[string]any)
@@ -1207,21 +1244,7 @@ func mergeProductSpecItems(existingValue, nextValue any) []any {
 			if productNumber(item, "store") <= 0 || productString(item, "approve_status") == "offsale" {
 				continue
 			}
-			labelParts := make([]string, 0)
-			if specs, ok := item["item_spec"].([]any); ok {
-				for _, rawSpec := range specs {
-					if spec, specOK := rawSpec.(map[string]any); specOK {
-						name := productString(spec, "spec_name")
-						value := canonicalSpecValue(name, productString(spec, "spec_value_name"))
-						spec["spec_value_name"] = value
-						labelParts = append(labelParts, name+"="+value)
-					}
-				}
-			}
-			label := strings.ToUpper(strings.Join(labelParts, "/"))
-			if label == "" {
-				label = firstProductString(item, "erp_sku_code", "item_id")
-			}
+			label := productSpecLabel(item)
 			existingItem := mergedByLabel[label]
 			if existingItem == nil {
 				mergedByLabel[label] = item
@@ -1244,6 +1267,25 @@ func mergeProductSpecItems(existingValue, nextValue any) []any {
 		result = append(result, mergedByLabel[label])
 	}
 	return result
+}
+
+// productSpecLabel 生成跨列表与商详稳定一致的规格组合键。
+func productSpecLabel(item map[string]any) string {
+	labelParts := make([]string, 0)
+	if specs, ok := item["item_spec"].([]any); ok {
+		for _, rawSpec := range specs {
+			if spec, specOK := rawSpec.(map[string]any); specOK {
+				name := productString(spec, "spec_name")
+				value := canonicalSpecValue(name, productString(spec, "spec_value_name"))
+				labelParts = append(labelParts, name+"="+value)
+			}
+		}
+	}
+	label := strings.ToUpper(strings.Join(labelParts, "/"))
+	if label == "" {
+		label = strings.ToUpper(firstProductString(item, "erp_sku_code", "item_id"))
+	}
+	return label
 }
 
 // filterPublishProducts 按用户填写的售价和折扣率范围筛选商品，空范围不产生限制。
@@ -1377,6 +1419,7 @@ func productPublishVariants(product map[string]any, isFootwear bool, fallbackPri
 	type variantCandidate struct {
 		priceCents int64
 		quantity   int64
+		imageURL   string
 		properties map[string]string
 	}
 	candidates := make([]variantCandidate, 0, len(rawItems))
@@ -1410,7 +1453,7 @@ func productPublishVariants(product map[string]any, isFootwear bool, fallbackPri
 		if activityPrice > 0 || sourcePrice > 0 {
 			priceCents = batchPriceCents(activityPrice, sourcePrice)
 		}
-		candidates = append(candidates, variantCandidate{priceCents: priceCents, quantity: quantity, properties: properties})
+		candidates = append(candidates, variantCandidate{priceCents: priceCents, quantity: quantity, imageURL: productString(item, "sku_img_url"), properties: properties})
 	}
 
 	varyingProperties := make([]string, 0, 2)
@@ -1440,7 +1483,7 @@ func productPublishVariants(product map[string]any, isFootwear bool, fallbackPri
 		if len(properties) == 0 {
 			continue
 		}
-		variants = append(variants, model.PublishVariant{PriceCents: candidate.priceCents, Quantity: candidate.quantity, Properties: properties})
+		variants = append(variants, model.PublishVariant{PriceCents: candidate.priceCents, Quantity: candidate.quantity, ImageURL: candidate.imageURL, Properties: properties})
 	}
 	if len(variants) == 0 {
 		return nil
