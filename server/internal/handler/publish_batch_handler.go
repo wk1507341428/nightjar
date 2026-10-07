@@ -54,6 +54,7 @@ type publishBatchPlan struct {
 	Updates         []model.PublishTask
 	Relists         []model.PublishTask
 	Unchanged       int
+	ActionMode      string
 }
 
 // previewPublishBatchHandler 返回当前品牌的发布计划预览。
@@ -145,7 +146,7 @@ func preparePublishBatch(serviceContext *svc.ServiceContext, batch model.Publish
 	// 修改和下架也持久化为普通队列任务，按商品记录错误并参与整体进度。
 	changes := []model.PublishTask{}
 	for _, listing := range plan.OfflineListings {
-		changes = append(changes, model.PublishTask{ID: primitive.NewObjectID().Hex(), AccountID: plan.AccountID, Action: "offline", ItemNo: listing.ItemNo, Title: listing.Title, Brand: plan.BrandName, BrandProfileID: plan.BrandProfileID, SourceMemberIDs: plan.SourceMemberIDs, RegionID: plan.RegionID, XianyuItemID: listing.PlatformItemID, XianyuURL: listing.ItemURL, PlannedAt: time.Now(), ChangeReasons: []string{"全部来源已无可售库存"}})
+		changes = append(changes, buildReconcileOfflineTask(plan, listing, time.Now()))
 	}
 	changes = append(changes, plan.Updates...)
 	changes = append(changes, plan.Relists...)
@@ -204,6 +205,19 @@ func preparePublishBatch(serviceContext *svc.ServiceContext, batch model.Publish
 			_ = serviceContext.PublishRepository.UpdateStatus(context.Background(), taskID, model.PublishTaskFailed, "发布队列已满", "", "")
 		}
 	}
+}
+
+// buildReconcileOfflineTask 保留下架商品的闲鱼售价、图片和来源快照。
+func buildReconcileOfflineTask(plan publishBatchPlan, listing model.MarketplaceListing, plannedAt time.Time) model.PublishTask {
+	sourceRegions := listing.SourceRegions
+	if len(sourceRegions) == 0 {
+		sourceRegions = plan.SourceRegions
+	}
+	sourceMemberIDs := listing.SourceMemberIDs
+	if len(sourceMemberIDs) == 0 {
+		sourceMemberIDs = plan.SourceMemberIDs
+	}
+	return model.PublishTask{ID: primitive.NewObjectID().Hex(), AccountID: plan.AccountID, Action: "offline", SourceItemID: listing.SourceItemID, ItemNo: listing.ItemNo, Title: listing.Title, PriceCents: listing.PriceCents, ImageURLs: uniqueStrings([]string{listing.ImageURL}), Brand: plan.BrandName, BrandProfileID: plan.BrandProfileID, SourceType: listing.SourceType, SourceRegions: sourceRegions, SourceMemberIDs: sourceMemberIDs, SourceItemIDs: listing.SourceItemIDs, RegionID: plan.RegionID, XianyuItemID: listing.PlatformItemID, XianyuURL: listing.ItemURL, PlannedAt: plannedAt, ChangeReasons: []string{"全部来源已无可售库存"}}
 }
 
 // buildFailedCatalogDetailTask 把列表存在但商详无效的商品记录为发布失败，且不加入执行队列。
@@ -271,11 +285,19 @@ func decodePublishBatchRequest(responseWriter http.ResponseWriter, request *http
 	requestBody.RegionID = strings.TrimSpace(requestBody.RegionID)
 	requestBody.AccountID = strings.TrimSpace(requestBody.AccountID)
 	requestBody.PreservedOfflinePlatformItemIDs = uniqueStrings(requestBody.PreservedOfflinePlatformItemIDs)
+	requestBody.ActionMode = strings.TrimSpace(requestBody.ActionMode)
+	if requestBody.ActionMode == "" {
+		requestBody.ActionMode = "full"
+	}
 	if requestBody.AccountID == "" {
 		requestBody.AccountID = model.DefaultXianyuAccountID
 	}
 	if requestBody.SourceType == "" {
 		requestBody.SourceType = "local"
+	}
+	if requestBody.ActionMode != "update_only" && requestBody.ActionMode != "publish_update" && requestBody.ActionMode != "full" {
+		writeError(responseWriter, http.StatusBadRequest, "操作范围无效")
+		return requestBody, false
 	}
 	if requestBody.PreviewID != "" {
 		if requestBody.Limit == 0 {
@@ -342,7 +364,7 @@ func buildPublishBatchPlan(ctx context.Context, serviceContext *svc.ServiceConte
 	if accountErr != nil || account.Status != model.XianyuAccountActive || !account.SellerConnected {
 		return publishBatchPlan{}, fmt.Errorf("目标闲鱼账号未连接卖家后台或队列不可用")
 	}
-	plan := publishBatchPlan{AccountID: requestBody.AccountID, SourceType: requestBody.SourceType, BrandProfileID: requestBody.BrandProfileID, BrandStoreID: requestBody.BrandStoreID, DistributorID: requestBody.DistributorID, BrandName: requestBody.BrandName, RegionID: requestBody.RegionID, CategoryIDs: requestBody.CategoryIDs, CategoryNames: requestBody.CategoryNames, Candidates: []map[string]any{}, Skipped: []model.PublishBatchSkip{}}
+	plan := publishBatchPlan{AccountID: requestBody.AccountID, SourceType: requestBody.SourceType, BrandProfileID: requestBody.BrandProfileID, BrandStoreID: requestBody.BrandStoreID, DistributorID: requestBody.DistributorID, BrandName: requestBody.BrandName, RegionID: requestBody.RegionID, CategoryIDs: requestBody.CategoryIDs, CategoryNames: requestBody.CategoryNames, Candidates: []map[string]any{}, Skipped: []model.PublishBatchSkip{}, ActionMode: requestBody.ActionMode}
 	if requestBody.BrandProfileID != "" {
 		profile, members, err := serviceContext.InventoryRepository.GetBrandProfile(ctx, requestBody.BrandProfileID)
 		if err != nil {
@@ -702,7 +724,20 @@ func buildPublishBatchPlan(ctx context.Context, serviceContext *svc.ServiceConte
 			plan.Candidates = append(plan.Candidates, product)
 		}
 	}
+	applyPublishActionMode(&plan)
 	return plan, nil
+}
+
+// applyPublishActionMode 移除方案未授权的任务类型，避免常用方案意外发布或下架。
+func applyPublishActionMode(plan *publishBatchPlan) {
+	switch plan.ActionMode {
+	case "update_only":
+		plan.Candidates = nil
+		plan.Relists = nil
+		plan.OfflineListings = nil
+	case "publish_update":
+		plan.OfflineListings = nil
+	}
 }
 
 // buildBatchPublishTask 将实时商详转换为单商品发布任务。

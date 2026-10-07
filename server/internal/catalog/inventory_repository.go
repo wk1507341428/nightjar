@@ -177,6 +177,32 @@ type SyncChange struct {
 	ChangedAt    time.Time       `bson:"changedAt" json:"changedAt"`
 }
 
+// ItemStabilityDay 保存一个自然日内最差的完整货源观察结果。
+type ItemStabilityDay struct {
+	Date           string    `bson:"date" json:"date"`
+	Available      bool      `bson:"available" json:"available"`
+	LastObservedAt time.Time `bson:"lastObservedAt" json:"lastObservedAt"`
+}
+
+// ItemStability 保存一个货号在聚合品牌范围内最近十天的稳定度。
+type ItemStability struct {
+	ID                  string             `bson:"_id" json:"id"`
+	ScopeID             string             `bson:"scopeId" json:"scopeId"`
+	BrandProfileID      string             `bson:"brandProfileId,omitempty" json:"brandProfileId,omitempty"`
+	ItemNo              string             `bson:"itemNo" json:"itemNo"`
+	Score               int                `bson:"score" json:"score"`
+	ObservedDayCount    int                `bson:"observedDayCount" json:"observedDayCount"`
+	AvailableDayCount   int                `bson:"availableDayCount" json:"availableDayCount"`
+	UnavailableDayCount int                `bson:"unavailableDayCount" json:"unavailableDayCount"`
+	CurrentAvailable    bool               `bson:"currentAvailable" json:"currentAvailable"`
+	DailyObservations   []ItemStabilityDay `bson:"dailyObservations" json:"dailyObservations"`
+	SourceMemberIDs     []string           `bson:"sourceMemberIds,omitempty" json:"sourceMemberIds,omitempty"`
+	FirstObservedAt     time.Time          `bson:"firstObservedAt" json:"firstObservedAt"`
+	LastObservedAt      time.Time          `bson:"lastObservedAt" json:"lastObservedAt"`
+	LastAvailableAt     time.Time          `bson:"lastAvailableAt,omitempty" json:"lastAvailableAt,omitempty"`
+	LastUnavailableAt   time.Time          `bson:"lastUnavailableAt,omitempty" json:"lastUnavailableAt,omitempty"`
+}
+
 // InventoryRepository 管理本地商品库的集合与索引。
 type InventoryRepository struct {
 	regions             *mongo.Collection
@@ -189,6 +215,7 @@ type InventoryRepository struct {
 	priceHistory        *mongo.Collection
 	syncChanges         *mongo.Collection
 	skuCategoryBindings *mongo.Collection
+	itemStabilities     *mongo.Collection
 }
 
 // NewInventoryRepository 创建本地商品库仓储。
@@ -204,6 +231,7 @@ func NewInventoryRepository(database *mongo.Database) *InventoryRepository {
 		priceHistory:        database.Collection("catalog_sku_price_history"),
 		syncChanges:         database.Collection("catalog_sync_changes"),
 		skuCategoryBindings: database.Collection("catalog_sku_category_bindings"),
+		itemStabilities:     database.Collection("catalog_item_stability"),
 	}
 }
 
@@ -221,6 +249,7 @@ func (repository *InventoryRepository) EnsureIndexes(ctx context.Context) error 
 		{repository.offers, []mongo.IndexModel{{Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "sourceItemId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "regionId", Value: 1}, {Key: "itemNo", Value: 1}}}, {Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "lastSeenAt", Value: -1}}}}},
 		{repository.priceHistory, []mongo.IndexModel{{Keys: bson.D{{Key: "offerId", Value: 1}, {Key: "skuId", Value: 1}, {Key: "observedAt", Value: 1}}}, {Keys: bson.D{{Key: "itemNo", Value: 1}, {Key: "observedAt", Value: -1}}}}},
 		{repository.skuCategoryBindings, []mongo.IndexModel{{Keys: bson.D{{Key: "brandStoreId", Value: 1}, {Key: "itemNo", Value: 1}, {Key: "sourceItemId", Value: 1}, {Key: "categoryId", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "brandProfileId", Value: 1}, {Key: "categoryId", Value: 1}, {Key: "itemNo", Value: 1}}}, {Keys: bson.D{{Key: "itemNo", Value: 1}, {Key: "lastSeenAt", Value: -1}}}}},
+		{repository.itemStabilities, []mongo.IndexModel{{Keys: bson.D{{Key: "scopeId", Value: 1}, {Key: "itemNo", Value: 1}}, Options: options.Index().SetUnique(true)}, {Keys: bson.D{{Key: "brandProfileId", Value: 1}, {Key: "score", Value: -1}, {Key: "itemNo", Value: 1}}}}},
 	}
 	for _, indexGroup := range indexGroups {
 		if _, err := indexGroup.collection.Indexes().CreateMany(ctx, indexGroup.models); err != nil {

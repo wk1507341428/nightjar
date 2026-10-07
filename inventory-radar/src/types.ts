@@ -258,6 +258,17 @@ export interface MarketplaceListing {
 	itemUrl?: string;
 	listedAt: string;
 	lastSyncedAt: string;
+	stability?: MarketplaceListingStability;
+}
+
+/** 闲鱼商品对应的小程序货源稳定度。 */
+export interface MarketplaceListingStability {
+	score: number;
+	observedDayCount: number;
+	availableDayCount: number;
+	unavailableDayCount: number;
+	currentAvailable: boolean;
+	lastUnavailableAt?: string;
 }
 
 /** 渠道当前在售列表响应。 */
@@ -524,4 +535,39 @@ export interface PublishBatchSettings {
 	regionId?: string;
 	brandProfileId?: string;
 	itemNos?: string[];
+	actionMode?: PublishPresetActionMode;
+}
+
+/** 常用发布方案的操作范围。 */
+export type PublishPresetActionMode = 'update_only' | 'publish_update' | 'full';
+
+/** 常用发布方案中的一条品牌规则。 */
+export interface PublishPresetRule {
+	id: string;
+	sourceType: 'live' | 'local';
+	brandProfileId?: string;
+	brandStoreId?: string;
+	distributorId?: string;
+	brandName: string;
+	regionId: string;
+	categoryIds: string[];
+	categoryNames: string[];
+	limit: number;
+	minDelaySeconds: number;
+	maxDelaySeconds: number;
+	minPriceCents?: number;
+	maxPriceCents?: number;
+	minDiscountRate?: number;
+	maxDiscountRate?: number;
+	actionMode: PublishPresetActionMode;
+}
+
+/** 当前闲鱼账号保存的一套常用发布方案。 */
+export interface PublishPreset {
+	id: string;
+	accountId: string;
+	name: string;
+	rules: PublishPresetRule[];
+	createdAt: string;
+	updatedAt: string;
 }

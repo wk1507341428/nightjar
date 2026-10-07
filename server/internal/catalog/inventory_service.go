@@ -249,7 +249,7 @@ func (service *Service) IngestPublishSnapshots(ctx context.Context, snapshots []
 			return err
 		}
 	}
-	return nil
+	return service.recordItemStabilitySnapshots(ctx, snapshots)
 }
 
 // ingestPublishSourceSnapshot 使用无序批量写入更新一家来源门店。

@@ -23,6 +23,16 @@ func TestParseSellerPriceRangeUsesLowestSKUPrice(t *testing.T) {
 	}
 }
 
+func TestEnsureConditionLabelAddsStableNewCondition(t *testing.T) {
+	labels := ensureConditionLabel(nil, "全新", map[string]any{"channelCatId": "126862723"})
+	if len(labels) != 1 || stringValue(labels[0]["propertyId"]) != "20879" || stringValue(labels[0]["valueId"]) != "21456" || stringValue(labels[0]["text"]) != "全新" {
+		t.Fatalf("unexpected condition label: %#v", labels)
+	}
+	if repeated := ensureConditionLabel(labels, "全新", map[string]any{"channelCatId": "126862723"}); len(repeated) != 1 {
+		t.Fatalf("condition label was duplicated: %#v", repeated)
+	}
+}
+
 // TestExtractCategoryFallback 验证分类预测为空时使用已选分类卡片。
 func TestExtractCategoryFallback(t *testing.T) {
 	response := map[string]any{

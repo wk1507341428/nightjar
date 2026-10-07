@@ -196,6 +196,10 @@ func (service *Service) syncXianyuSnapshot(ctx context.Context, accountID string
 	// 按闲鱼商品 ID 索引的 SideJob 发布任务。
 	tasksByItemID := make(map[string]model.PublishTask, len(linkedTasks))
 	for _, task := range linkedTasks {
+		if existingTask, exists := tasksByItemID[task.XianyuItemID]; exists {
+			tasksByItemID[task.XianyuItemID] = mergeLinkedTaskMetadata(existingTask, task)
+			continue
+		}
 		tasksByItemID[task.XianyuItemID] = task
 	}
 
@@ -213,6 +217,14 @@ func (service *Service) syncXianyuSnapshot(ctx context.Context, accountID string
 		if listedAt.IsZero() {
 			listedAt = syncedAt
 		}
+		priceCents := remoteItem.PriceCents
+		if priceCents <= 0 {
+			priceCents = task.PriceCents
+		}
+		imageURL := strings.TrimSpace(remoteItem.ImageURL)
+		if imageURL == "" && len(task.ImageURLs) > 0 {
+			imageURL = strings.TrimSpace(task.ImageURLs[0])
+		}
 		listings = append(listings, model.MarketplaceListing{
 			ID:              model.XianyuPlatform + ":" + remoteItem.ItemID,
 			AccountID:       accountID,
@@ -221,8 +233,8 @@ func (service *Service) syncXianyuSnapshot(ctx context.Context, accountID string
 			SourceItemID:    task.SourceItemID,
 			ItemNo:          itemNo,
 			Title:           remoteItem.Title,
-			PriceCents:      remoteItem.PriceCents,
-			ImageURL:        remoteItem.ImageURL,
+			PriceCents:      priceCents,
+			ImageURL:        imageURL,
 			ItemURL:         "https://www.goofish.com/item?id=" + remoteItem.ItemID,
 			ListedAt:        listedAt,
 			LastSyncedAt:    syncedAt,
@@ -239,8 +251,46 @@ func (service *Service) syncXianyuSnapshot(ctx context.Context, accountID string
 	if err := service.listingRepository.ReplacePlatformSnapshot(ctx, accountID, model.XianyuPlatform, listings); err != nil {
 		return 0, err
 	}
+	if err := service.publishRepository.BackfillOfflineTaskPresentation(ctx, accountID, listings); err != nil {
+		return 0, fmt.Errorf("补齐历史下架任务展示信息失败：%w", err)
+	}
 	_ = service.accountRepository.MarkSynced(ctx, accountID)
 	return len(listings), nil
+}
+
+// mergeLinkedTaskMetadata 用较早任务补齐最新任务缺失的发布快照字段。
+func mergeLinkedTaskMetadata(primaryTask, fallbackTask model.PublishTask) model.PublishTask {
+	if primaryTask.ItemNo == "" {
+		primaryTask.ItemNo = fallbackTask.ItemNo
+	}
+	if primaryTask.SourceItemID == "" {
+		primaryTask.SourceItemID = fallbackTask.SourceItemID
+	}
+	if primaryTask.PriceCents <= 0 {
+		primaryTask.PriceCents = fallbackTask.PriceCents
+	}
+	if len(primaryTask.ImageURLs) == 0 {
+		primaryTask.ImageURLs = fallbackTask.ImageURLs
+	}
+	if primaryTask.BrandProfileID == "" {
+		primaryTask.BrandProfileID = fallbackTask.BrandProfileID
+	}
+	if primaryTask.SourceType == "" {
+		primaryTask.SourceType = fallbackTask.SourceType
+	}
+	if len(primaryTask.SourceRegions) == 0 {
+		primaryTask.SourceRegions = fallbackTask.SourceRegions
+	}
+	if len(primaryTask.SourceMemberIDs) == 0 {
+		primaryTask.SourceMemberIDs = fallbackTask.SourceMemberIDs
+	}
+	if len(primaryTask.SourceItemIDs) == 0 {
+		primaryTask.SourceItemIDs = fallbackTask.SourceItemIDs
+	}
+	if primaryTask.CreatedAt.IsZero() || (!fallbackTask.CreatedAt.IsZero() && fallbackTask.CreatedAt.Before(primaryTask.CreatedAt)) {
+		primaryTask.CreatedAt = fallbackTask.CreatedAt
+	}
+	return primaryTask
 }
 
 // MarkXianyuPublished 在 SideJob 发布成功后立即登记为闲鱼在售。

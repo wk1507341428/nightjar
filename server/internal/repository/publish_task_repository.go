@@ -31,6 +31,7 @@ func (repository *PublishTaskRepository) EnsureIndexes(ctx context.Context) erro
 	_, err := repository.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "createdAt", Value: -1}}},
 		{Keys: bson.D{{Key: "accountId", Value: 1}, {Key: "itemNo", Value: 1}}},
+		{Keys: bson.D{{Key: "accountId", Value: 1}, {Key: "xianyuItemId", Value: 1}, {Key: "updatedAt", Value: -1}}},
 		{Keys: bson.D{{Key: "batchId", Value: 1}, {Key: "createdAt", Value: 1}}},
 	})
 	return err
@@ -162,7 +163,7 @@ func (repository *PublishTaskRepository) FindByXianyuItemIDs(
 	if accountID == model.DefaultXianyuAccountID {
 		accountFilter = append(accountFilter, bson.M{"accountId": bson.M{"$exists": false}})
 	}
-	cursor, err := repository.collection.Find(ctx, bson.M{"$or": accountFilter, "xianyuItemId": bson.M{"$in": itemIDs}})
+	cursor, err := repository.collection.Find(ctx, bson.M{"$or": accountFilter, "xianyuItemId": bson.M{"$in": itemIDs}}, options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}, {Key: "createdAt", Value: -1}}))
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +174,147 @@ func (repository *PublishTaskRepository) FindByXianyuItemIDs(
 		return nil, err
 	}
 	return tasks, nil
+}
+
+// BackfillOfflineTaskPresentation 为历史下架任务补齐闲鱼售价和图片。
+func (repository *PublishTaskRepository) BackfillOfflineTaskPresentation(ctx context.Context, accountID string, listings []model.MarketplaceListing) error {
+	listingByItemID := make(map[string]model.MarketplaceListing, len(listings))
+	for _, listing := range listings {
+		listingByItemID[listing.PlatformItemID] = listing
+	}
+	missingFilter := bson.M{"accountId": accountID, "action": "offline", "$or": bson.A{bson.M{"priceCents": bson.M{"$exists": false}}, bson.M{"priceCents": bson.M{"$lte": 0}}, bson.M{"imageUrls": bson.M{"$exists": false}}, bson.M{"imageUrls": nil}, bson.M{"imageUrls": bson.M{"$size": 0}}, bson.M{"imageUrls": bson.A{""}}}}
+	cursor, err := repository.collection.Find(ctx, missingFilter, options.Find().SetProjection(bson.M{"priceCents": 1, "imageUrls": 1, "xianyuItemId": 1}))
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(ctx)
+	missingTasks := make([]model.PublishTask, 0)
+	if err := cursor.All(ctx, &missingTasks); err != nil {
+		return err
+	}
+	writes := make([]mongo.WriteModel, 0, len(missingTasks))
+	for _, task := range missingTasks {
+		listing, exists := listingByItemID[task.XianyuItemID]
+		if !exists {
+			continue
+		}
+		setFields := bson.M{}
+		if task.PriceCents <= 0 && listing.PriceCents > 0 {
+			setFields["priceCents"] = listing.PriceCents
+		}
+		hasTaskImage := false
+		for _, taskImageURL := range task.ImageURLs {
+			if strings.TrimSpace(taskImageURL) != "" {
+				hasTaskImage = true
+				break
+			}
+		}
+		if !hasTaskImage && strings.TrimSpace(listing.ImageURL) != "" {
+			setFields["imageUrls"] = bson.A{strings.TrimSpace(listing.ImageURL)}
+		}
+		if len(setFields) == 0 {
+			continue
+		}
+		writes = append(writes, mongo.NewUpdateOneModel().SetFilter(bson.M{"_id": task.ID}).SetUpdate(bson.M{"$set": setFields}))
+	}
+	if len(writes) == 0 {
+		return nil
+	}
+	_, err = repository.collection.BulkWrite(ctx, writes, options.BulkWrite().SetOrdered(false))
+	return err
+}
+
+// BackfillOfflineTaskPresentationFromHistory 使用历史发布任务修复旧下架任务展示信息。
+func (repository *PublishTaskRepository) BackfillOfflineTaskPresentationFromHistory(ctx context.Context) error {
+	missingFilter := bson.M{"action": "offline", "$or": bson.A{bson.M{"priceCents": bson.M{"$exists": false}}, bson.M{"priceCents": bson.M{"$lte": 0}}, bson.M{"imageUrls": bson.M{"$exists": false}}, bson.M{"imageUrls": nil}, bson.M{"imageUrls": bson.M{"$size": 0}}, bson.M{"imageUrls": bson.A{""}}}}
+	cursor, err := repository.collection.Find(ctx, missingFilter, options.Find().SetProjection(bson.M{"accountId": 1, "itemNo": 1, "priceCents": 1, "imageUrls": 1, "xianyuItemId": 1}))
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(ctx)
+	missingTasks := make([]model.PublishTask, 0)
+	if err := cursor.All(ctx, &missingTasks); err != nil {
+		return err
+	}
+	if len(missingTasks) == 0 {
+		return nil
+	}
+	itemIDs := make([]string, 0, len(missingTasks))
+	itemNos := make([]string, 0, len(missingTasks))
+	for _, task := range missingTasks {
+		if task.XianyuItemID != "" {
+			itemIDs = append(itemIDs, task.XianyuItemID)
+		}
+		if task.ItemNo != "" {
+			itemNos = append(itemNos, task.ItemNo)
+		}
+	}
+	sourceFilter := bson.M{"action": bson.M{"$ne": "offline"}, "priceCents": bson.M{"$gt": 0}, "imageUrls.0": bson.M{"$exists": true}, "$or": bson.A{bson.M{"xianyuItemId": bson.M{"$in": itemIDs}}, bson.M{"itemNo": bson.M{"$in": itemNos}}}}
+	sourceCursor, err := repository.collection.Find(ctx, sourceFilter, options.Find().SetSort(bson.D{{Key: "updatedAt", Value: -1}, {Key: "createdAt", Value: -1}}).SetProjection(bson.M{"accountId": 1, "itemNo": 1, "priceCents": 1, "imageUrls": 1, "xianyuItemId": 1}))
+	if err != nil {
+		return err
+	}
+	defer sourceCursor.Close(ctx)
+	sourceTasks := make([]model.PublishTask, 0)
+	if err := sourceCursor.All(ctx, &sourceTasks); err != nil {
+		return err
+	}
+	sourceByItemID := make(map[string]model.PublishTask)
+	sourceByItemNo := make(map[string]model.PublishTask)
+	for _, sourceTask := range sourceTasks {
+		if sourceTask.XianyuItemID != "" {
+			key := publishTaskPresentationKey(sourceTask.AccountID, sourceTask.XianyuItemID)
+			if _, exists := sourceByItemID[key]; !exists {
+				sourceByItemID[key] = sourceTask
+			}
+		}
+		if sourceTask.ItemNo != "" {
+			key := publishTaskPresentationKey(sourceTask.AccountID, sourceTask.ItemNo)
+			if _, exists := sourceByItemNo[key]; !exists {
+				sourceByItemNo[key] = sourceTask
+			}
+		}
+	}
+	writes := make([]mongo.WriteModel, 0, len(missingTasks))
+	for _, missingTask := range missingTasks {
+		sourceTask, exists := sourceByItemID[publishTaskPresentationKey(missingTask.AccountID, missingTask.XianyuItemID)]
+		if !exists {
+			sourceTask, exists = sourceByItemNo[publishTaskPresentationKey(missingTask.AccountID, missingTask.ItemNo)]
+		}
+		if !exists {
+			continue
+		}
+		setFields := bson.M{}
+		if missingTask.PriceCents <= 0 {
+			setFields["priceCents"] = sourceTask.PriceCents
+		}
+		if !hasNonEmptyImage(missingTask.ImageURLs) {
+			setFields["imageUrls"] = sourceTask.ImageURLs
+		}
+		if len(setFields) > 0 {
+			writes = append(writes, mongo.NewUpdateOneModel().SetFilter(bson.M{"_id": missingTask.ID}).SetUpdate(bson.M{"$set": setFields}))
+		}
+	}
+	if len(writes) == 0 {
+		return nil
+	}
+	_, err = repository.collection.BulkWrite(ctx, writes, options.BulkWrite().SetOrdered(false))
+	return err
+}
+
+// publishTaskPresentationKey 生成账号内任务展示快照索引键。
+func publishTaskPresentationKey(accountID, value string) string {
+	return strings.TrimSpace(accountID) + "\x00" + strings.ToUpper(strings.TrimSpace(value))
+}
+
+// hasNonEmptyImage 判断任务是否至少保留了一张有效图片。
+func hasNonEmptyImage(imageURLs []string) bool {
+	for _, imageURL := range imageURLs {
+		if strings.TrimSpace(imageURL) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // ListSucceededByRegions 返回指定地区可追溯的成功发布任务。

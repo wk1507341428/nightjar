@@ -731,6 +731,7 @@ func (service *Service) Publish(ctx context.Context, input PublishInput) (Publis
 	}
 	service.applyOptionalAttributes(ctx, client, recommendResponse, itemCategory, input, imageInfos)
 	itemLabels := extractSelectedLabels(recommendResponse)
+	itemLabels = ensureConditionLabel(itemLabels, input.Condition, itemCategory)
 	payload := buildPublishPayload(input, pregetResponse, imageInfos, itemCategory, itemLabels)
 
 	serviceRequest := map[string]any{
@@ -1468,6 +1469,33 @@ func extractSelectedLabels(recommendResponse map[string]any) []map[string]any {
 	return labels
 }
 
+// ensureConditionLabel 在闲鱼不再返回成色卡片时补充稳定的“全新”标签。
+func ensureConditionLabel(labels []map[string]any, condition string, itemCategory map[string]any) []map[string]any {
+	condition = strings.TrimSpace(condition)
+	if condition == "" {
+		return labels
+	}
+	for _, label := range labels {
+		if stringValue(label["propertyId"]) == "20879" || strings.HasPrefix(stringValue(label["properties"]), "20879##成色:") {
+			return labels
+		}
+	}
+	if condition != "全新" {
+		return labels
+	}
+	return append(labels, map[string]any{
+		"channelCateId": stringValue(itemCategory["channelCatId"]),
+		"from":          "newPublishChoice",
+		"isUserClick":   "1",
+		"labelId":       "1236",
+		"labelType":     "common",
+		"properties":    "20879##成色:21456##全新",
+		"propertyId":    "20879",
+		"text":          "全新",
+		"valueId":       "21456",
+	})
+}
+
 // extractServiceProtocols 按闲鱼默认开关生成服务协议。
 func extractServiceProtocols(serviceResponse map[string]any) []map[string]any {
 	protocols := make([]map[string]any, 0)
@@ -1525,8 +1553,15 @@ func mapValue(value any) map[string]any {
 
 // sliceValue 安全读取动态 JSON 数组。
 func sliceValue(value any) []any {
-	if typedValue, ok := value.([]any); ok {
+	switch typedValue := value.(type) {
+	case []any:
 		return typedValue
+	case []map[string]any:
+		result := make([]any, 0, len(typedValue))
+		for _, item := range typedValue {
+			result = append(result, item)
+		}
+		return result
 	}
 	return []any{}
 }

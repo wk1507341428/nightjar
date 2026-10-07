@@ -93,6 +93,10 @@ func RegisterHandlers(server *rest.Server, serviceContext *svc.ServiceContext) {
 		{Method: http.MethodGet, Path: "/api/xianyu/publish-operations/:id", Handler: getPublishBatchHandler(serviceContext)},
 		{Method: http.MethodPost, Path: "/api/xianyu/publish-operations/preview", Handler: previewPublishBatchHandler(serviceContext)},
 		{Method: http.MethodPost, Path: "/api/xianyu/publish-operations", Handler: createPublishBatchHandler(serviceContext)},
+		{Method: http.MethodGet, Path: "/api/xianyu/publish-presets", Handler: listPublishPresetsHandler(serviceContext)},
+		{Method: http.MethodPost, Path: "/api/xianyu/publish-presets", Handler: createPublishPresetHandler(serviceContext)},
+		{Method: http.MethodPut, Path: "/api/xianyu/publish-presets/:id", Handler: updatePublishPresetHandler(serviceContext)},
+		{Method: http.MethodDelete, Path: "/api/xianyu/publish-presets/:id", Handler: deletePublishPresetHandler(serviceContext)},
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/xianyu/publish-tasks",

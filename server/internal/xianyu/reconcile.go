@@ -41,7 +41,15 @@ func ManagedState(detail map[string]any) map[string]any {
 		}
 	}
 	sort.Strings(propertyImages)
-	return map[string]any{"title": stringValue(text["title"]), "description": stringValue(text["desc"]), "price": stringValue(price["priceInCent"]), "originalPrice": stringValue(price["origPriceInCent"]), "quantity": stringValue(detail["quantity"]), "skus": rows, "propertyImages": propertyImages}
+	condition := ""
+	for _, rawLabel := range sliceValue(detail["itemLabelExtList"]) {
+		label := mapValue(rawLabel)
+		if stringValue(label["propertyId"]) == "20879" || strings.HasPrefix(stringValue(label["properties"]), "20879##成色:") {
+			condition = stringValue(label["text"])
+			break
+		}
+	}
+	return map[string]any{"title": stringValue(text["title"]), "description": stringValue(text["desc"]), "price": stringValue(price["priceInCent"]), "originalPrice": stringValue(price["origPriceInCent"]), "quantity": stringValue(detail["quantity"]), "skus": rows, "propertyImages": propertyImages, "condition": condition}
 }
 
 // SameManagedState 兼容 Mongo 数组类型和 JSON 数组类型。
@@ -53,6 +61,14 @@ func SameManagedState(a, b map[string]any) bool {
 	if _, exists := b["propertyImages"]; !exists {
 		b = cloneManagedState(b)
 		b["propertyImages"] = []string{}
+	}
+	if _, exists := a["condition"]; !exists {
+		a = cloneManagedState(a)
+		a["condition"] = ""
+	}
+	if _, exists := b["condition"]; !exists {
+		b = cloneManagedState(b)
+		b["condition"] = ""
 	}
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
@@ -143,6 +159,13 @@ func SameActionableState(before, after map[string]any) bool {
 // ManagedEditPayload 用同一个发布生成器替换文案、价格、规格，保留原图片和服务配置。
 func ManagedEditPayload(detail map[string]any, input PublishInput) map[string]any {
 	payload := sellerTextEditPayload(detail, input.Title, input.Description)
+	existingLabels := make([]map[string]any, 0)
+	for _, rawLabel := range sliceValue(payload["itemLabelExtList"]) {
+		if label := mapValue(rawLabel); label != nil {
+			existingLabels = append(existingLabels, label)
+		}
+	}
+	payload["itemLabelExtList"] = ensureConditionLabel(existingLabels, input.Condition, mapValue(payload["itemCatDTO"]))
 	payload["itemPriceDTO"] = map[string]any{"priceInCent": strconv.FormatInt(input.PriceCents, 10), "origPriceInCent": optionalPrice(input.OriginalPriceCents)}
 	payload["quantity"] = publishQuantity(input.Variants)
 	if len(input.Variants) == 0 && input.Quantity > 0 {
@@ -279,6 +302,13 @@ func StateChangeReasons(before, after map[string]any) []string {
 	}
 	if before["quantity"] != after["quantity"] {
 		reasons = append(reasons, "商品可售状态："+availabilityLabel(stringValue(before["quantity"]))+" → "+availabilityLabel(stringValue(after["quantity"])))
+	}
+	if stringValue(before["condition"]) != stringValue(after["condition"]) {
+		oldCondition := stringValue(before["condition"])
+		if oldCondition == "" {
+			oldCondition = "未设置"
+		}
+		reasons = append(reasons, "成色标签："+oldCondition+" → "+stringValue(after["condition"]))
 	}
 	oldSKUs, newSKUs := reasonSKUs(before), reasonSKUs(after)
 	if !reflect.DeepEqual(before["propertyImages"], after["propertyImages"]) {

@@ -1,5 +1,5 @@
 import { SIDEJOB_API_BASE_URL } from './constants';
-import type { BrandCategory, CreatePriceComparisonRequest, CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceOfflineResponse, MarketplaceSyncResponse, OfflineCenterFilters, OfflineCenterPreview, PriceComparisonResponse, PublishBatch, PublishBatchPreview, PublishBatchSettings, PublishOperationListResponse, PublishTask, XianyuAccount, XianyuAccountListResponse, XianyuConnection } from './types';
+import type { BrandCategory, CreatePriceComparisonRequest, CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceOfflineResponse, MarketplaceSyncResponse, OfflineCenterFilters, OfflineCenterPreview, PriceComparisonResponse, PublishBatch, PublishBatchPreview, PublishBatchSettings, PublishOperationListResponse, PublishPreset, PublishPresetRule, PublishTask, XianyuAccount, XianyuAccountListResponse, XianyuConnection } from './types';
 
 /** 解析本地服务 JSON 响应并提取错误信息。 */
 async function requestSideJob<ResponseType>(path: string, init?: RequestInit): Promise<ResponseType> {
@@ -179,6 +179,26 @@ export async function previewPublishOperation(brandStoreId: string, settings: Pu
 /** 创建发布操作或追加到当前运行队列。 */
 export function appendPublishOperation(brandStoreId: string, settings: PublishBatchSettings): Promise<PublishBatch> {
   return requestSideJob<PublishBatch>('/xianyu/publish-operations', { method: 'POST', body: JSON.stringify({ brandStoreId, ...settings }) });
+}
+
+/** 读取当前账号的常用发布方案。 */
+export function fetchPublishPresets(accountId: string): Promise<PublishPreset[]> {
+  return requestSideJob<PublishPreset[]>(`/xianyu/publish-presets?accountId=${encodeURIComponent(accountId)}`);
+}
+
+/** 新建常用发布方案。 */
+export function createPublishPreset(request: { accountId: string; name: string; rules: PublishPresetRule[] }): Promise<PublishPreset> {
+  return requestSideJob<PublishPreset>('/xianyu/publish-presets', { method: 'POST', body: JSON.stringify(request) });
+}
+
+/** 更新常用发布方案。 */
+export function updatePublishPreset(presetId: string, request: { accountId: string; name: string; rules: PublishPresetRule[] }): Promise<PublishPreset> {
+  return requestSideJob<PublishPreset>(`/xianyu/publish-presets/${encodeURIComponent(presetId)}`, { method: 'PUT', body: JSON.stringify(request) });
+}
+
+/** 删除常用发布方案。 */
+export function deletePublishPreset(presetId: string, accountId: string): Promise<{ deleted: boolean }> {
+  return requestSideJob<{ deleted: boolean }>(`/xianyu/publish-presets/${encodeURIComponent(presetId)}?accountId=${encodeURIComponent(accountId)}`, { method: 'DELETE' });
 }
 
 

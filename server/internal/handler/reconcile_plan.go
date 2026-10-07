@@ -92,7 +92,7 @@ func taskPublishInput(task model.PublishTask) xianyu.PublishInput {
 		}
 		variants = append(variants, xianyu.PublishVariant{PriceCents: sku.PriceCents, Quantity: sku.Quantity, ImageURL: sku.ImageURL, Properties: props})
 	}
-	return xianyu.PublishInput{Quantity: task.Quantity, Title: task.Title, Description: task.Description, PriceCents: task.PriceCents, OriginalPriceCents: task.OriginalPriceCents, Variants: variants}
+	return xianyu.PublishInput{Quantity: task.Quantity, Title: task.Title, Description: task.Description, PriceCents: task.PriceCents, OriginalPriceCents: task.OriginalPriceCents, Condition: task.Condition, Variants: variants}
 }
 
 func planListingUpdate(ctx context.Context, sc *svc.ServiceContext, plan publishBatchPlan, product map[string]any, listing model.MarketplaceListing) (model.PublishTask, bool, error) {

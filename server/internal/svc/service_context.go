@@ -28,6 +28,7 @@ type ServiceContext struct {
 	RedisClient             *redisclient.Client
 	PublishRepository       *repository.PublishTaskRepository
 	PublishBatchRepository  *repository.PublishBatchRepository
+	PublishPresetRepository *repository.PublishPresetRepository
 	XianyuAccountRepository *repository.XianyuAccountRepository
 	SessionRepository       *repository.SessionRepository
 	SellerSessionRepository *repository.SessionRepository
@@ -70,6 +71,11 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 		_ = mongoClient.Disconnect(context.Background())
 		return nil, fmt.Errorf("ensure publish batch indexes: %w", err)
 	}
+	publishPresetRepository := repository.NewPublishPresetRepository(mongoClient.Database(serviceConfig.Mongo.Database))
+	if err := publishPresetRepository.EnsureIndexes(databaseContext); err != nil {
+		_ = mongoClient.Disconnect(context.Background())
+		return nil, fmt.Errorf("ensure publish preset indexes: %w", err)
+	}
 	listingRepository := repository.NewMarketplaceListingRepository(mongoClient.Database(serviceConfig.Mongo.Database))
 	if err := listingRepository.EnsureIndexes(databaseContext); err != nil {
 		_ = mongoClient.Disconnect(context.Background())
@@ -91,6 +97,10 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 		_ = mongoClient.Disconnect(context.Background())
 		return nil, fmt.Errorf("migrate legacy xianyu account data: %w", err)
 	}
+	if err := publishRepository.BackfillOfflineTaskPresentationFromHistory(databaseContext); err != nil {
+		_ = mongoClient.Disconnect(context.Background())
+		return nil, fmt.Errorf("backfill offline task presentation: %w", err)
+	}
 	sessionCipher, err := security.NewCipherFromFile(serviceConfig.Xianyu.SessionKeyPath)
 	if err != nil {
 		_ = mongoClient.Disconnect(context.Background())
@@ -109,6 +119,10 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 		_ = mongoClient.Disconnect(context.Background())
 		return nil, fmt.Errorf("ensure catalog inventory indexes: %w", err)
 	}
+	if err := inventoryRepository.InitializeItemStabilityBaselines(databaseContext); err != nil {
+		_ = mongoClient.Disconnect(context.Background())
+		return nil, fmt.Errorf("initialize item stability baselines: %w", err)
+	}
 	catalogService := catalog.NewService(serviceConfig.Catalog, inventoryRepository, listingRepository, redisClient)
 	marketplaceService := marketplace.NewService(listingRepository, publishRepository, xianyuAccountRepository, xianyuService, sellerXianyuService)
 
@@ -122,6 +136,7 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 		RedisClient:             redisClient,
 		PublishRepository:       publishRepository,
 		PublishBatchRepository:  publishBatchRepository,
+		PublishPresetRepository: publishPresetRepository,
 		XianyuAccountRepository: xianyuAccountRepository,
 		SessionRepository:       sessionRepository,
 		SellerSessionRepository: sellerSessionRepository,

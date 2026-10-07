@@ -65,3 +65,16 @@ func TestRetrySnapshotCacheIsolatedByAccount(t *testing.T) {
 		t.Fatalf("account caches crossed: account-a=%d account-b=%d", firstAccountCalls.Load(), secondAccountCalls.Load())
 	}
 }
+
+func TestMergeLinkedTaskMetadataFillsOfflineTaskPresentation(t *testing.T) {
+	latestOfflineTask := model.PublishTask{ID: "offline", Action: "offline", ItemNo: "HV6891-010", XianyuItemID: "1085680973385", CreatedAt: time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)}
+	originalPublishTask := model.PublishTask{ID: "publish", ItemNo: "HV6891-010", XianyuItemID: "1085680973385", PriceCents: 16000, ImageURLs: []string{"https://example.com/hv6891.png"}, BrandProfileID: "profile-1", CreatedAt: time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)}
+
+	mergedTask := mergeLinkedTaskMetadata(latestOfflineTask, originalPublishTask)
+	if mergedTask.PriceCents != 16000 || len(mergedTask.ImageURLs) != 1 || mergedTask.ImageURLs[0] != originalPublishTask.ImageURLs[0] {
+		t.Fatalf("linked task presentation was not restored: %#v", mergedTask)
+	}
+	if mergedTask.BrandProfileID != "profile-1" || !mergedTask.CreatedAt.Equal(originalPublishTask.CreatedAt) {
+		t.Fatalf("linked task metadata was not restored: %#v", mergedTask)
+	}
+}

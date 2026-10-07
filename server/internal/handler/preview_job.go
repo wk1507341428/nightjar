@@ -92,7 +92,7 @@ func servePreviewJob(w http.ResponseWriter, r *http.Request, sc *svc.ServiceCont
 func consumePreview(ctx context.Context, sc *svc.ServiceContext, body types.CreatePublishBatchRequest) (publishBatchPlan, error) {
 	var job previewJob
 	collection := sc.MongoClient.Database(sc.Config.Mongo.Database).Collection("publish_previews")
-	err := collection.FindOneAndUpdate(ctx, bson.M{"_id": body.PreviewID, "status": "ready", "request.accountId": body.AccountID, "createdAt": bson.M{"$gte": time.Now().Add(-5 * time.Minute)}}, bson.M{"$set": bson.M{"status": "submitted"}}).Decode(&job)
+	err := collection.FindOneAndUpdate(ctx, bson.M{"_id": body.PreviewID, "status": "ready", "request.accountId": body.AccountID, "createdAt": bson.M{"$gte": time.Now().Add(-30 * time.Minute)}}, bson.M{"$set": bson.M{"status": "submitted"}}).Decode(&job)
 	if err != nil {
 		return publishBatchPlan{}, fmt.Errorf("预览已过期或已提交，请重新生成")
 	}

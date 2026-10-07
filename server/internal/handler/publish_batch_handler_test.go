@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"sidejob-server/internal/model"
 )
 
 // TestDecodePublishBatchRequestKeepsCategory 验证品类筛选与默认发布设置会进入批次请求。
@@ -20,6 +22,19 @@ func TestDecodePublishBatchRequestKeepsCategory(t *testing.T) {
 	}
 	if body.MinDelaySeconds != 1 || body.MaxDelaySeconds != 2 {
 		t.Fatalf("unexpected default delay: %d-%d", body.MinDelaySeconds, body.MaxDelaySeconds)
+	}
+}
+
+func TestBuildReconcileOfflineTaskKeepsListingPresentation(t *testing.T) {
+	plan := publishBatchPlan{AccountID: "account-1", BrandName: "NIKE-多地区", BrandProfileID: "profile-1", RegionID: "4", SourceRegions: []string{"4"}, SourceMemberIDs: []string{"4:4175"}}
+	listing := model.MarketplaceListing{PlatformItemID: "1085680973385", SourceItemID: "2798572", ItemNo: "HV6891-010", Title: "全新 NIKE耐克时尚百搭运动胸包HV6891-010", PriceCents: 16000, ImageURL: "https://example.com/hv6891.png", ItemURL: "https://www.goofish.com/item?id=1085680973385", SourceType: "live"}
+
+	task := buildReconcileOfflineTask(plan, listing, time.Now())
+	if task.PriceCents != 16000 || len(task.ImageURLs) != 1 || task.ImageURLs[0] != listing.ImageURL {
+		t.Fatalf("offline task lost listing presentation: %#v", task)
+	}
+	if task.SourceItemID != listing.SourceItemID || task.XianyuItemID != listing.PlatformItemID {
+		t.Fatalf("offline task lost source linkage: %#v", task)
 	}
 }
 
@@ -115,5 +130,19 @@ func TestEnrichProductSpecImages(t *testing.T) {
 	}
 	if productNumber(listSKU, "store") != 3 || productNumber(listSKU, "price") != 11950 {
 		t.Fatalf("list inventory or price was overwritten: %#v", listSKU)
+	}
+}
+
+func TestApplyPublishActionMode(t *testing.T) {
+	plan := publishBatchPlan{ActionMode: "update_only", Candidates: []map[string]any{{"item_no": "A"}}, Relists: []model.PublishTask{{ItemNo: "B"}}, Updates: []model.PublishTask{{ItemNo: "C"}}, OfflineListings: []model.MarketplaceListing{{ItemNo: "D"}}}
+	applyPublishActionMode(&plan)
+	if len(plan.Candidates) != 0 || len(plan.Relists) != 0 || len(plan.OfflineListings) != 0 || len(plan.Updates) != 1 {
+		t.Fatalf("update-only mode retained unauthorized actions: %#v", plan)
+	}
+
+	plan = publishBatchPlan{ActionMode: "publish_update", Candidates: []map[string]any{{"item_no": "A"}}, Relists: []model.PublishTask{{ItemNo: "B"}}, Updates: []model.PublishTask{{ItemNo: "C"}}, OfflineListings: []model.MarketplaceListing{{ItemNo: "D"}}}
+	applyPublishActionMode(&plan)
+	if len(plan.Candidates) != 1 || len(plan.Relists) != 1 || len(plan.Updates) != 1 || len(plan.OfflineListings) != 0 {
+		t.Fatalf("publish-update mode retained offline actions: %#v", plan)
 	}
 }

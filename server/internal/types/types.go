@@ -165,18 +165,29 @@ type CatalogSyncChangeListResponse struct {
 
 // MarketplaceListingResponse 是一个渠道当前在售商品。
 type MarketplaceListingResponse struct {
-	ID             string `json:"id"`
-	AccountID      string `json:"accountId"`
-	Platform       string `json:"platform"`
-	PlatformItemID string `json:"platformItemId"`
-	SourceItemID   string `json:"sourceItemId,omitempty"`
-	ItemNo         string `json:"itemNo,omitempty"`
-	Title          string `json:"title"`
-	PriceCents     int64  `json:"priceCents"`
-	ImageURL       string `json:"imageUrl,omitempty"`
-	ItemURL        string `json:"itemUrl,omitempty"`
-	ListedAt       string `json:"listedAt"`
-	LastSyncedAt   string `json:"lastSyncedAt"`
+	ID             string                               `json:"id"`
+	AccountID      string                               `json:"accountId"`
+	Platform       string                               `json:"platform"`
+	PlatformItemID string                               `json:"platformItemId"`
+	SourceItemID   string                               `json:"sourceItemId,omitempty"`
+	ItemNo         string                               `json:"itemNo,omitempty"`
+	Title          string                               `json:"title"`
+	PriceCents     int64                                `json:"priceCents"`
+	ImageURL       string                               `json:"imageUrl,omitempty"`
+	ItemURL        string                               `json:"itemUrl,omitempty"`
+	ListedAt       string                               `json:"listedAt"`
+	LastSyncedAt   string                               `json:"lastSyncedAt"`
+	Stability      *MarketplaceListingStabilityResponse `json:"stability,omitempty"`
+}
+
+// MarketplaceListingStabilityResponse 是闲鱼商品对应的小程序货源稳定度。
+type MarketplaceListingStabilityResponse struct {
+	Score               int    `json:"score"`
+	ObservedDayCount    int    `json:"observedDayCount"`
+	AvailableDayCount   int    `json:"availableDayCount"`
+	UnavailableDayCount int    `json:"unavailableDayCount"`
+	CurrentAvailable    bool   `json:"currentAvailable"`
+	LastUnavailableAt   string `json:"lastUnavailableAt,omitempty"`
 }
 
 // MarketplaceListingListResponse 是渠道当前在售列表。
@@ -443,6 +454,7 @@ type CreatePublishBatchRequest struct {
 	MaxPriceCents                   int64    `json:"maxPriceCents,omitempty"`
 	MinDiscountRate                 int      `json:"minDiscountRate,omitempty"`
 	MaxDiscountRate                 int      `json:"maxDiscountRate,omitempty"`
+	ActionMode                      string   `json:"actionMode,omitempty" bson:"actionMode,omitempty"`
 }
 
 // PublishBatchSegmentResponse 是发布操作中追加的一段品牌任务。

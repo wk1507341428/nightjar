@@ -465,6 +465,8 @@ export function App() {
   const [stockOnly, setStockOnly] = useState(true);
   // 当前是否进入移动工作台布局。
   const [isCompactViewport, setIsCompactViewport] = useState(() => window.matchMedia('(max-width: 780px)').matches);
+  // 窄桌面自动收起侧栏，为筛选和表格保留横向空间。
+  const [isSiderCollapsed, setIsSiderCollapsed] = useState(() => window.matchMedia('(max-width: 1536px)').matches);
   // 商品区默认使用卡片展示，用户仍可手动切换到表格。
   const [productViewMode, setProductViewMode] = useState<ProductViewMode>('grid');
   // 移动端主导航抽屉状态。
@@ -965,6 +967,14 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    // 窄桌面使用折叠侧栏，避免固定导航挤压运营页面内容。
+    const mediaQuery = window.matchMedia('(max-width: 1536px)');
+    const handleSiderViewportChange = (event: MediaQueryListEvent) => setIsSiderCollapsed(event.matches);
+    mediaQuery.addEventListener('change', handleSiderViewportChange);
+    return () => mediaQuery.removeEventListener('change', handleSiderViewportChange);
+  }, []);
+
+  useEffect(() => {
 	// 切换账号后清空上个账号的在售标签，并按当前页面重新加载。
 	currentAccountIdRef.current = currentAccountId;
 	marketplaceRequestSequence.current += 1;
@@ -1234,6 +1244,8 @@ export function App() {
         fixSiderbar
         headerRender={false}
         siderWidth={232}
+        collapsed={isSiderCollapsed}
+        onCollapse={setIsSiderCollapsed}
         route={{ path: '/', routes: WORKSPACE_ROUTES }}
         location={{ pathname: activeMenuPath }}
         breadcrumbRender={false}

@@ -103,3 +103,15 @@ func TestManagedRelistPayloadSetsOnSaleStatus(t *testing.T) {
 		t.Fatal("original detail was modified")
 	}
 }
+
+func TestManagedEditPayloadRestoresMissingConditionLabel(t *testing.T) {
+	detail := map[string]any{"itemCatDTO": map[string]any{"channelCatId": "126862723"}, "itemTextDTO": map[string]any{"title": "全新 商品", "desc": "货号：A"}, "itemPriceDTO": map[string]any{"priceInCent": "10000"}, "quantity": "1"}
+	payload := ManagedEditPayload(detail, PublishInput{Title: "全新 商品", Description: "货号：A", PriceCents: 10000, Quantity: 1, Condition: "全新"})
+	labels := sliceValue(payload["itemLabelExtList"])
+	if len(labels) != 1 || stringValue(mapValue(labels[0])["text"]) != "全新" {
+		t.Fatalf("missing restored condition label: %#v", payload["itemLabelExtList"])
+	}
+	if stringValue(ManagedState(payload)["condition"]) != "全新" {
+		t.Fatalf("managed state did not include condition: %#v", ManagedState(payload))
+	}
+}

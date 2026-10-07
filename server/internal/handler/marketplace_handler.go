@@ -9,6 +9,7 @@ import (
 
 	"github.com/zeromicro/go-zero/core/logx"
 
+	"sidejob-server/internal/catalog"
 	"sidejob-server/internal/model"
 	"sidejob-server/internal/svc"
 	"sidejob-server/internal/types"
@@ -84,9 +85,29 @@ func listMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.Han
 			return
 		}
 
+		itemNosByScope := make(map[string][]string)
+		for _, listing := range listings {
+			scopeID := strings.TrimSpace(listing.BrandProfileID)
+			itemNo := strings.ToUpper(strings.TrimSpace(listing.ItemNo))
+			if scopeID == "" || itemNo == "" {
+				continue
+			}
+			itemNosByScope[scopeID] = appendUniqueText(itemNosByScope[scopeID], itemNo)
+		}
+		stabilityByKey := make(map[string]catalog.ItemStability)
+		stabilities, stabilityErr := serviceContext.InventoryRepository.ListItemStabilities(request.Context(), itemNosByScope)
+		if stabilityErr != nil {
+			logx.Errorf("list marketplace stability: %v", stabilityErr)
+		} else {
+			for _, stability := range stabilities {
+				stabilityByKey[marketplaceStabilityKey(stability.ScopeID, stability.ItemNo)] = stability
+			}
+		}
+
 		responses := make([]types.MarketplaceListingResponse, 0, len(listings))
 		for _, listing := range listings {
-			responses = append(responses, marketplaceListingToResponse(listing))
+			stability, hasStability := stabilityByKey[marketplaceStabilityKey(listing.BrandProfileID, listing.ItemNo)]
+			responses = append(responses, marketplaceListingToResponse(listing, stability, hasStability))
 		}
 
 		lastSyncedAt := ""
@@ -150,8 +171,8 @@ func syncMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.Han
 }
 
 // marketplaceListingToResponse 转换渠道商品响应。
-func marketplaceListingToResponse(listing model.MarketplaceListing) types.MarketplaceListingResponse {
-	return types.MarketplaceListingResponse{
+func marketplaceListingToResponse(listing model.MarketplaceListing, stability catalog.ItemStability, hasStability bool) types.MarketplaceListingResponse {
+	response := types.MarketplaceListingResponse{
 		ID:             listing.ID,
 		AccountID:      listing.AccountID,
 		Platform:       listing.Platform,
@@ -165,4 +186,22 @@ func marketplaceListingToResponse(listing model.MarketplaceListing) types.Market
 		ListedAt:       listing.ListedAt.Format(time.RFC3339),
 		LastSyncedAt:   listing.LastSyncedAt.Format(time.RFC3339),
 	}
+	if hasStability {
+		response.Stability = marketplaceListingStabilityToResponse(stability)
+	}
+	return response
+}
+
+// marketplaceStabilityKey 生成品牌货号稳定度的内存索引键。
+func marketplaceStabilityKey(scopeID, itemNo string) string {
+	return strings.TrimSpace(scopeID) + "\x00" + strings.ToUpper(strings.TrimSpace(itemNo))
+}
+
+// marketplaceListingStabilityToResponse 转换渠道商品稳定度响应。
+func marketplaceListingStabilityToResponse(stability catalog.ItemStability) *types.MarketplaceListingStabilityResponse {
+	response := &types.MarketplaceListingStabilityResponse{Score: stability.Score, ObservedDayCount: stability.ObservedDayCount, AvailableDayCount: stability.AvailableDayCount, UnavailableDayCount: stability.UnavailableDayCount, CurrentAvailable: stability.CurrentAvailable}
+	if !stability.LastUnavailableAt.IsZero() {
+		response.LastUnavailableAt = stability.LastUnavailableAt.Format(time.RFC3339)
+	}
+	return response
 }
