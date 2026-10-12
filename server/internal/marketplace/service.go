@@ -137,10 +137,7 @@ func (service *Service) syncOffShelfSnapshot(ctx context.Context, accountID stri
 		if itemNo == "" {
 			itemNo = extractItemNo(remoteItem.Title)
 		}
-		listedAt := task.CreatedAt
-		if listedAt.IsZero() {
-			listedAt = syncedAt
-		}
+		listedAt := taskPublishDate(task, syncedAt)
 		offShelfAt := syncedAt
 		listings = append(listings, model.MarketplaceListing{ID: model.XianyuPlatform + ":" + remoteItem.ItemID, AccountID: accountID, Platform: model.XianyuPlatform, PlatformItemID: remoteItem.ItemID, SourceItemID: task.SourceItemID, ItemNo: itemNo, Title: remoteItem.Title, PriceCents: remoteItem.PriceCents, ImageURL: remoteItem.ImageURL, ItemURL: "https://www.goofish.com/item?id=" + remoteItem.ItemID, ListedAt: listedAt, LastSyncedAt: syncedAt, LastSeenAt: syncedAt, SaleStatus: "off_shelf", RemoteStatus: remoteItem.Status, OffShelfAt: &offShelfAt, BrandProfileID: task.BrandProfileID, SourceType: task.SourceType, SourceRegions: task.SourceRegions, SourceMemberIDs: task.SourceMemberIDs, SourceItemIDs: task.SourceItemIDs})
 	}
@@ -213,10 +210,7 @@ func (service *Service) syncXianyuSnapshot(ctx context.Context, accountID string
 		if itemNo == "" {
 			itemNo = extractItemNo(remoteItem.Title)
 		}
-		listedAt := task.CreatedAt
-		if listedAt.IsZero() {
-			listedAt = syncedAt
-		}
+		listedAt := taskPublishDate(task, syncedAt)
 		priceCents := remoteItem.PriceCents
 		if priceCents <= 0 {
 			priceCents = task.PriceCents
@@ -287,6 +281,9 @@ func mergeLinkedTaskMetadata(primaryTask, fallbackTask model.PublishTask) model.
 	if len(primaryTask.SourceItemIDs) == 0 {
 		primaryTask.SourceItemIDs = fallbackTask.SourceItemIDs
 	}
+	if primaryTask.PublishedAt.IsZero() || (!fallbackTask.PublishedAt.IsZero() && fallbackTask.PublishedAt.Before(primaryTask.PublishedAt)) {
+		primaryTask.PublishedAt = fallbackTask.PublishedAt
+	}
 	if primaryTask.CreatedAt.IsZero() || (!fallbackTask.CreatedAt.IsZero() && fallbackTask.CreatedAt.Before(primaryTask.CreatedAt)) {
 		primaryTask.CreatedAt = fallbackTask.CreatedAt
 	}
@@ -322,7 +319,7 @@ func (service *Service) MarkXianyuPublished(
 		PriceCents:      task.PriceCents,
 		ImageURL:        imageURL,
 		ItemURL:         result.URL,
-		ListedAt:        now,
+		ListedAt:        taskPublishDate(task, now),
 		LastSyncedAt:    now,
 		LastSeenAt:      now,
 		SaleStatus:      "onsale",
@@ -334,10 +331,23 @@ func (service *Service) MarkXianyuPublished(
 	})
 }
 
+// taskPublishDate 返回商品首次发布时间，历史任务回退到任务创建时间。
+func taskPublishDate(task model.PublishTask, fallback time.Time) time.Time {
+	if !task.PublishedAt.IsZero() {
+		return task.PublishedAt
+	}
+	if !task.CreatedAt.IsZero() {
+		return task.CreatedAt
+	}
+	return fallback
+}
+
 // OfflineXianyuListings 下架闲鱼商品并同步删除本地在售快照。
 func (service *Service) OfflineXianyuListings(ctx context.Context, accountID string, itemIDs []string) (OfflineResult, error) {
 	state := service.stateForAccount(accountID)
-	state.mutex.Lock()
+	if err := lockMarketplaceState(ctx, &state.mutex); err != nil {
+		return OfflineResult{}, fmt.Errorf("等待闲鱼账号操作锁超时：%w", err)
+	}
 	defer state.mutex.Unlock()
 
 	xianyuResult, err := service.sellerXianyuService.ForAccount(accountID).OfflineItems(ctx, itemIDs)
@@ -358,6 +368,22 @@ func (service *Service) OfflineXianyuListings(ctx context.Context, accountID str
 		SucceededItemIDs: xianyuResult.SucceededItemIDs,
 		FailedItemIDs:    xianyuResult.FailedItemIDs,
 	}, nil
+}
+
+// lockMarketplaceState 让耗时的同步锁可被请求超时取消，避免下架任务永久卡在处理中。
+func lockMarketplaceState(ctx context.Context, mutex *sync.Mutex) error {
+	for {
+		if mutex.TryLock() {
+			return nil
+		}
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // extractItemNo 从系统生成的闲鱼标题中提取标准货号。

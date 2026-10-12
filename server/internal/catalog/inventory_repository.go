@@ -346,6 +346,23 @@ func (repository *InventoryRepository) ListOffersByBrandStores(ctx context.Conte
 	return offers, nil
 }
 
+// ListOffersBySourceItemIDs 批量读取任务关联的当前货源快照，避免任务列表逐条查询。
+func (repository *InventoryRepository) ListOffersBySourceItemIDs(ctx context.Context, sourceItemIDs []string) ([]CatalogOffer, error) {
+	if len(sourceItemIDs) == 0 {
+		return []CatalogOffer{}, nil
+	}
+	cursor, err := repository.offers.Find(ctx, bson.M{"sourceItemId": bson.M{"$in": sourceItemIDs}})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	offers := make([]CatalogOffer, 0)
+	if err := cursor.All(ctx, &offers); err != nil {
+		return nil, err
+	}
+	return offers, nil
+}
+
 // InsertSyncChanges 批量保存同步变更明细。
 func (repository *InventoryRepository) InsertSyncChanges(ctx context.Context, changes []SyncChange) error {
 	if len(changes) == 0 {

@@ -64,4 +64,35 @@ func TestRetryClaimAtomic(t *testing.T) {
 			t.Fatalf("protected task claimed: %s, %v", id, err)
 		}
 	}
+
+	for _, task := range []model.PublishTask{
+		{ID: "executable", BatchID: "active-batch", Status: model.PublishTaskQueued},
+		{ID: "cancelled-before-start", BatchID: "cancelled-batch", Status: model.PublishTaskQueued},
+		{ID: "cancelled-during-prepare", BatchID: "cancelled-during-prepare-batch", Status: model.PublishTaskQueued},
+	} {
+		if err := repo.Create(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := repo.CancelByBatchID(ctx, "cancelled-batch"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := repo.MarkPreparingIfExecutable(ctx, "cancelled-before-start"); err != nil || ok {
+		t.Fatalf("cancelled queued task entered preparation: %v", err)
+	}
+	if ok, err := repo.MarkPreparingIfExecutable(ctx, "executable"); err != nil || !ok {
+		t.Fatalf("active task was not claimed: %v", err)
+	}
+	if ok, err := repo.MarkPublishingIfExecutable(ctx, "executable"); err != nil || !ok {
+		t.Fatalf("active task did not enter publishing: %v", err)
+	}
+	if ok, err := repo.MarkPreparingIfExecutable(ctx, "cancelled-during-prepare"); err != nil || !ok {
+		t.Fatalf("task did not enter preparation: %v", err)
+	}
+	if _, err := repo.CancelByBatchID(ctx, "cancelled-during-prepare-batch"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := repo.MarkPublishingIfExecutable(ctx, "cancelled-during-prepare"); err != nil || ok {
+		t.Fatalf("cancelled preparing task entered publishing: %v", err)
+	}
 }

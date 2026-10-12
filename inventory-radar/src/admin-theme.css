@@ -434,8 +434,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
 .publish-preset-runner-head small { color: var(--primary); font-size: 9px; font-weight: 900; letter-spacing: .15em; }
 .publish-preset-runner-head strong { color: var(--ink); font-size: 20px; }
 .publish-preset-runner-head span { color: #8796a1; font-size: 10px; }
-.publish-preset-runner-select { display: grid; grid-template-columns: minmax(320px,620px) auto; justify-content: start; gap: 10px; }
+.publish-preset-runner-select { display: grid; grid-template-columns: minmax(320px,620px) minmax(270px,auto) auto; align-items: stretch; justify-content: start; gap: 10px; }
 .publish-preset-runner-select .ant-select { width: 100%; }
+.publish-preset-runner-option { display: flex; min-height: 38px; padding: 6px 10px; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid #dce4e8; border-radius: 8px; background: #f8fafb; cursor: pointer; }
+.publish-preset-runner-option > span { display: grid; gap: 1px; }
+.publish-preset-runner-option strong { color: var(--ink); font-size: 11px; }
+.publish-preset-runner-option small { color: #8796a1; font-size: 9px; }
 .publish-preset-runner-rules { display: flex; gap: 6px; flex-wrap: wrap; }
 .publish-preset-runner-rules .ant-tag { margin: 0; padding: 5px 9px; border: 0; color: #3e596c; background: #eef3f5; font-size: 10px; font-weight: 750; }
 .publish-preset-runner-progress { display: grid; gap: 4px; }

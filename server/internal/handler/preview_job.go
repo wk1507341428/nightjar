@@ -55,7 +55,7 @@ func servePreviewJob(w http.ResponseWriter, r *http.Request, sc *svc.ServiceCont
 			writeError(w, 500, "预览读取失败")
 			return
 		}
-		writeJSON(w, 200, types.PublishBatchPreviewResponse{AccountID: plan.AccountID, PreviewID: job.ID, Candidates: publishBatchCandidateResponses(plan.Candidates), Relists: plan.Relists, Updates: plan.Updates, Unchanged: plan.Unchanged, BrandStoreID: plan.BrandStoreID, BrandName: plan.BrandName, CategoryIDs: plan.CategoryIDs, CategoryNames: plan.CategoryNames, Total: plan.Total, Publishable: len(plan.Candidates) + len(plan.Relists), Selected: minInt(job.Request.Limit, len(plan.Candidates)+len(plan.Relists)), Skipped: publishBatchSkipResponses(plan.Skipped), OfflineCandidates: publishBatchOfflineCandidateResponses(plan.OfflineListings)})
+		writeJSON(w, 200, types.PublishBatchPreviewResponse{AccountID: plan.AccountID, PreviewID: job.ID, Candidates: publishBatchCandidateResponses(plan.Candidates), Relists: publishTaskResponses(plan.Relists), Updates: plan.Updates, Unchanged: plan.Unchanged, BrandStoreID: plan.BrandStoreID, BrandName: plan.BrandName, CategoryIDs: plan.CategoryIDs, CategoryNames: plan.CategoryNames, Total: plan.Total, Publishable: len(plan.Candidates) + len(plan.Relists), Selected: minInt(job.Request.Limit, len(plan.Candidates)+len(plan.Relists)), Skipped: publishBatchSkipResponses(plan.Skipped), OfflineCandidates: publishBatchOfflineCandidateResponses(plan.OfflineListings)})
 		return
 	}
 	job := previewJob{ID: primitive.NewObjectID().Hex(), Status: "preparing", CreatedAt: time.Now(), Request: body}

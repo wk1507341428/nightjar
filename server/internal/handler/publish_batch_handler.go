@@ -30,6 +30,12 @@ const (
 	defaultMinPublishDelaySeconds = 1
 	defaultMaxPublishDelaySeconds = 2
 	maxPublishDelaySeconds        = 60
+	publishDescriptionMaxLength   = 1500
+	publishedDateLabel            = "发布时间："
+	updatedDateLabel              = "更新时间："
+	legacyPublishedDateLabel      = "发布时间:"
+	publishedDateLayout           = "2006-01-02"
+	updatedDateLayout             = "2006-01-02 15:04"
 )
 
 // publishBatchPlan 是创建批次前重新计算的品牌商品计划。
@@ -256,14 +262,21 @@ func listPublishOperationsHandler(serviceContext *svc.ServiceContext) http.Handl
 			writeError(responseWriter, http.StatusInternalServerError, "读取发布操作记录失败")
 			return
 		}
+		batchIDs := make([]string, 0, len(batches))
+		for _, batch := range batches {
+			batchIDs = append(batchIDs, batch.ID)
+		}
+		taskSummaries, err := serviceContext.PublishRepository.ListBatchSummaries(request.Context(), batchIDs)
+		if err != nil {
+			writeError(responseWriter, http.StatusInternalServerError, "读取发布操作统计失败")
+			return
+		}
 		responses := make([]types.PublishBatchResponse, 0, len(batches))
 		for _, batch := range batches {
-			response := buildPublishBatchResponse(request.Context(), serviceContext, batch)
+			response := buildPublishBatchListResponse(batch, taskSummaries[batch.ID])
 			if (response.Status == model.PublishBatchCompleted || response.Status == model.PublishBatchFailed || response.Status == model.PublishBatchCancelled) && batch.Status != response.Status {
 				_ = serviceContext.PublishBatchRepository.MarkStatus(request.Context(), batch.ID, response.Status)
 			}
-			response.Tasks = []types.PublishTaskResponse{}
-			response.Skipped = []types.PublishBatchSkipResponse{}
 			responses = append(responses, response)
 		}
 		writeJSON(responseWriter, http.StatusOK, types.PublishBatchListResponse{List: responses, Total: total})
@@ -761,7 +774,18 @@ func buildBatchPublishTask(batchID string, plan publishBatchPlan, product map[st
 	if len(shippingRegionNames) > 0 {
 		shippingRegionName = strings.Join(shippingRegionNames, "、")
 	}
-	description := buildPublishDescription(title, itemNo, sizes, shippingRegionName)
+	originalPriceCents := productNumber(product, "market_price")
+	sourcePriceCents := offlineSourcePrice(product)
+	categoryID, categoryName := offlineProductCategory(product)
+	categoryIDs := []string{}
+	categoryNames := []string{}
+	if categoryID != "" {
+		categoryIDs = append(categoryIDs, categoryID)
+	}
+	if categoryName != "" {
+		categoryNames = append(categoryNames, categoryName)
+	}
+	description := buildPublishDescription(title, itemNo, originalPriceCents, sizes, shippingRegionName, createdAt, createdAt)
 	priceCents := batchPriceCents(productNumber(product, "activity_price"), productNumber(product, "price"))
 	lowerTitle := strings.ToLower(title)
 	isFootwear := strings.Contains(title, "鞋") || strings.Contains(title, "靴") || strings.Contains(lowerTitle, "sneaker") || strings.Contains(lowerTitle, "loafer") || strings.Contains(lowerTitle, "boot")
@@ -786,7 +810,7 @@ func buildBatchPublishTask(batchID string, plan publishBatchPlan, product map[st
 	if maxDelaySeconds == 0 {
 		maxDelaySeconds = defaultMaxPublishDelaySeconds
 	}
-	return model.PublishTask{ID: primitive.NewObjectID().Hex(), AccountID: plan.AccountID, BatchID: batchID, SourceItemID: firstProductString(product, "default_item_id", "item_id", "goods_id"), ItemNo: itemNo, Title: buildPublishTitle(title, itemNo), Description: truncateText(description, 1500), PriceCents: priceCents, OriginalPriceCents: productNumber(product, "market_price"), ImageURLs: images, RegionID: plan.RegionID, Brand: brandName, BrandProfileID: plan.BrandProfileID, SourceType: plan.SourceType, SourceRegions: productStringSlice(product, "_source_regions", plan.SourceRegions), SourceMemberIDs: productStringSlice(product, "_source_member_ids", plan.SourceMemberIDs), SourceItemIDs: productStringSlice(product, "_source_item_ids", []string{firstProductString(product, "default_item_id", "item_id", "goods_id")}), Condition: "全新", AvailableSizes: availableSizes, Variants: variants, IsFootwear: isFootwear, MinDelaySeconds: minDelaySeconds, MaxDelaySeconds: maxDelaySeconds, Status: model.PublishTaskQueued, CreatedAt: createdAt, UpdatedAt: createdAt}, nil
+	return model.PublishTask{ID: primitive.NewObjectID().Hex(), AccountID: plan.AccountID, BatchID: batchID, SourceItemID: firstProductString(product, "default_item_id", "item_id", "goods_id"), ItemNo: itemNo, Title: buildPublishTitle(title, itemNo), Description: description, PriceCents: priceCents, SourcePriceCents: sourcePriceCents, OriginalPriceCents: originalPriceCents, CategoryIDs: categoryIDs, CategoryNames: categoryNames, ImageURLs: images, RegionID: plan.RegionID, Brand: brandName, BrandProfileID: plan.BrandProfileID, SourceType: plan.SourceType, SourceRegions: productStringSlice(product, "_source_regions", plan.SourceRegions), SourceMemberIDs: productStringSlice(product, "_source_member_ids", plan.SourceMemberIDs), SourceItemIDs: productStringSlice(product, "_source_item_ids", []string{firstProductString(product, "default_item_id", "item_id", "goods_id")}), Condition: "全新", AvailableSizes: availableSizes, Variants: variants, IsFootwear: isFootwear, MinDelaySeconds: minDelaySeconds, MaxDelaySeconds: maxDelaySeconds, Status: model.PublishTaskQueued, PublishedAt: createdAt, CreatedAt: createdAt, UpdatedAt: createdAt}, nil
 }
 
 // buildPublishTitle 将货号固定放在标题末尾，并优先截断过长的商品名称。
@@ -841,9 +865,13 @@ func cleanPublishSourceTitle(title, itemNo string) string {
 }
 
 // buildPublishDescription 生成所有 SKU 发布共用的唯一商品描述模板。
-func buildPublishDescription(title, itemNo string, sizes []string, shippingRegionName string) string {
+func buildPublishDescription(_ string, itemNo string, originalPriceCents int64, sizes []string, shippingRegionName string, publishedAt, updatedAt time.Time) string {
 	descriptionLines := []string{
+		"",
 		"货号：" + itemNo,
+	}
+	if originalPriceCents > 0 {
+		descriptionLines = append(descriptionLines, "商品原价："+formatPriceYuan(originalPriceCents))
 	}
 	if len(sizes) > 0 {
 		descriptionLines = append(descriptionLines, "有货尺码/型号："+strings.Join(uniqueStrings(sizes), "、"))
@@ -856,26 +884,47 @@ func buildPublishDescription(title, itemNo string, sizes []string, shippingRegio
 		"下单即表示已阅读并接受以下说明：",
 		"",
 		"1. 正品保障",
-		"商品均来自奥特莱斯正规渠道，全新未穿，支持验货及正规平台鉴定。如需查看购买凭证，请提前联系。",
+		"商品均来自奥特莱斯正规渠道，全新未穿，支持验货及正规平台鉴定，保证正品；如确认非正品，按“假一赔三”处理。",
 		"",
 		"2. 库存说明",
 		"奥莱库存变化较快，下单前请先确认尺码和库存。部分商品需要到店采购，如遇临时缺货会及时联系处理。",
 		"",
 		"3. 发货时效",
-		"现货商品一般在下单后24小时内发出，代购商品通常在24—48小时内发出。如遇门店调货或库存变化，发货时间可能顺延，急用请提前确认。",
+		"商品一般在下单后48小时内发出，最晚不超过72小时。如遇门店调货、节假日或库存变化，发货时间可能顺延，急用请提前确认。",
 		"",
 		"4. 快递说明",
-		"默认普通快递包邮，新疆、西藏及其他偏远地区请提前咨询。商品默认使用纸箱加固包装，如需顺丰可补差价升级。",
+		"默认使用京东快递或顺丰快递包邮发出，偏远地区及特殊地址请提前咨询。商品默认使用纸箱加固包装，如有指定快递需求，请下单前沟通。",
 		"",
 		"5. 价格说明",
 		"商品售价可能随奥莱活动、库存及不同尺码的采购价格调整。订单成交后不提供保价或补差价服务。",
 		"",
-		"6. 尺码与售后",
-		"可以根据脚长和日常穿着习惯协助推荐尺码，具体请以自己常穿的同品牌尺码为主要参考。售后按照闲鱼平台规则处理；如有质量问题或商品与描述明显不符，请保留商品及完整包装并及时联系。",
+		"6. 尺码说明",
+		"可以根据脚长和日常穿着习惯协助推荐尺码，具体请以自己常穿的同品牌尺码为主要参考。",
 		"",
-		"购买前如需查看鞋标、鞋盒、购买凭证或其他商品细节，欢迎私聊。感谢理解，祝购物愉快！",
+		"7. 关于售后",
+		"在不影响二次销售的前提下，支持七天无理由退货退款。收到商品试穿时，麻烦先垫一张干净的纸，保持鞋底、鞋垫及商品包装干净完整，感谢理解与配合。",
+		"",
+		"感谢理解，祝购物愉快！",
 	)
-	return truncateText(strings.Join(descriptionLines, "\n"), 1500)
+	return withPublishDescriptionDates(strings.Join(descriptionLines, "\n"), publishedAt, updatedAt)
+}
+
+// withPublishDescriptionDates 在模板末尾写入首次发布时间和本次更新时间。
+func withPublishDescriptionDates(description string, publishedAt, updatedAt time.Time) string {
+	baseLines := make([]string, 0)
+	for _, line := range strings.Split(description, "\n") {
+		trimmedLine := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmedLine, publishedDateLabel) || strings.HasPrefix(trimmedLine, legacyPublishedDateLabel) || strings.HasPrefix(trimmedLine, updatedDateLabel) {
+			continue
+		}
+		baseLines = append(baseLines, line)
+	}
+	publishedDate := publishedAt.In(time.Local).Format(publishedDateLayout)
+	updatedDate := updatedAt.In(time.Local).Format(updatedDateLayout)
+	suffix := "\n\n" + publishedDateLabel + " " + publishedDate + "\n" + updatedDateLabel + " " + updatedDate
+	maxBaseLength := publishDescriptionMaxLength - len([]rune(suffix))
+	baseDescription := strings.TrimRight(strings.Join(baseLines, "\n"), "\n ")
+	return truncateText(baseDescription, maxBaseLength) + suffix
 }
 
 // publishRegionName 返回单个发布表单使用的发货地区简称。
@@ -887,9 +936,8 @@ func publishRegionName(regionID string) string {
 	return "对应仓库"
 }
 
-// buildPublishBatchResponse 汇总批次任务状态。
-func buildPublishBatchResponse(ctx context.Context, serviceContext *svc.ServiceContext, batch model.PublishBatch) types.PublishBatchResponse {
-	tasks, _ := serviceContext.PublishRepository.ListByBatchID(ctx, batch.ID)
+// newPublishBatchResponse 构造操作列表和详情共用的基础响应。
+func newPublishBatchResponse(batch model.PublishBatch) types.PublishBatchResponse {
 	minDelaySeconds := batch.MinDelaySeconds
 	maxDelaySeconds := batch.MaxDelaySeconds
 	if minDelaySeconds == 0 {
@@ -898,14 +946,26 @@ func buildPublishBatchResponse(ctx context.Context, serviceContext *svc.ServiceC
 	if maxDelaySeconds == 0 {
 		maxDelaySeconds = defaultMaxPublishDelaySeconds
 	}
-	response := types.PublishBatchResponse{ID: batch.ID, AccountID: batch.AccountID, BrandName: batch.BrandName, CategoryIDs: batch.CategoryIDs, CategoryNames: batch.CategoryNames, Status: batch.Status, ErrorMessage: batch.ErrorMessage, Limit: batch.Limit, MinDelaySeconds: minDelaySeconds, MaxDelaySeconds: maxDelaySeconds, Total: len(tasks) + len(batch.Skipped), Skipped: publishBatchSkipResponses(batch.Skipped), SkippedCount: len(batch.Skipped), Tasks: []types.PublishTaskResponse{}, CreatedAt: batch.CreatedAt.Format(time.RFC3339), OfflineRequested: batch.OfflineRequested, OfflineSucceeded: batch.OfflineSucceeded, OfflineFailed: batch.OfflineFailed}
+	response := types.PublishBatchResponse{ID: batch.ID, AccountID: batch.AccountID, BrandName: batch.BrandName, CategoryIDs: batch.CategoryIDs, CategoryNames: batch.CategoryNames, Status: batch.Status, ErrorMessage: batch.ErrorMessage, Limit: batch.Limit, MinDelaySeconds: minDelaySeconds, MaxDelaySeconds: maxDelaySeconds, Skipped: []types.PublishBatchSkipResponse{}, Tasks: []types.PublishTaskResponse{}, CreatedAt: batch.CreatedAt.Format(time.RFC3339), OfflineRequested: batch.OfflineRequested, OfflineSucceeded: batch.OfflineSucceeded, OfflineFailed: batch.OfflineFailed}
 	response.Segments = make([]types.PublishBatchSegmentResponse, 0, len(batch.Segments))
 	for _, segment := range batch.Segments {
 		response.Segments = append(response.Segments, types.PublishBatchSegmentResponse{ID: segment.ID, SourceType: segment.SourceType, BrandProfileID: segment.BrandProfileID, BrandStoreID: segment.BrandStoreID, DistributorID: segment.DistributorID, BrandName: segment.BrandName, RegionID: segment.RegionID, Requested: segment.Requested, AddedAt: segment.AddedAt.Format(time.RFC3339)})
 	}
+	return response
+}
+
+// buildPublishBatchResponse 汇总批次任务状态并返回任务明细。
+func buildPublishBatchResponse(ctx context.Context, serviceContext *svc.ServiceContext, batch model.PublishBatch) types.PublishBatchResponse {
+	tasks, _ := serviceContext.PublishRepository.ListByBatchID(ctx, batch.ID)
+	response := newPublishBatchResponse(batch)
+	response.Total = len(tasks) + len(batch.Skipped)
+	response.Skipped = publishBatchSkipResponses(batch.Skipped)
+	response.SkippedCount = len(batch.Skipped)
 	allFinished := len(tasks) > 0 && batch.Status != model.PublishBatchPreparing
+	for _, taskResponse := range publishTaskResponsesWithLiveSources(ctx, serviceContext, tasks) {
+		response.Tasks = append(response.Tasks, taskResponse)
+	}
 	for _, task := range tasks {
-		response.Tasks = append(response.Tasks, publishTaskToResponse(task))
 		if task.Action == "offline" {
 			response.OfflineRequested++
 			if task.Status == model.PublishTaskSucceeded {
@@ -937,6 +997,93 @@ func buildPublishBatchResponse(ctx context.Context, serviceContext *svc.ServiceC
 		}
 	}
 	return response
+}
+
+// buildPublishBatchListResponse 使用任务状态摘要构造操作列表，避免加载完整任务和实时货源。
+func buildPublishBatchListResponse(batch model.PublishBatch, summary repository.PublishTaskBatchSummary) types.PublishBatchResponse {
+	response := newPublishBatchResponse(batch)
+	response.Total = summary.Total + len(batch.Skipped)
+	response.SkippedCount = len(batch.Skipped)
+	response.Queued = summary.Queued
+	response.Running = summary.Running
+	response.Succeeded = summary.Succeeded
+	response.Failed = summary.Failed
+	response.OfflineRequested += summary.OfflineRequested
+	response.OfflineSucceeded += summary.OfflineSucceeded
+	response.OfflineFailed += summary.OfflineFailed
+	allFinished := summary.Total > 0 && batch.Status != model.PublishBatchPreparing && summary.Queued == 0 && summary.Running == 0
+	if allFinished && batch.Status != model.PublishBatchCancelled {
+		response.Status = model.PublishBatchCompleted
+		if response.Failed > 0 {
+			response.Status = model.PublishBatchFailed
+		}
+	}
+	return response
+}
+
+// publishTaskResponsesWithLiveSources 为历史任务补齐当前货源快照，避免任务明细只显示闲鱼售价。
+func publishTaskResponsesWithLiveSources(ctx context.Context, serviceContext *svc.ServiceContext, tasks []model.PublishTask) []types.PublishTaskResponse {
+	sourceItemIDs := make([]string, 0)
+	seenSourceItemIDs := make(map[string]struct{})
+	for _, task := range tasks {
+		for _, sourceItemID := range append([]string{task.SourceItemID}, task.SourceItemIDs...) {
+			sourceItemID = strings.TrimSpace(sourceItemID)
+			if sourceItemID == "" {
+				continue
+			}
+			if _, exists := seenSourceItemIDs[sourceItemID]; exists {
+				continue
+			}
+			seenSourceItemIDs[sourceItemID] = struct{}{}
+			sourceItemIDs = append(sourceItemIDs, sourceItemID)
+		}
+	}
+	offers, err := serviceContext.InventoryRepository.ListOffersBySourceItemIDs(ctx, sourceItemIDs)
+	if err != nil {
+		offers = nil
+	}
+	offersBySourceItemID := make(map[string]catalog.CatalogOffer, len(offers))
+	for _, offer := range offers {
+		if _, exists := offersBySourceItemID[offer.SourceItemID]; !exists {
+			offersBySourceItemID[offer.SourceItemID] = offer
+		}
+	}
+	responses := make([]types.PublishTaskResponse, 0, len(tasks))
+	for _, task := range tasks {
+		response := publishTaskToResponse(task)
+		var sourceOffer catalog.CatalogOffer
+		foundSourceOffer := false
+		for _, sourceItemID := range append([]string{task.SourceItemID}, task.SourceItemIDs...) {
+			if offer, exists := offersBySourceItemID[sourceItemID]; exists {
+				sourceOffer = offer
+				foundSourceOffer = true
+				break
+			}
+		}
+		if foundSourceOffer {
+			if response.SourcePriceCents == 0 {
+				response.SourcePriceCents = firstPositivePrice(sourceOffer.ActivityCents, sourceOffer.PriceCents)
+			}
+			if response.OriginalPriceCents == 0 {
+				response.OriginalPriceCents = sourceOffer.MarketCents
+			}
+			if len(response.CategoryNames) == 0 {
+				categoryID, categoryName := offlineProductCategory(sourceOffer.SourceData)
+				if categoryID != "" {
+					response.CategoryIDs = []string{categoryID}
+				}
+				if categoryName != "" {
+					response.CategoryNames = []string{categoryName}
+				}
+			}
+			if len(response.SourceRegions) == 0 {
+				response.SourceRegions = []string{sourceOffer.RegionID}
+			}
+		}
+		response.DiscountRate = smallProgramDiscountRate(response.SourcePriceCents, response.OriginalPriceCents)
+		responses = append(responses, response)
+	}
+	return responses
 }
 
 func publishBatchSkipResponses(skips []model.PublishBatchSkip) []types.PublishBatchSkipResponse {
@@ -972,14 +1119,26 @@ func publishBatchCandidateResponses(products []map[string]any) []types.PublishBa
 		if marketPrice > 0 && sourcePrice > 0 {
 			discountRate = int((sourcePrice*100 + marketPrice/2) / marketPrice)
 		}
+		categoryID, categoryName := offlineProductCategory(product)
+		categoryIDs := []string{}
+		categoryNames := []string{}
+		if categoryID != "" {
+			categoryIDs = append(categoryIDs, categoryID)
+		}
+		if categoryName != "" {
+			categoryNames = append(categoryNames, categoryName)
+		}
 		responses = append(responses, types.PublishBatchCandidateResponse{
-			ItemNo:        itemNo,
-			Title:         buildPublishTitle(productString(product, "item_name"), itemNo),
-			PriceCents:    batchPriceCents(activityPrice, price),
-			OriginalPrice: marketPrice,
-			DiscountRate:  discountRate,
-			ImageURL:      firstNonEmptyProductImage(product),
-			SourceRegions: productStringSlice(product, "_source_regions", nil),
+			ItemNo:           itemNo,
+			Title:            buildPublishTitle(productString(product, "item_name"), itemNo),
+			PriceCents:       batchPriceCents(activityPrice, price),
+			SourcePriceCents: sourcePrice,
+			OriginalPrice:    marketPrice,
+			DiscountRate:     discountRate,
+			ImageURL:         firstNonEmptyProductImage(product),
+			SourceRegions:    productStringSlice(product, "_source_regions", nil),
+			CategoryIDs:      categoryIDs,
+			CategoryNames:    categoryNames,
 		})
 	}
 	return responses
@@ -1327,7 +1486,7 @@ func productSpecLabel(item map[string]any) string {
 func filterPublishProducts(products []map[string]any, requestBody types.CreatePublishBatchRequest) ([]map[string]any, []model.PublishBatchSkip) {
 	priceFilterEnabled := requestBody.MinPriceCents > 0 || requestBody.MaxPriceCents > 0
 	discountFilterEnabled := requestBody.MinDiscountRate > 0 || requestBody.MaxDiscountRate > 0
-	if !priceFilterEnabled && !discountFilterEnabled {
+	if !priceFilterEnabled && !discountFilterEnabled && !requestBody.ExcludeBrokenSizeItems {
 		return products, nil
 	}
 	filteredProducts := make([]map[string]any, 0, len(products))
@@ -1345,13 +1504,17 @@ func filterPublishProducts(products []map[string]any, requestBody types.CreatePu
 		}
 		priceOutOfRange := (requestBody.MinPriceCents > 0 && publishedPrice < requestBody.MinPriceCents) || (requestBody.MaxPriceCents > 0 && publishedPrice > requestBody.MaxPriceCents)
 		discountOutOfRange := (requestBody.MinDiscountRate > 0 && discountRate < requestBody.MinDiscountRate) || (requestBody.MaxDiscountRate > 0 && (discountRate == 0 || discountRate > requestBody.MaxDiscountRate))
-		if priceOutOfRange || discountOutOfRange {
-			reasons := make([]string, 0, 2)
+		brokenSizeExcluded := requestBody.ExcludeBrokenSizeItems && isBrokenSizeProducts([]map[string]any{product})
+		if priceOutOfRange || discountOutOfRange || brokenSizeExcluded {
+			reasons := make([]string, 0, 3)
 			if priceOutOfRange {
 				reasons = append(reasons, fmt.Sprintf("发布售价%s不在筛选区间", formatPriceYuan(publishedPrice)))
 			}
 			if discountOutOfRange {
 				reasons = append(reasons, fmt.Sprintf("折扣率%d%%不在筛选区间", discountRate))
+			}
+			if brokenSizeExcluded {
+				reasons = append(reasons, "鞋服商品仅剩一个可售尺码，已按设置跳过")
 			}
 			skipped = append(skipped, model.PublishBatchSkip{ItemNo: productString(product, "item_no"), Title: productString(product, "item_name"), Reason: strings.Join(reasons, "；")})
 			continue

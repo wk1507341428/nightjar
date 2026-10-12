@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Empty, Progress, Select, Tag } from 'antd';
+import { Alert, Button, Empty, Progress, Select, Switch, Tag } from 'antd';
 import type { PublishBatch, PublishBatchPreview, PublishPreset, PublishPresetActionMode, PublishPresetRule } from './types';
 import { appendPublishOperation, fetchPublishPresets, previewPublishOperation } from './xianyuApi';
 
@@ -16,7 +16,7 @@ function getPresetActionCount(preview: PublishBatchPreview): number {
 }
 
 /** 把保存的规则转换为实时预览请求。 */
-function buildPresetSettings(accountId: string, rule: PublishPresetRule) {
+function buildPresetSettings(accountId: string, rule: PublishPresetRule, excludeBrokenSizeItems: boolean) {
   return {
     accountId,
     sourceType: rule.sourceType,
@@ -33,6 +33,7 @@ function buildPresetSettings(accountId: string, rule: PublishPresetRule) {
     maxPriceCents: rule.maxPriceCents || undefined,
     minDiscountRate: rule.minDiscountRate || undefined,
     maxDiscountRate: rule.maxDiscountRate || undefined,
+    excludeBrokenSizeItems,
     actionMode: rule.actionMode,
   };
 }
@@ -61,6 +62,8 @@ export function PublishPresetRunner({
   const [isLoading, setIsLoading] = useState(false);
   // 当前错误提示。
   const [errorMessage, setErrorMessage] = useState('');
+  // 本次方案运行是否统一跳过鞋服断码商品。
+  const [excludeBrokenSizeItems, setExcludeBrokenSizeItems] = useState(false);
 
   /** 加载当前账号的方案列表。 */
   async function loadPresets() {
@@ -68,7 +71,9 @@ export function PublishPresetRunner({
     try {
       const nextPresets = await fetchPublishPresets(accountId);
       setPresets(nextPresets);
-      setSelectedPresetId((currentId) => nextPresets.some((preset) => preset.id === currentId) ? currentId : nextPresets[0]?.id ?? '');
+      const nextSelectedPreset = nextPresets[0] ?? null;
+      setSelectedPresetId(nextSelectedPreset?.id ?? '');
+      setExcludeBrokenSizeItems(nextSelectedPreset?.rules.every((rule) => rule.excludeBrokenSizeItems === true) ?? false);
       setErrorMessage('');
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '读取常用发布方案失败');
@@ -86,7 +91,17 @@ export function PublishPresetRunner({
 
   /** 切换方案并清理旧预览。 */
   function handlePresetChange(presetId: string) {
+    const nextPreset = presets.find((preset) => preset.id === presetId) ?? null;
     setSelectedPresetId(presetId);
+    setExcludeBrokenSizeItems(nextPreset?.rules.every((rule) => rule.excludeBrokenSizeItems === true) ?? false);
+    setPreviewResults([]);
+    setPreviewProgress(0);
+    setErrorMessage('');
+  }
+
+  /** 修改本次方案的断码过滤并使旧预览失效。 */
+  function handleBrokenSizeFilterChange(checked: boolean) {
+    setExcludeBrokenSizeItems(checked);
     setPreviewResults([]);
     setPreviewProgress(0);
     setErrorMessage('');
@@ -105,7 +120,7 @@ export function PublishPresetRunner({
         const currentRules = selectedPreset.rules.slice(ruleIndex, ruleIndex + 2);
         const currentResults = await Promise.all(currentRules.map(async (rule) => ({
           rule,
-          preview: await previewPublishOperation(rule.brandStoreId ?? '', buildPresetSettings(accountId, rule)),
+          preview: await previewPublishOperation(rule.brandStoreId ?? '', buildPresetSettings(accountId, rule, excludeBrokenSizeItems)),
         })));
         nextResults.push(...currentResults);
         setPreviewResults([...nextResults]);
@@ -129,7 +144,7 @@ export function PublishPresetRunner({
       for (const result of previewResults) {
         if (getPresetActionCount(result.preview) === 0) continue;
         latestOperation = await appendPublishOperation(result.rule.brandStoreId ?? '', {
-          ...buildPresetSettings(accountId, result.rule),
+          ...buildPresetSettings(accountId, result.rule, excludeBrokenSizeItems),
           previewId: result.preview.previewId,
           preservedOfflinePlatformItemIds: [],
         });
@@ -151,7 +166,7 @@ export function PublishPresetRunner({
   return <section className="publish-preset-runner">
     {errorMessage ? <Alert type="error" showIcon closable message={errorMessage} onClose={() => setErrorMessage('')} /> : null}
     <header className="publish-preset-runner-head"><div><small>USE SAVED PLAYBOOK</small><strong>选择常用发布方案</strong><span>每次都会重新读取实时货源和闲鱼商品，不使用旧预览。</span></div><Button onClick={onManagePresets}>管理方案</Button></header>
-    <div className="publish-preset-runner-select"><Select loading={isLoading} value={selectedPresetId || undefined} onChange={handlePresetChange} placeholder="选择一套常用方案" options={presets.map((preset) => ({ value: preset.id, label: `${preset.name} · ${preset.rules.length} 个品牌` }))} /><Button type="primary" loading={isLoading} disabled={!selectedPreset} onClick={() => void handleGeneratePreview()}>生成方案预览</Button></div>
+    <div className="publish-preset-runner-select"><Select loading={isLoading} value={selectedPresetId || undefined} onChange={handlePresetChange} placeholder="选择一套常用方案" options={presets.map((preset) => ({ value: preset.id, label: `${preset.name} · ${preset.rules.length} 个品牌` }))} /><label className="publish-preset-runner-option"><span><strong>不发布断码商品</strong><small>仅鞋服，剩余一个可售尺码时跳过</small></span><Switch checked={excludeBrokenSizeItems} onChange={handleBrokenSizeFilterChange} checkedChildren="开启" unCheckedChildren="关闭" /></label><Button type="primary" loading={isLoading} disabled={!selectedPreset} onClick={() => void handleGeneratePreview()}>生成方案预览</Button></div>
     {selectedPreset ? <div className="publish-preset-runner-rules">{selectedPreset.rules.map((rule) => <Tag key={rule.id}>{rule.brandName} · {rule.categoryNames.length ? rule.categoryNames.join(' / ') : '全部品类'} · {ACTION_MODE_LABELS[rule.actionMode]}</Tag>)}</div> : null}
     {isLoading && previewProgress > 0 ? <div className="publish-preset-runner-progress"><Progress percent={previewProgress} status="active" /><span>正在并发核对品牌实时数据</span></div> : null}
     {previewResults.length > 0 ? <><div className="publish-preset-preview-summary"><article><span>品牌规则</span><strong>{previewResults.length}</strong></article><article><span>实际任务</span><strong>{previewActionCount}</strong></article><article><span>剩余容量</span><strong>{remainingCapacity}</strong></article></div><div className="publish-preset-preview-list">{previewResults.map(({ rule, preview }) => <article key={rule.id}><header><div><strong>{rule.brandName}</strong><span>{rule.categoryNames.length ? rule.categoryNames.join(' / ') : '全部品类'} · {ACTION_MODE_LABELS[rule.actionMode]}</span></div><Tag color={getPresetActionCount(preview) ? 'processing' : 'default'}>{getPresetActionCount(preview)} 个任务</Tag></header><dl><div><dt>待更新</dt><dd>{preview.updates?.length ?? 0}</dd></div><div><dt>新品/恢复</dt><dd>{preview.selected}</dd></div><div><dt>待下架</dt><dd>{preview.offlineCandidates?.length ?? 0}</dd></div><div><dt>无需修改</dt><dd>{preview.unchanged ?? 0}</dd></div><div><dt>自动跳过</dt><dd>{preview.skipped.length}</dd></div></dl></article>)}</div>{previewActionCount > remainingCapacity ? <Alert type="warning" showIcon message={`方案需要 ${previewActionCount} 个任务，当前队列只剩 ${remainingCapacity} 个位置`} /> : null}<div className="publish-preset-runner-actions"><Button onClick={() => setPreviewResults([])}>清除预览</Button><Button type="primary" loading={isLoading} disabled={previewActionCount === 0 || previewActionCount > remainingCapacity} onClick={() => void handleConfirmPreset()}>确认全部加入队列</Button></div></> : null}

@@ -315,6 +315,7 @@ export interface OfflineCenterFilters {
 	maxPriceCents?: number;
 	minDiscountRate?: number;
 	maxDiscountRate?: number;
+	offlineBrokenSizeItems?: boolean;
 }
 
 /** 渠道手动同步响应。 */
@@ -433,6 +434,12 @@ export interface PublishTask {
 	title: string;
 	brand?: string;
 	priceCents: number;
+	sourcePriceCents?: number;
+	originalPriceCents?: number;
+	discountRate?: number;
+	categoryIds?: string[];
+	categoryNames?: string[];
+	sourceRegions?: string[];
 	imageUrls?: string[];
 	xianyuItemId?: string;
 	xianyuUrl?: string;
@@ -451,7 +458,7 @@ export interface PublishBatchSkip {
 /** 当前品牌批量发布预览。 */
 export interface PublishBatchPreview {
 	accountId: string;
-	candidates?: Array<{ itemNo: string; title: string; priceCents: number; originalPriceCents: number; discountRate: number; imageUrl?: string; sourceRegions?: string[] }>;
+	candidates?: Array<{ itemNo: string; title: string; priceCents: number; sourcePriceCents?: number; originalPriceCents: number; discountRate: number; imageUrl?: string; sourceRegions?: string[]; categoryIds?: string[]; categoryNames?: string[] }>;
 	previewId?: string;
 	unchanged?: number;
 	updates?: Array<PublishTask & { before?: { price?: string; quantity?: string }; variants?: Array<{ quantity: number; priceCents: number; imageUrl?: string; properties: Array<{ name: string; value: string }> }> }>;
@@ -527,6 +534,7 @@ export interface PublishBatchSettings {
 	maxPriceCents?: number;
 	minDiscountRate?: number;
 	maxDiscountRate?: number;
+	excludeBrokenSizeItems?: boolean;
 	categoryIds?: string[];
 	categoryNames?: string[];
 	sourceType?: 'live' | 'local';
@@ -559,6 +567,7 @@ export interface PublishPresetRule {
 	maxPriceCents?: number;
 	minDiscountRate?: number;
 	maxDiscountRate?: number;
+	excludeBrokenSizeItems?: boolean;
 	actionMode: PublishPresetActionMode;
 }
 

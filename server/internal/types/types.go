@@ -217,16 +217,17 @@ type MarketplaceOfflineResponse struct {
 
 // OfflineCenterPreviewRequest 是下架中心的品牌和商品筛选条件。
 type OfflineCenterPreviewRequest struct {
-	AccountID       string   `json:"accountId"`
-	BrandProfileID  string   `json:"brandProfileId,omitempty"`
-	RegionID        string   `json:"regionId,omitempty"`
-	DistributorID   string   `json:"distributorId,omitempty"`
-	BrandName       string   `json:"brandName,omitempty"`
-	CategoryIDs     []string `json:"categoryIds,omitempty"`
-	MinPriceCents   int64    `json:"minPriceCents,omitempty"`
-	MaxPriceCents   int64    `json:"maxPriceCents,omitempty"`
-	MinDiscountRate int      `json:"minDiscountRate,omitempty"`
-	MaxDiscountRate int      `json:"maxDiscountRate,omitempty"`
+	AccountID              string   `json:"accountId"`
+	BrandProfileID         string   `json:"brandProfileId,omitempty"`
+	RegionID               string   `json:"regionId,omitempty"`
+	DistributorID          string   `json:"distributorId,omitempty"`
+	BrandName              string   `json:"brandName,omitempty"`
+	CategoryIDs            []string `json:"categoryIds,omitempty"`
+	MinPriceCents          int64    `json:"minPriceCents,omitempty"`
+	MaxPriceCents          int64    `json:"maxPriceCents,omitempty"`
+	MinDiscountRate        int      `json:"minDiscountRate,omitempty"`
+	MaxDiscountRate        int      `json:"maxDiscountRate,omitempty"`
+	OfflineBrokenSizeItems bool     `json:"offlineBrokenSizeItems,omitempty"`
 }
 
 // OfflineCenterCandidate 是一件可确认加入下架队列的闲鱼商品。
@@ -411,21 +412,27 @@ type CreatePublishVariantPropertyRequest struct {
 
 // PublishTaskResponse 是脱敏后的发布任务响应。
 type PublishTaskResponse struct {
-	AccountID     string   `json:"accountId"`
-	Action        string   `json:"action"`
-	ChangeReasons []string `json:"changeReasons,omitempty"`
-	ID            string   `json:"id"`
-	Status        string   `json:"status"`
-	ItemNo        string   `json:"itemNo"`
-	Title         string   `json:"title"`
-	Brand         string   `json:"brand,omitempty"`
-	PriceCents    int64    `json:"priceCents"`
-	ImageURLs     []string `json:"imageUrls,omitempty"`
-	XianyuItemID  string   `json:"xianyuItemId,omitempty"`
-	XianyuURL     string   `json:"xianyuUrl,omitempty"`
-	ErrorMessage  string   `json:"errorMessage,omitempty"`
-	CreatedAt     string   `json:"createdAt"`
-	UpdatedAt     string   `json:"updatedAt"`
+	AccountID          string   `json:"accountId"`
+	Action             string   `json:"action"`
+	ChangeReasons      []string `json:"changeReasons,omitempty"`
+	ID                 string   `json:"id"`
+	Status             string   `json:"status"`
+	ItemNo             string   `json:"itemNo"`
+	Title              string   `json:"title"`
+	Brand              string   `json:"brand,omitempty"`
+	PriceCents         int64    `json:"priceCents"`
+	SourcePriceCents   int64    `json:"sourcePriceCents,omitempty"`
+	OriginalPriceCents int64    `json:"originalPriceCents,omitempty"`
+	DiscountRate       int      `json:"discountRate,omitempty"`
+	CategoryIDs        []string `json:"categoryIds,omitempty"`
+	CategoryNames      []string `json:"categoryNames,omitempty"`
+	SourceRegions      []string `json:"sourceRegions,omitempty"`
+	ImageURLs          []string `json:"imageUrls,omitempty"`
+	XianyuItemID       string   `json:"xianyuItemId,omitempty"`
+	XianyuURL          string   `json:"xianyuUrl,omitempty"`
+	ErrorMessage       string   `json:"errorMessage,omitempty"`
+	CreatedAt          string   `json:"createdAt"`
+	UpdatedAt          string   `json:"updatedAt"`
 }
 
 // PublishTaskListResponse 是发布任务列表响应。
@@ -454,6 +461,7 @@ type CreatePublishBatchRequest struct {
 	MaxPriceCents                   int64    `json:"maxPriceCents,omitempty"`
 	MinDiscountRate                 int      `json:"minDiscountRate,omitempty"`
 	MaxDiscountRate                 int      `json:"maxDiscountRate,omitempty"`
+	ExcludeBrokenSizeItems          bool     `json:"excludeBrokenSizeItems,omitempty"`
 	ActionMode                      string   `json:"actionMode,omitempty" bson:"actionMode,omitempty"`
 }
 
@@ -482,7 +490,7 @@ type PublishBatchPreviewResponse struct {
 	AccountID         string                                 `json:"accountId"`
 	Candidates        []PublishBatchCandidateResponse        `json:"candidates"`
 	Updates           []model.PublishTask                    `json:"updates"`
-	Relists           []model.PublishTask                    `json:"relists"`
+	Relists           []PublishTaskResponse                  `json:"relists"`
 	Unchanged         int                                    `json:"unchanged"`
 	PreviewID         string                                 `json:"previewId,omitempty"`
 	BrandStoreID      string                                 `json:"brandStoreId"`
@@ -498,13 +506,16 @@ type PublishBatchPreviewResponse struct {
 
 // PublishBatchCandidateResponse 是预览中的可发布商品摘要。
 type PublishBatchCandidateResponse struct {
-	ItemNo        string   `json:"itemNo"`
-	Title         string   `json:"title"`
-	PriceCents    int64    `json:"priceCents"`
-	OriginalPrice int64    `json:"originalPriceCents"`
-	DiscountRate  int      `json:"discountRate"`
-	ImageURL      string   `json:"imageUrl,omitempty"`
-	SourceRegions []string `json:"sourceRegions,omitempty"`
+	ItemNo           string   `json:"itemNo"`
+	Title            string   `json:"title"`
+	PriceCents       int64    `json:"priceCents"`
+	SourcePriceCents int64    `json:"sourcePriceCents,omitempty"`
+	OriginalPrice    int64    `json:"originalPriceCents"`
+	DiscountRate     int      `json:"discountRate"`
+	ImageURL         string   `json:"imageUrl,omitempty"`
+	SourceRegions    []string `json:"sourceRegions,omitempty"`
+	CategoryIDs      []string `json:"categoryIds,omitempty"`
+	CategoryNames    []string `json:"categoryNames,omitempty"`
 }
 
 // PublishBatchOfflineCandidateResponse 是品牌对账后准备下架的闲鱼商品。

@@ -6,7 +6,6 @@ import (
 	"sidejob-server/internal/model"
 	"sidejob-server/internal/svc"
 	"sidejob-server/internal/xianyu"
-	"sort"
 	"strings"
 	"time"
 )
@@ -25,62 +24,9 @@ func listingBelongsToPlan(listing model.MarketplaceListing, plan publishBatchPla
 	return false
 }
 
-// prepareOfflineBatch 一次读取每组货源，再判断批量重试的下架商品是否仍有货。
-func prepareOfflineBatch(ctx context.Context, sc *svc.ServiceContext, tasks []model.PublishTask) map[string]error {
-	results := make(map[string]error)
-	type offlineGroup struct {
-		tasks []model.PublishTask
-		keys  []string
-	}
-	groups := make(map[string]*offlineGroup)
-	for _, task := range tasks {
-		if !task.RetryRequested {
-			continue
-		}
-		keys := append([]string{}, task.SourceMemberIDs...)
-		if task.BrandProfileID != "" {
-			_, members, err := sc.InventoryRepository.GetBrandProfile(ctx, task.BrandProfileID)
-			if err != nil {
-				results[task.ID] = err
-				continue
-			}
-			keys = keys[:0]
-			for _, member := range members {
-				keys = append(keys, member.RegionID+":"+member.DistributorID)
-			}
-		}
-		sort.Strings(keys)
-		groupKey := task.AccountID + "|" + task.BrandProfileID + "|" + strings.Join(keys, "|")
-		group := groups[groupKey]
-		if group == nil {
-			group = &offlineGroup{keys: keys}
-			groups[groupKey] = group
-		}
-		group.tasks = append(group.tasks, task)
-	}
-	for _, group := range groups {
-		rows, err := loadReconcileSources(ctx, sc, group.keys, true)
-		if err != nil {
-			for _, task := range group.tasks {
-				results[task.ID] = fmt.Errorf("重试前读取货源失败：%w", err)
-			}
-			continue
-		}
-		productsByItemNo := make(map[string][]map[string]any)
-		for _, row := range rows {
-			itemNo := strings.ToUpper(strings.TrimSpace(productString(row, "item_no")))
-			if itemNo != "" {
-				productsByItemNo[itemNo] = append(productsByItemNo[itemNo], row)
-			}
-		}
-		for _, task := range group.tasks {
-			itemNo := strings.ToUpper(strings.TrimSpace(task.ItemNo))
-			if len(mergePublishProductsByItemNo(productsByItemNo[itemNo])) > 0 {
-				results[task.ID] = fmt.Errorf("货源已恢复库存，取消本次下架")
-			}
-		}
-	}
-	return results
+// prepareOfflineBatch 保持用户确认的下架意图；下架中心不再因货源恢复而撤销任务。
+func prepareOfflineBatch(_ context.Context, _ *svc.ServiceContext, _ []model.PublishTask) map[string]error {
+	return map[string]error{}
 }
 
 func taskPublishInput(task model.PublishTask) xianyu.PublishInput {
@@ -93,6 +39,51 @@ func taskPublishInput(task model.PublishTask) xianyu.PublishInput {
 		variants = append(variants, xianyu.PublishVariant{PriceCents: sku.PriceCents, Quantity: sku.Quantity, ImageURL: sku.ImageURL, Properties: props})
 	}
 	return xianyu.PublishInput{Quantity: task.Quantity, Title: task.Title, Description: task.Description, PriceCents: task.PriceCents, OriginalPriceCents: task.OriginalPriceCents, Condition: task.Condition, Variants: variants}
+}
+
+// applyPublishTaskDates 保留首次发布时间，仅刷新本次内容更新时间。
+func applyPublishTaskDates(task *model.PublishTask, publishedAt, updatedAt time.Time) {
+	if publishedAt.IsZero() {
+		publishedAt = task.PublishedAt
+	}
+	if publishedAt.IsZero() {
+		publishedAt = task.CreatedAt
+	}
+	if publishedAt.IsZero() {
+		publishedAt = updatedAt
+	}
+	task.PublishedAt = publishedAt
+	task.Description = withPublishDescriptionDates(task.Description, publishedAt, updatedAt)
+}
+
+// publishDescriptionDates 读取已有描述中的日期，避免更新时间本身触发无意义修改。
+func publishDescriptionDates(description string, fallback time.Time) (time.Time, time.Time) {
+	publishedAt := fallback
+	updatedAt := fallback
+	for _, line := range strings.Split(description, "\n") {
+		trimmedLine := strings.TrimSpace(line)
+		for _, target := range []struct {
+			label string
+			date  *time.Time
+		}{{publishedDateLabel, &publishedAt}, {legacyPublishedDateLabel, &publishedAt}, {updatedDateLabel, &updatedAt}} {
+			if !strings.HasPrefix(trimmedLine, target.label) {
+				continue
+			}
+			value := strings.TrimSpace(strings.TrimPrefix(trimmedLine, target.label))
+			layouts := []string{publishedDateLayout}
+			if target.date == &updatedAt {
+				layouts = []string{updatedDateLayout, publishedDateLayout}
+			}
+			for _, layout := range layouts {
+				parsed, err := time.ParseInLocation(layout, value, time.Local)
+				if err == nil {
+					*target.date = parsed
+					break
+				}
+			}
+		}
+	}
+	return publishedAt, updatedAt
 }
 
 func planListingUpdate(ctx context.Context, sc *svc.ServiceContext, plan publishBatchPlan, product map[string]any, listing model.MarketplaceListing) (model.PublishTask, bool, error) {
@@ -114,9 +105,16 @@ func planListingUpdate(ctx context.Context, sc *svc.ServiceContext, plan publish
 	task.XianyuURL = listing.ItemURL
 	task.PlannedAt = time.Now()
 	task.Before = xianyu.ManagedState(before)
+	publishedAt, updatedAt := publishDescriptionDates(fmt.Sprint(task.Before["description"]), listing.ListedAt)
+	applyPublishTaskDates(&task, publishedAt, updatedAt)
 	after := xianyu.ManagedState(xianyu.ManagedEditPayload(before, taskPublishInput(task)))
+	if xianyu.SameActionableState(task.Before, after) {
+		return task, false, nil
+	}
+	applyPublishTaskDates(&task, publishedAt, task.PlannedAt)
+	after = xianyu.ManagedState(xianyu.ManagedEditPayload(before, taskPublishInput(task)))
 	task.ChangeReasons = xianyu.StateChangeReasons(task.Before, after)
-	return task, !xianyu.SameActionableState(task.Before, after), nil
+	return task, true, nil
 }
 
 // planListingRelist 为可发布商品复用最近下架的闲鱼商品 ID。
@@ -134,6 +132,7 @@ func planListingRelist(plan publishBatchPlan, product map[string]any, listing mo
 	task.XianyuItemID = listing.PlatformItemID
 	task.XianyuURL = listing.ItemURL
 	task.PlannedAt = time.Now()
+	applyPublishTaskDates(&task, listing.ListedAt, task.PlannedAt)
 	task.ChangeReasons = []string{"复用最近下架商品并按当前模板重新编辑"}
 	return task, nil
 }
@@ -149,6 +148,10 @@ func canonicalSpecValue(name, value string) string {
 
 // refreshReconcileTask 执行前重新拉齐货源，队列等待期间的缺货不能使用旧库存覆盖。
 func refreshReconcileTask(ctx context.Context, sc *svc.ServiceContext, task model.PublishTask) (model.PublishTask, error) {
+	if task.Action == "offline" {
+		// 下架中心是人工确认后的强制操作，不重新依据小程序库存撤销。
+		return task, nil
+	}
 	keys := task.SourceMemberIDs
 	if task.BrandProfileID != "" {
 		_, members, err := sc.InventoryRepository.GetBrandProfile(ctx, task.BrandProfileID)
@@ -174,12 +177,6 @@ func refreshReconcileTask(ctx context.Context, sc *svc.ServiceContext, task mode
 		}
 	}
 	merged := mergePublishProductsByItemNo(products)
-	if task.Action == "offline" {
-		if len(merged) > 0 {
-			return task, fmt.Errorf("货源已恢复库存，取消本次下架")
-		}
-		return task, nil
-	}
 	if len(merged) == 0 {
 		return task, fmt.Errorf("全部来源已无货，请重新预览并确认下架")
 	}
@@ -206,6 +203,7 @@ func refreshReconcileTask(ctx context.Context, sc *svc.ServiceContext, task mode
 	updated.XianyuURL = task.XianyuURL
 	updated.DuplicateXianyuItemIDs = task.DuplicateXianyuItemIDs
 	updated.PlannedAt = time.Now()
+	applyPublishTaskDates(&updated, task.PublishedAt, updated.PlannedAt)
 	return updated, nil
 }
 

@@ -68,13 +68,34 @@ func TestRetrySnapshotCacheIsolatedByAccount(t *testing.T) {
 
 func TestMergeLinkedTaskMetadataFillsOfflineTaskPresentation(t *testing.T) {
 	latestOfflineTask := model.PublishTask{ID: "offline", Action: "offline", ItemNo: "HV6891-010", XianyuItemID: "1085680973385", CreatedAt: time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)}
-	originalPublishTask := model.PublishTask{ID: "publish", ItemNo: "HV6891-010", XianyuItemID: "1085680973385", PriceCents: 16000, ImageURLs: []string{"https://example.com/hv6891.png"}, BrandProfileID: "profile-1", CreatedAt: time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)}
+	originalPublishTask := model.PublishTask{ID: "publish", ItemNo: "HV6891-010", XianyuItemID: "1085680973385", PriceCents: 16000, ImageURLs: []string{"https://example.com/hv6891.png"}, BrandProfileID: "profile-1", PublishedAt: time.Date(2026, 9, 20, 11, 0, 0, 0, time.UTC), CreatedAt: time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)}
 
 	mergedTask := mergeLinkedTaskMetadata(latestOfflineTask, originalPublishTask)
 	if mergedTask.PriceCents != 16000 || len(mergedTask.ImageURLs) != 1 || mergedTask.ImageURLs[0] != originalPublishTask.ImageURLs[0] {
 		t.Fatalf("linked task presentation was not restored: %#v", mergedTask)
 	}
-	if mergedTask.BrandProfileID != "profile-1" || !mergedTask.CreatedAt.Equal(originalPublishTask.CreatedAt) {
+	if mergedTask.BrandProfileID != "profile-1" || !mergedTask.CreatedAt.Equal(originalPublishTask.CreatedAt) || !mergedTask.PublishedAt.Equal(originalPublishTask.PublishedAt) {
 		t.Fatalf("linked task metadata was not restored: %#v", mergedTask)
+	}
+}
+
+func TestLockMarketplaceStateRespectsContextCancellation(t *testing.T) {
+	var mutex sync.Mutex
+	mutex.Lock()
+	defer mutex.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := lockMarketplaceState(ctx, &mutex); err == nil {
+		t.Fatal("locked marketplace state ignored context cancellation")
+	}
+}
+
+func TestTaskPublishDatePrefersPersistedFirstPublishDate(t *testing.T) {
+	publishedAt := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	createdAt := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	fallback := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	task := model.PublishTask{PublishedAt: publishedAt, CreatedAt: createdAt}
+	if actual := taskPublishDate(task, fallback); !actual.Equal(publishedAt) {
+		t.Fatalf("unexpected publish date: %v", actual)
 	}
 }

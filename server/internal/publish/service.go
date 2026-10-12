@@ -33,6 +33,7 @@ const (
 	publishQueueCapacity          = 3000
 	publishRecoveryLimit          = 3000
 	maxConcurrentAccounts         = 2
+	offlineBatchTimeout           = 75 * time.Second
 )
 
 // Service 串行消费闲鱼发布任务，避免账号接口并发触发风控。
@@ -239,10 +240,30 @@ func (service *Service) processOfflineBatch(runtimeContext context.Context, task
 	if len(tasks) == 0 {
 		return
 	}
+	executableTasks := make([]model.PublishTask, 0, len(tasks))
+	for _, task := range tasks {
+		claimed, err := service.repository.MarkPublishingIfExecutable(runtimeContext, task.ID)
+		if err != nil {
+			logx.Errorf("claim offline task %s: %v", task.ID, err)
+			continue
+		}
+		if !claimed {
+			continue
+		}
+		freshTask, err := service.repository.Get(runtimeContext, task.ID)
+		if err != nil {
+			logx.Errorf("reload offline task %s: %v", task.ID, err)
+			continue
+		}
+		executableTasks = append(executableTasks, freshTask)
+	}
+	tasks = executableTasks
+	if len(tasks) == 0 {
+		return
+	}
 	itemIDs := make([]string, 0, len(tasks))
 	tasksByItemID := make(map[string]model.PublishTask, len(tasks))
 	for _, task := range tasks {
-		_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskPublishing, "", "", "")
 		itemIDs = append(itemIDs, task.XianyuItemID)
 		tasksByItemID[task.XianyuItemID] = task
 	}
@@ -280,7 +301,9 @@ func (service *Service) processOfflineBatch(runtimeContext context.Context, task
 			tasksByItemID[task.XianyuItemID] = task
 		}
 	}
-	result, err := service.marketplace.OfflineXianyuListings(runtimeContext, accountID, itemIDs)
+	batchContext, cancelBatch := context.WithTimeout(runtimeContext, offlineBatchTimeout)
+	defer cancelBatch()
+	result, err := service.marketplace.OfflineXianyuListings(batchContext, accountID, itemIDs)
 	if err != nil {
 		if errors.Is(err, xianyu.ErrSessionExpired) {
 			if account, accountErr := service.accountRepository.Get(runtimeContext, accountID); accountErr == nil {
@@ -305,13 +328,32 @@ func (service *Service) processOfflineBatch(runtimeContext context.Context, task
 	for _, itemID := range result.FailedItemIDs {
 		failed[itemID] = struct{}{}
 	}
+	// 批量接口偶发只返回失败标记；逐件兜底既提高强制下架成功率，也保留闲鱼的真实失败原因。
+	fallbackErrors := make(map[string]string)
+	for itemID := range failed {
+		singleResult, singleErr := service.marketplace.OfflineXianyuListings(batchContext, accountID, []string{itemID})
+		if singleErr != nil {
+			fallbackErrors[itemID] = singleErr.Error()
+			continue
+		}
+		if len(singleResult.SucceededItemIDs) == 1 {
+			succeeded[itemID] = struct{}{}
+			delete(failed, itemID)
+			continue
+		}
+		fallbackErrors[itemID] = "闲鱼单件下架未成功"
+	}
 	for itemID, task := range tasksByItemID {
 		if _, ok := succeeded[itemID]; ok {
 			_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskSucceeded, "", task.XianyuItemID, task.XianyuURL)
 			continue
 		}
 		if _, ok := failed[itemID]; ok {
-			_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskFailed, "闲鱼批量下架失败", "", "")
+			errorMessage := fallbackErrors[itemID]
+			if errorMessage == "" {
+				errorMessage = "闲鱼批量下架失败"
+			}
+			_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskFailed, errorMessage, "", "")
 			continue
 		}
 		_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskFailed, "闲鱼未返回下架结果", "", "")
@@ -367,8 +409,18 @@ func nextPublishDelay(minDelaySeconds, maxDelaySeconds int) time.Duration {
 
 // processTask 完成图片暂存、表单填写和结果持久化。
 func (service *Service) processTask(runtimeContext context.Context, task model.PublishTask) {
-	// 取消、成功或失败任务即使残留在内存队列中，也不能再次执行。
-	if task.Status != model.PublishTaskQueued && task.Status != model.PublishTaskPreparing && task.Status != model.PublishTaskPublishing {
+	// 内存队列可能持有取消前读取的旧快照，执行前必须以数据库状态原子领取。
+	claimed, err := service.repository.MarkPreparingIfExecutable(runtimeContext, task.ID)
+	if err != nil {
+		logx.Errorf("claim publish task %s: %v", task.ID, err)
+		return
+	}
+	if !claimed {
+		return
+	}
+	task, err = service.repository.Get(runtimeContext, task.ID)
+	if err != nil {
+		logx.Errorf("reload publish task %s: %v", task.ID, err)
 		return
 	}
 	if task.AccountID == "" {
@@ -384,7 +436,6 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 			service.failTask(runtimeContext, task.ID, "重试服务未就绪")
 			return
 		}
-		_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskPreparing, "", "", "")
 		prepared, err := service.PrepareRetry(runtimeContext, task)
 		if err != nil {
 			service.failTask(runtimeContext, task.ID, err.Error())
@@ -419,11 +470,6 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 			return
 		}
 	}
-	if err := service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskPreparing, "", "", ""); err != nil {
-		logx.Errorf("mark publish task %s preparing: %v", task.ID, err)
-		return
-	}
-
 	temporaryDirectory, imagePaths, variantImagePaths, err := service.downloadPublishImages(runtimeContext, task.ImageURLs, task.Variants, true)
 	if temporaryDirectory != "" {
 		defer os.RemoveAll(temporaryDirectory)
@@ -433,8 +479,12 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 		return
 	}
 
-	if err := service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskPublishing, "", "", ""); err != nil {
+	publishing, err := service.repository.MarkPublishingIfExecutable(runtimeContext, task.ID)
+	if err != nil {
 		logx.Errorf("mark publish task %s publishing: %v", task.ID, err)
+		return
+	}
+	if !publishing {
 		return
 	}
 	if task.Action == "relist" {

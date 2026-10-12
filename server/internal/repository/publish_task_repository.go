@@ -21,6 +21,18 @@ type PublishTaskRepository struct {
 	collection *mongo.Collection
 }
 
+// PublishTaskBatchSummary 是操作列表所需的轻量任务状态汇总。
+type PublishTaskBatchSummary struct {
+	Total            int
+	Queued           int
+	Running          int
+	Succeeded        int
+	Failed           int
+	OfflineRequested int
+	OfflineSucceeded int
+	OfflineFailed    int
+}
+
 // NewPublishTaskRepository 创建发布任务仓储。
 func NewPublishTaskRepository(database *mongo.Database) *PublishTaskRepository {
 	return &PublishTaskRepository{collection: database.Collection("publish_tasks")}
@@ -47,6 +59,52 @@ func (repository *PublishTaskRepository) ListByBatchID(ctx context.Context, batc
 	var tasks []model.PublishTask
 	err = cursor.All(ctx, &tasks)
 	return tasks, err
+}
+
+// ListBatchSummaries 一次读取多个操作的任务状态，避免列表页逐操作加载完整任务。
+func (repository *PublishTaskRepository) ListBatchSummaries(ctx context.Context, batchIDs []string) (map[string]PublishTaskBatchSummary, error) {
+	summaries := make(map[string]PublishTaskBatchSummary, len(batchIDs))
+	if len(batchIDs) == 0 {
+		return summaries, nil
+	}
+	cursor, err := repository.collection.Find(
+		ctx,
+		bson.M{"batchId": bson.M{"$in": batchIDs}},
+		options.Find().SetProjection(bson.M{"_id": 0, "batchId": 1, "status": 1, "action": 1}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var tasks []model.PublishTask
+	if err := cursor.All(ctx, &tasks); err != nil {
+		return nil, err
+	}
+	for _, task := range tasks {
+		summary := summaries[task.BatchID]
+		summary.Total++
+		switch task.Status {
+		case model.PublishTaskQueued:
+			summary.Queued++
+		case model.PublishTaskPreparing, model.PublishTaskPublishing:
+			summary.Running++
+		case model.PublishTaskSucceeded:
+			summary.Succeeded++
+		case model.PublishTaskNeedsLogin, model.PublishTaskFailed:
+			summary.Failed++
+		}
+		if task.Action == "offline" {
+			summary.OfflineRequested++
+			switch task.Status {
+			case model.PublishTaskSucceeded:
+				summary.OfflineSucceeded++
+			case model.PublishTaskFailed:
+				summary.OfflineFailed++
+			}
+		}
+		summaries[task.BatchID] = summary
+	}
+	return summaries, nil
 }
 
 // ExistingItemNos 返回当前正在排队或发布中的货号集合。
@@ -106,6 +164,33 @@ func (repository *PublishTaskRepository) Get(ctx context.Context, taskID string)
 		return model.PublishTask{}, ErrPublishTaskNotFound
 	}
 	return task, err
+}
+
+// MarkPreparingIfExecutable 在真正执行前原子确认任务仍可运行，避免取消后被内存队列中的旧快照重新激活。
+func (repository *PublishTaskRepository) MarkPreparingIfExecutable(ctx context.Context, taskID string) (bool, error) {
+	return repository.transitionIfExecutable(ctx, taskID, model.PublishTaskPreparing)
+}
+
+// MarkPublishingIfExecutable 在调用闲鱼接口前再次确认任务未被取消。
+func (repository *PublishTaskRepository) MarkPublishingIfExecutable(ctx context.Context, taskID string) (bool, error) {
+	return repository.transitionIfExecutable(ctx, taskID, model.PublishTaskPublishing)
+}
+
+// transitionIfExecutable 只允许未取消的排队或准备中任务继续推进。
+func (repository *PublishTaskRepository) transitionIfExecutable(ctx context.Context, taskID, status string) (bool, error) {
+	result, err := repository.collection.UpdateOne(
+		ctx,
+		bson.M{
+			"_id":         taskID,
+			"status":      bson.M{"$in": bson.A{model.PublishTaskQueued, model.PublishTaskPreparing}},
+			"cancelledAt": bson.M{"$exists": false},
+		},
+		bson.M{"$set": bson.M{"status": status, "errorMessage": "", "updatedAt": time.Now()}},
+	)
+	if err != nil {
+		return false, err
+	}
+	return result.ModifiedCount == 1, nil
 }
 
 // List 返回最近创建的发布任务。
@@ -391,6 +476,7 @@ func (repository *PublishTaskRepository) UpdateContent(ctx context.Context, task
 		"sourceMemberIds":    task.SourceMemberIDs,
 		"sourceItemIds":      task.SourceItemIDs,
 		"isFootwear":         task.IsFootwear,
+		"publishedAt":        task.PublishedAt,
 		"updatedAt":          time.Now(),
 	}})
 	return err

@@ -62,7 +62,7 @@ func createPublishTaskHandler(serviceContext *svc.ServiceContext) http.HandlerFu
 			SourceItemID:       strings.TrimSpace(requestBody.SourceItemID),
 			ItemNo:             itemNo,
 			Title:              buildPublishTitle(sourceTitle, itemNo),
-			Description:        buildPublishDescription(sourceTitle, itemNo, availableSizes, regionName),
+			Description:        buildPublishDescription(sourceTitle, itemNo, requestBody.OriginalPriceCents, availableSizes, regionName, now, now),
 			PriceCents:         requestBody.PriceCents,
 			OriginalPriceCents: requestBody.OriginalPriceCents,
 			ImageURLs:          uniqueImageURLs(requestBody.ImageURLs),
@@ -75,6 +75,7 @@ func createPublishTaskHandler(serviceContext *svc.ServiceContext) http.HandlerFu
 			Variants:           variants,
 			IsFootwear:         requestBody.IsFootwear,
 			Status:             model.PublishTaskQueued,
+			PublishedAt:        now,
 			CreatedAt:          now,
 			UpdatedAt:          now,
 		}
@@ -268,20 +269,35 @@ func uniqueImageURLs(imageURLs []string) []string {
 // publishTaskToResponse 将数据库任务转换为精简响应。
 func publishTaskToResponse(task model.PublishTask) types.PublishTaskResponse {
 	return types.PublishTaskResponse{
-		AccountID:     task.AccountID,
-		Action:        task.Action,
-		ChangeReasons: task.ChangeReasons,
-		ID:            task.ID,
-		Status:        task.Status,
-		ItemNo:        task.ItemNo,
-		Title:         task.Title,
-		Brand:         task.Brand,
-		PriceCents:    task.PriceCents,
-		ImageURLs:     task.ImageURLs,
-		XianyuItemID:  task.XianyuItemID,
-		XianyuURL:     task.XianyuURL,
-		ErrorMessage:  task.ErrorMessage,
-		CreatedAt:     task.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:     task.UpdatedAt.Format(time.RFC3339),
+		AccountID:          task.AccountID,
+		Action:             task.Action,
+		ChangeReasons:      task.ChangeReasons,
+		ID:                 task.ID,
+		Status:             task.Status,
+		ItemNo:             task.ItemNo,
+		Title:              task.Title,
+		Brand:              task.Brand,
+		PriceCents:         task.PriceCents,
+		SourcePriceCents:   task.SourcePriceCents,
+		OriginalPriceCents: task.OriginalPriceCents,
+		DiscountRate:       smallProgramDiscountRate(task.SourcePriceCents, task.OriginalPriceCents),
+		CategoryIDs:        task.CategoryIDs,
+		CategoryNames:      task.CategoryNames,
+		SourceRegions:      task.SourceRegions,
+		ImageURLs:          task.ImageURLs,
+		XianyuItemID:       task.XianyuItemID,
+		XianyuURL:          task.XianyuURL,
+		ErrorMessage:       task.ErrorMessage,
+		CreatedAt:          task.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:          task.UpdatedAt.Format(time.RFC3339),
 	}
+}
+
+// publishTaskResponses 批量转换发布任务，确保预览和任务详情使用同一响应契约。
+func publishTaskResponses(tasks []model.PublishTask) []types.PublishTaskResponse {
+	responses := make([]types.PublishTaskResponse, 0, len(tasks))
+	for _, task := range tasks {
+		responses = append(responses, publishTaskToResponse(task))
+	}
+	return responses
 }

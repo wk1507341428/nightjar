@@ -20,6 +20,7 @@ type PublishTask struct {
 	Before                 map[string]any   `bson:"before,omitempty" json:"before,omitempty"`
 	ChangeReasons          []string         `bson:"changeReasons,omitempty" json:"changeReasons,omitempty"`
 	PlannedAt              time.Time        `bson:"plannedAt,omitempty" json:"plannedAt,omitempty"`
+	PublishedAt            time.Time        `bson:"publishedAt,omitempty" json:"publishedAt,omitempty"`
 	ID                     string           `bson:"_id" json:"id"`
 	BatchID                string           `bson:"batchId,omitempty" json:"batchId,omitempty"`
 	SourceItemID           string           `bson:"sourceItemId" json:"sourceItemId"`
@@ -27,7 +28,10 @@ type PublishTask struct {
 	Title                  string           `bson:"title" json:"title"`
 	Description            string           `bson:"description" json:"description"`
 	PriceCents             int64            `bson:"priceCents" json:"priceCents"`
+	SourcePriceCents       int64            `bson:"sourcePriceCents,omitempty" json:"sourcePriceCents,omitempty"`
 	OriginalPriceCents     int64            `bson:"originalPriceCents" json:"originalPriceCents"`
+	CategoryIDs            []string         `bson:"categoryIds,omitempty" json:"categoryIds,omitempty"`
+	CategoryNames          []string         `bson:"categoryNames,omitempty" json:"categoryNames,omitempty"`
 	ImageURLs              []string         `bson:"imageUrls" json:"imageUrls"`
 	RegionID               string           `bson:"regionId" json:"regionId"`
 	Brand                  string           `bson:"brand,omitempty" json:"brand,omitempty"`

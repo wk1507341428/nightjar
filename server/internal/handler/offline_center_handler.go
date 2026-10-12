@@ -66,11 +66,12 @@ func previewOfflineCenterHandler(serviceContext *svc.ServiceContext) http.Handle
 			writeError(responseWriter, http.StatusNotFound, "品牌档案不存在")
 			return
 		}
-		if err := refreshOfflineCenterBindings(request.Context(), serviceContext, profile, members, body.CategoryIDs); err != nil {
+		liveSources, err := refreshOfflineCenterBindings(request.Context(), serviceContext, profile, members, body.CategoryIDs)
+		if err != nil {
 			writeError(responseWriter, http.StatusBadGateway, "读取小程序品牌商品失败："+err.Error())
 			return
 		}
-		candidates, err := buildOfflineCenterCandidates(request.Context(), serviceContext, body, profile, members)
+		candidates, err := buildOfflineCenterCandidates(request.Context(), serviceContext, body, profile, members, liveSources)
 		if err != nil {
 			writeError(responseWriter, http.StatusInternalServerError, "生成下架预览失败")
 			return
@@ -226,8 +227,14 @@ func collectProfileCategories(ctx context.Context, serviceContext *svc.ServiceCo
 	return categories
 }
 
-// refreshOfflineCenterBindings 拉取小程序当前商品，并把当前及历史 SKU 品类归属写入关联表。
-func refreshOfflineCenterBindings(ctx context.Context, serviceContext *svc.ServiceContext, profile catalog.BrandProfile, members []catalog.BrandProfileMember, categoryIDs []string) error {
+// refreshOfflineCenterBindings 拉取小程序当前商品，保留历史归属并返回本次实时有效货源。
+// 历史归属只用于趋势与审计，不能参与下架预览的实时价格、地区与折扣计算。
+type offlineCenterLiveSources struct {
+	activeBindingKeys map[string]struct{}
+	productsByItemNo  map[string][]map[string]any
+}
+
+func refreshOfflineCenterBindings(ctx context.Context, serviceContext *svc.ServiceContext, profile catalog.BrandProfile, members []catalog.BrandProfileMember, categoryIDs []string) (offlineCenterLiveSources, error) {
 	categoryNameByID := make(map[string]string)
 	for _, category := range collectProfileCategories(ctx, serviceContext, members) {
 		categoryNameByID[category.ID] = category.Name
@@ -251,7 +258,7 @@ func refreshOfflineCenterBindings(ctx context.Context, serviceContext *svc.Servi
 	waitGroup.Wait()
 	for _, result := range results {
 		if result.err != nil {
-			return result.err
+			return offlineCenterLiveSources{}, result.err
 		}
 		brandStoreID := catalog.BrandStoreIDForSource(result.member.RegionID, result.member.DistributorID)
 		for _, product := range result.products {
@@ -264,33 +271,26 @@ func refreshOfflineCenterBindings(ctx context.Context, serviceContext *svc.Servi
 			}
 			binding := catalog.SKUCategoryBinding{ItemNo: firstProductString(product, "item_no"), BrandProfileID: profile.ID, BrandStoreID: brandStoreID, BrandName: profile.Name, RegionID: result.member.RegionID, DistributorID: result.member.DistributorID, SourceItemID: firstProductString(product, "default_item_id", "item_id", "goods_id"), CategoryID: categoryID, CategoryName: categoryName, SourcePriceCents: offlineSourcePrice(product), MarketPriceCents: productNumber(product, "market_price"), LastSeenAt: time.Now()}
 			if err := serviceContext.InventoryRepository.UpsertSKUCategoryBinding(ctx, binding); err != nil {
-				return err
+				return offlineCenterLiveSources{}, err
 			}
 		}
 	}
-	brandStoreIDs := make([]string, 0, len(members))
-	for _, member := range members {
-		brandStoreIDs = append(brandStoreIDs, catalog.BrandStoreIDForSource(member.RegionID, member.DistributorID))
-	}
-	offers, err := serviceContext.InventoryRepository.ListOffersByBrandStores(ctx, brandStoreIDs)
-	if err != nil {
-		return err
-	}
-	for _, offer := range offers {
-		categoryID, categoryName := offlineProductCategory(offer.SourceData)
-		if categoryName == "" {
-			categoryName = categoryNameByID[categoryID]
-		}
-		binding := catalog.SKUCategoryBinding{ItemNo: offer.ItemNo, BrandProfileID: profile.ID, BrandStoreID: offer.BrandStoreID, BrandName: profile.Name, RegionID: offer.RegionID, DistributorID: offer.DistributorID, SourceItemID: offer.SourceItemID, CategoryID: categoryID, CategoryName: categoryName, SourcePriceCents: firstPositivePrice(offer.ActivityCents, offer.PriceCents), MarketPriceCents: offer.MarketCents, FirstSeenAt: offer.FirstSeenAt, LastSeenAt: offer.LastSeenAt}
-		if err := serviceContext.InventoryRepository.UpsertSKUCategoryBinding(ctx, binding); err != nil {
-			return err
+	liveSources := offlineCenterLiveSources{activeBindingKeys: make(map[string]struct{}), productsByItemNo: make(map[string][]map[string]any)}
+	for _, result := range results {
+		for _, product := range result.products {
+			itemNo := strings.ToUpper(strings.TrimSpace(firstProductString(product, "item_no")))
+			if itemNo == "" {
+				continue
+			}
+			liveSources.activeBindingKeys[offlineCenterBindingKey(itemNo, result.member.RegionID, firstProductString(product, "default_item_id", "item_id", "goods_id"))] = struct{}{}
+			liveSources.productsByItemNo[itemNo] = append(liveSources.productsByItemNo[itemNo], product)
 		}
 	}
-	return nil
+	return liveSources, nil
 }
 
 // buildOfflineCenterCandidates 匹配当前账号闲鱼在售商品并应用筛选条件。
-func buildOfflineCenterCandidates(ctx context.Context, serviceContext *svc.ServiceContext, body types.OfflineCenterPreviewRequest, profile catalog.BrandProfile, members []catalog.BrandProfileMember) ([]types.OfflineCenterCandidate, error) {
+func buildOfflineCenterCandidates(ctx context.Context, serviceContext *svc.ServiceContext, body types.OfflineCenterPreviewRequest, profile catalog.BrandProfile, members []catalog.BrandProfileMember, liveSources offlineCenterLiveSources) ([]types.OfflineCenterCandidate, error) {
 	brandStoreIDs := make([]string, 0, len(members))
 	for _, member := range members {
 		brandStoreIDs = append(brandStoreIDs, catalog.BrandStoreIDForSource(member.RegionID, member.DistributorID))
@@ -299,6 +299,7 @@ func buildOfflineCenterCandidates(ctx context.Context, serviceContext *svc.Servi
 	if err != nil {
 		return nil, err
 	}
+	bindings = activeOfflineCenterBindings(bindings, liveSources.activeBindingKeys)
 	bindingsByItemNo := make(map[string][]catalog.SKUCategoryBinding)
 	itemNos := make([]string, 0)
 	for _, binding := range bindings {
@@ -332,13 +333,17 @@ func buildOfflineCenterCandidates(ctx context.Context, serviceContext *svc.Servi
 	}
 	candidates := make([]types.OfflineCenterCandidate, 0, len(listingByID))
 	for _, listing := range listingByID {
-		itemBindings := bindingsByItemNo[strings.ToUpper(strings.TrimSpace(listing.ItemNo))]
+		itemNo := strings.ToUpper(strings.TrimSpace(listing.ItemNo))
+		itemBindings := bindingsByItemNo[itemNo]
+		if body.OfflineBrokenSizeItems && !isBrokenSizeProducts(liveSources.productsByItemNo[itemNo]) {
+			continue
+		}
 		sourcePriceCents := int64(0)
 		marketPriceCents := int64(0)
 		discountRate := 0
 		categoryIDs := make([]string, 0)
 		categoryNames := make([]string, 0)
-		regions := append([]string{}, listing.SourceRegions...)
+		regions := make([]string, 0, len(itemBindings))
 		for _, binding := range itemBindings {
 			bindingDiscountRate := smallProgramDiscountRate(binding.SourcePriceCents, binding.MarketPriceCents)
 			if bindingDiscountRate > 0 && (discountRate == 0 || bindingDiscountRate < discountRate) {
@@ -359,6 +364,44 @@ func buildOfflineCenterCandidates(ctx context.Context, serviceContext *svc.Servi
 		return candidates[leftIndex].ItemNo < candidates[rightIndex].ItemNo
 	})
 	return candidates, nil
+}
+
+// isBrokenSizeProducts 仅将鞋服类商品中当前可售尺码仅剩一种的情况判为断码。
+func isBrokenSizeProducts(products []map[string]any) bool {
+	availableSizes := make(map[string]struct{})
+	isShoeOrApparel := false
+	for _, product := range products {
+		_, categoryName := offlineProductCategory(product)
+		if !isShoeOrApparelCategory(categoryName) {
+			continue
+		}
+		isShoeOrApparel = true
+		for _, size := range productSizes(product) {
+			availableSizes[strings.TrimSpace(size)] = struct{}{}
+		}
+	}
+	return isShoeOrApparel && len(availableSizes) == 1
+}
+
+// isShoeOrApparelCategory 防止包、配件等单规格商品被误判为断码。
+func isShoeOrApparelCategory(categoryName string) bool {
+	return strings.Contains(categoryName, "鞋") || strings.Contains(categoryName, "服") || strings.Contains(categoryName, "上装") || strings.Contains(categoryName, "下装") || strings.Contains(categoryName, "裙") || strings.Contains(categoryName, "裤") || strings.Contains(categoryName, "套装") || strings.Contains(categoryName, "童装")
+}
+
+// offlineCenterBindingKey 标识一次实时小程序读取中仍可用的具体货源。
+func offlineCenterBindingKey(itemNo, regionID, sourceItemID string) string {
+	return strings.ToUpper(strings.TrimSpace(itemNo)) + "\x00" + strings.TrimSpace(regionID) + "\x00" + strings.TrimSpace(sourceItemID)
+}
+
+// activeOfflineCenterBindings 从历史绑定中筛出本次实时小程序列表仍存在的货源。
+func activeOfflineCenterBindings(bindings []catalog.SKUCategoryBinding, activeKeys map[string]struct{}) []catalog.SKUCategoryBinding {
+	active := make([]catalog.SKUCategoryBinding, 0, len(bindings))
+	for _, binding := range bindings {
+		if _, exists := activeKeys[offlineCenterBindingKey(binding.ItemNo, binding.RegionID, binding.SourceItemID)]; exists {
+			active = append(active, binding)
+		}
+	}
+	return active
 }
 
 // appendOfflineCenterTasks 创建或追加下架任务到当前账号运行队列。
@@ -422,7 +465,8 @@ func matchesOfflineCenterRange(priceCents int64, discountRate int, body types.Of
 	if body.MinPriceCents > 0 && priceCents < body.MinPriceCents || body.MaxPriceCents > 0 && priceCents > body.MaxPriceCents {
 		return false
 	}
-	if body.MinDiscountRate > 0 && discountRate < body.MinDiscountRate {
+	// 折扣下限归发布中心所有：下架中心仅处理严格高于该阈值的商品，避免边界商品反复上、下架。
+	if body.MinDiscountRate > 0 && discountRate <= body.MinDiscountRate {
 		return false
 	}
 	if body.MaxDiscountRate > 0 && (discountRate == 0 || discountRate > body.MaxDiscountRate) {

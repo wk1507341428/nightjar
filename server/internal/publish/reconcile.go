@@ -27,10 +27,11 @@ func (service *Service) processReconcileTask(ctx context.Context, task model.Pub
 			return
 		}
 	}
-	if err := service.repository.UpdateStatus(ctx, task.ID, model.PublishTaskPublishing, "", "", ""); err != nil {
+	publishing, err := service.repository.MarkPublishingIfExecutable(ctx, task.ID)
+	if err != nil || !publishing {
 		return
 	}
-	var err error
+	err = nil
 	if task.Action == "offline" {
 		result, callErr := service.marketplace.OfflineXianyuListings(ctx, task.AccountID, []string{task.XianyuItemID})
 		err = callErr

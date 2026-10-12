@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"sidejob-server/internal/model"
+	"sidejob-server/internal/repository"
+	"sidejob-server/internal/types"
 )
 
 // TestDecodePublishBatchRequestKeepsCategory 验证品类筛选与默认发布设置会进入批次请求。
@@ -64,7 +66,7 @@ func TestBuildBatchPublishTaskMatchesSingleDefaults(t *testing.T) {
 	if task.PriceCents != 31490 {
 		t.Fatalf("unexpected price: %d", task.PriceCents)
 	}
-	for _, expected := range []string{"有货尺码/型号：XL、L", "发货地区：上海", "1. 正品保障", "6. 尺码与售后", "下单即表示已阅读并接受以下说明：", "感谢理解，祝购物愉快！"} {
+	for _, expected := range []string{"商品原价：¥649.00", "有货尺码/型号：XL、L", "发货地区：上海", "1. 正品保障", "6. 尺码说明", "7. 关于售后", "下单即表示已阅读并接受以下说明：", "感谢理解，祝购物愉快！"} {
 		if !strings.Contains(task.Description, expected) {
 			t.Fatalf("description missing %q", expected)
 		}
@@ -80,6 +82,18 @@ func TestBuildBatchPublishTaskMatchesSingleDefaults(t *testing.T) {
 	}
 	if len(task.Variants) != 2 || task.Variants[0].Properties[0].Name != "尺码" {
 		t.Fatalf("unexpected publish variants: %#v", task.Variants)
+	}
+}
+
+func TestFilterPublishProductsSkipsBrokenSizeShoesOnly(t *testing.T) {
+	product := map[string]any{
+		"item_no": "SINGLE-40", "item_name": "单码运动鞋", "price": int64(19900), "market_price": int64(49900),
+		"item_category_main": map[string]any{"category_name": "运动鞋靴"},
+		"spec_items":         []any{map[string]any{"store": int64(1), "item_spec": []any{map[string]any{"spec_name": "尺码", "spec_value_name": "40"}}}},
+	}
+	filtered, skipped := filterPublishProducts([]map[string]any{product}, types.CreatePublishBatchRequest{ExcludeBrokenSizeItems: true})
+	if len(filtered) != 0 || len(skipped) != 1 || skipped[0].Reason != "鞋服商品仅剩一个可售尺码，已按设置跳过" {
+		t.Fatalf("broken-size shoe must be skipped: filtered=%#v skipped=%#v", filtered, skipped)
 	}
 }
 
@@ -144,5 +158,28 @@ func TestApplyPublishActionMode(t *testing.T) {
 	applyPublishActionMode(&plan)
 	if len(plan.Candidates) != 1 || len(plan.Relists) != 1 || len(plan.Updates) != 1 || len(plan.OfflineListings) != 0 {
 		t.Fatalf("publish-update mode retained offline actions: %#v", plan)
+	}
+}
+
+// TestBuildPublishBatchListResponseUsesSummary 验证操作列表只依赖轻量任务统计。
+func TestBuildPublishBatchListResponseUsesSummary(t *testing.T) {
+	batch := model.PublishBatch{
+		ID:      "batch-1",
+		Status:  model.PublishBatchRunning,
+		Skipped: []model.PublishBatchSkip{{ItemNo: "SKIP-1"}},
+	}
+	response := buildPublishBatchListResponse(batch, repository.PublishTaskBatchSummary{
+		Total:     3,
+		Succeeded: 2,
+		Failed:    1,
+	})
+	if response.Total != 4 || response.Succeeded != 2 || response.Failed != 1 {
+		t.Fatalf("unexpected operation summary: %#v", response)
+	}
+	if response.Status != model.PublishBatchFailed {
+		t.Fatalf("finished operation with failures must be failed: %s", response.Status)
+	}
+	if len(response.Tasks) != 0 || len(response.Skipped) != 0 || response.SkippedCount != 1 {
+		t.Fatalf("operation list must not include detail rows: %#v", response)
 	}
 }

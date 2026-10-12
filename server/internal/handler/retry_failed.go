@@ -13,6 +13,23 @@ import (
 	"time"
 )
 
+const (
+	retryActionPublish = "publish"
+	retryActionUpdate  = "update"
+	retryActionRelist  = "relist"
+	retryActionOffline = "offline"
+)
+
+// isValidRetryAction 校验批量重试支持的任务类型。
+func isValidRetryAction(action string) bool {
+	switch action {
+	case "", retryActionPublish, retryActionUpdate, retryActionRelist, retryActionOffline:
+		return true
+	default:
+		return false
+	}
+}
+
 // queueFailedTask 与单条重试共享原子领取逻辑，成功和运行任务不会重新入队。
 func queueFailedTask(ctx context.Context, sc *svc.ServiceContext, task model.PublishTask) error {
 	claimed, err := sc.PublishRepository.ClaimRetry(ctx, task.ID)
@@ -42,7 +59,7 @@ func retryFailedOperationHandler(sc *svc.ServiceContext) http.HandlerFunc {
 			writeError(w, 400, "重试参数无效")
 			return
 		}
-		if body.Action != "" && body.Action != "publish" && body.Action != "update" && body.Action != "offline" {
+		if !isValidRetryAction(body.Action) {
 			writeError(w, 400, "任务类型无效")
 			return
 		}
@@ -59,7 +76,7 @@ func retryFailedOperationHandler(sc *svc.ServiceContext) http.HandlerFunc {
 		for _, task := range tasks {
 			action := task.Action
 			if action == "" {
-				action = "publish"
+				action = retryActionPublish
 			}
 			if len(requested) > 0 && !requested[task.ID] {
 				continue
@@ -86,10 +103,10 @@ func retryFailedOperationHandler(sc *svc.ServiceContext) http.HandlerFunc {
 
 // prepareRetryContent 重新读取货源和远端状态，避免用旧 SKU 内容重试。
 func prepareRetryContent(ctx context.Context, sc *svc.ServiceContext, task model.PublishTask) (model.PublishTask, error) {
-	if task.Action == "offline" {
+	if task.Action == retryActionOffline {
 		return task, nil
 	} // 下架 worker 自身会再次实时核对全部来源。
-	if task.Action == "update" {
+	if task.Action == retryActionUpdate {
 		detail, err := sc.SellerXianyuService.ForAccount(task.AccountID).GetSellerEditDetail(ctx, task.XianyuItemID)
 		if err != nil {
 			return task, err
@@ -97,7 +114,7 @@ func prepareRetryContent(ctx context.Context, sc *svc.ServiceContext, task model
 		task.Before = xianyu.ManagedState(detail)
 		return task, nil
 	}
-	if task.Action == "relist" {
+	if task.Action == retryActionRelist {
 		detail, err := sc.SellerXianyuService.ForAccount(task.AccountID).GetSellerEditDetail(ctx, task.XianyuItemID)
 		if err != nil {
 			return task, err
