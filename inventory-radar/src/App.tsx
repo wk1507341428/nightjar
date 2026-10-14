@@ -13,6 +13,7 @@ import { BrandPublishPage } from './BrandPublishDrawer';
 import { PriceHistoryPage } from './PriceHistoryPage';
 import { PublishCenterPage } from './PublishCenterPage';
 import { OfflineCenterPage } from './OfflineCenterPage';
+import { FinanceCenterPage } from './FinanceCenterPage';
 import { BrandSelectOption } from './BrandSelectOption';
 import { BrandMaintenancePage } from './BrandMaintenancePage';
 import { fetchMarketplaceListings, syncMarketplaceListings } from './xianyuApi';
@@ -50,13 +51,14 @@ const WORKSPACE_ROUTES = [
   { path: '/offline-center', name: '下架中心', icon: <WorkspaceNavIcon kind="offline" /> },
   { path: '/brand-maintenance', name: '品牌维护', icon: <WorkspaceNavIcon kind="brand" /> },
   { path: '/marketplace', name: '渠道上架', icon: <WorkspaceNavIcon kind="marketplace" /> },
+  { path: '/finance-center', name: '财务中心', icon: <WorkspaceNavIcon kind="finance" /> },
 ];
 
 /** 商品排序方式。 */
 type SortMode = 'default' | 'priceAsc' | 'priceDesc' | 'discount' | 'xianyuLast';
 
 /** 商品列表展示模式。 */
-type CatalogMode = 'standard' | 'marketplace' | 'publishCenter' | 'offlineCenter' | 'brandMaintenance' | 'batchPublish' | 'priceHistory';
+type CatalogMode = 'standard' | 'marketplace' | 'publishCenter' | 'offlineCenter' | 'brandMaintenance' | 'batchPublish' | 'priceHistory' | 'finance';
 
 /** 商品数据来源。 */
 type CatalogDataSource = 'live' | 'local';
@@ -71,6 +73,7 @@ function getWorkspaceMenuPath(mode: CatalogMode, source: CatalogDataSource): str
   if (mode === 'publishCenter') return '/publish-center';
   if (mode === 'offlineCenter') return '/offline-center';
   if (mode === 'brandMaintenance') return '/brand-maintenance';
+  if (mode === 'finance') return '/finance-center';
   return '/marketplace';
 }
 
@@ -253,7 +256,7 @@ function SearchIcon() {
 }
 
 /** 工作台侧边栏图标。 */
-function WorkspaceNavIcon({ kind }: { kind: 'catalog' | 'library' | 'publish' | 'offline' | 'brand' | 'marketplace' | 'sync' }) {
+function WorkspaceNavIcon({ kind }: { kind: 'catalog' | 'library' | 'publish' | 'offline' | 'brand' | 'marketplace' | 'sync' | 'finance' }) {
   // 每个入口对应的简洁线性图形。
   const paths: Record<typeof kind, React.ReactNode> = {
     catalog: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M8 14h4" /></>,
@@ -263,6 +266,7 @@ function WorkspaceNavIcon({ kind }: { kind: 'catalog' | 'library' | 'publish' | 
     brand: <><path d="m12 2 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 17l9 5 9-5" /></>,
     marketplace: <><path d="M4 10h16v11H4V10ZM3 10l2-7h14l2 7H3Z" /><path d="M9 21v-7h6v7" /></>,
     sync: <><path d="M20 7h-9l3-3M4 17h9l-3 3M17 4l3 3-3 3M7 14l-3 3 3 3" /></>,
+    finance: <><rect x="3" y="5" width="18" height="15" rx="2" /><path d="M3 9h18M8 13l3 3 3-3M11 16v3M7 3h10" /></>,
   };
 
   return <svg className="workspace-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[kind]}</svg>;
@@ -785,6 +789,11 @@ export function App() {
 
   /** 加载首页默认商品。 */
   function loadInitialProducts() {
+    if (window.location.hash === '#/finance-center') {
+      setCatalogMode('finance');
+      setActiveCategory('财务中心');
+      return;
+    }
     clearLegacyBrandOptionCache();
     void loadMarketplaceListings();
     if (isOfflineCenterPageRoute()) {
@@ -845,6 +854,12 @@ export function App() {
 
   /** 根据地址切换独立页面或选品主页。 */
   function handleRouteChange() {
+    if (window.location.hash === '#/finance-center') {
+      setCatalogMode('finance');
+      setActiveCategory('财务中心');
+      setQuery('');
+      return;
+    }
     if (isOfflineCenterPageRoute()) {
       setCatalogMode('offlineCenter');
       setActiveCategory('下架中心');
@@ -1028,6 +1043,10 @@ export function App() {
 
   /** 选择首页快捷分类。 */
   function handleSelectCategory(categoryName: string) {
+    if (categoryName === '财务中心') {
+      window.location.hash = '/finance-center';
+      return;
+    }
     if (categoryName === '全部货源') {
       window.location.hash = '/home';
       return;
@@ -1261,7 +1280,9 @@ export function App() {
       <Drawer className="workspace-mobile-drawer" title="SideJob 工作台" placement="left" size={270} open={isMobileMenuOpen} onClose={() => setIsMobileMenuOpen(false)}><nav aria-label="移动端主导航">{WORKSPACE_ROUTES.map((route) => <button type="button" key={route.path} className={activeMenuPath === route.path ? 'workspace-mobile-nav-item workspace-mobile-nav-item--active' : 'workspace-mobile-nav-item'} onClick={() => { setIsMobileMenuOpen(false); handleSelectCategory(route.name); }}>{route.icon}<span>{route.name}</span></button>)}</nav>{isCompactViewport ? <div className="workspace-mobile-connection"><span>平台连接</span><XianyuConnectionControl /></div> : null}</Drawer>
       <div className="workspace-content">
 
-      {catalogMode === 'batchPublish' && publishBatchRoute ? (
+      {catalogMode === 'finance' ? (
+        <FinanceCenterPage />
+      ) : catalogMode === 'batchPublish' && publishBatchRoute ? (
         <BrandPublishPage key={publishBatchRoute.routeKey} batchId={publishBatchRoute.batchId} brandStoreId={publishBatchRoute.brandStoreId} brandName={publishBatchRoute.brandName} onBack={() => { window.location.hash = '/library'; }} />
       ) : catalogMode === 'priceHistory' && priceHistoryRoute ? (
         <PriceHistoryPage offerId={priceHistoryRoute.offerId} onBack={() => { window.location.hash = '/library'; }} />

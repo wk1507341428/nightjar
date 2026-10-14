@@ -152,6 +152,18 @@ func resolveOfflineCenterBrand(ctx context.Context, serviceContext *svc.ServiceC
 
 // filterOfflineCenterListingsByProfile 防止客户端把其他品牌商品混入下架队列。
 func filterOfflineCenterListingsByProfile(ctx context.Context, serviceContext *svc.ServiceContext, profileID string, members []catalog.BrandProfileMember, categoryIDs []string, listings []model.MarketplaceListing) ([]model.MarketplaceListing, error) {
+	if len(listings) == 0 {
+		return listings, nil
+	}
+	accountID := listings[0].AccountID
+	managedListings, managementErr := serviceContext.ListingRepository.FilterManagedListings(ctx, accountID, listings)
+	if managementErr != nil {
+		return nil, managementErr
+	}
+	listings = managedListings
+	if len(listings) == 0 {
+		return listings, nil
+	}
 	brandStoreIDs := make([]string, 0, len(members))
 	for _, member := range members {
 		brandStoreIDs = append(brandStoreIDs, catalog.BrandStoreIDForSource(member.RegionID, member.DistributorID))
@@ -320,8 +332,12 @@ func buildOfflineCenterCandidates(ctx context.Context, serviceContext *svc.Servi
 	if err != nil {
 		return nil, err
 	}
+	managedListings, err := serviceContext.ListingRepository.FilterManagedListings(ctx, body.AccountID, append(profileListings, legacyListings...))
+	if err != nil {
+		return nil, err
+	}
 	listingByID := make(map[string]model.MarketplaceListing)
-	for _, listing := range append(profileListings, legacyListings...) {
+	for _, listing := range managedListings {
 		if profile.ID != "" && listing.BrandProfileID != "" && listing.BrandProfileID != profile.ID {
 			continue
 		}

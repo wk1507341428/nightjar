@@ -45,8 +45,16 @@ type OfflineResult struct {
 	FailedItemIDs    []string
 }
 
+// RequireManagedItems 将发布归属校验用于队列执行前的最后一道授权检查。
+func (service *Service) RequireManagedItems(ctx context.Context, accountID string, itemIDs []string) error {
+	return service.listingRepository.RequireManagedItems(ctx, accountID, itemIDs)
+}
+
 // DeleteXianyuHistory 删除重复下架商品并同步本地历史状态。
 func (service *Service) DeleteXianyuHistory(ctx context.Context, accountID string, itemIDs []string) error {
+	if err := service.listingRepository.RequireManagedItems(ctx, accountID, itemIDs); err != nil {
+		return err
+	}
 	if err := service.sellerXianyuService.ForAccount(accountID).DeleteSellerItems(ctx, itemIDs); err != nil {
 		return err
 	}
@@ -344,6 +352,9 @@ func taskPublishDate(task model.PublishTask, fallback time.Time) time.Time {
 
 // OfflineXianyuListings 下架闲鱼商品并同步删除本地在售快照。
 func (service *Service) OfflineXianyuListings(ctx context.Context, accountID string, itemIDs []string) (OfflineResult, error) {
+	if err := service.listingRepository.RequireManagedItems(ctx, accountID, itemIDs); err != nil {
+		return OfflineResult{}, err
+	}
 	state := service.stateForAccount(accountID)
 	if err := lockMarketplaceState(ctx, &state.mutex); err != nil {
 		return OfflineResult{}, fmt.Errorf("等待闲鱼账号操作锁超时：%w", err)

@@ -2,7 +2,7 @@ import { SIDEJOB_API_BASE_URL } from './constants';
 import type { BrandCategory, CreatePriceComparisonRequest, CreatePublishTaskRequest, MarketplaceListingListResponse, MarketplaceOfflineResponse, MarketplaceSyncResponse, OfflineCenterFilters, OfflineCenterPreview, PriceComparisonResponse, PublishBatch, PublishBatchPreview, PublishBatchSettings, PublishOperationListResponse, PublishPreset, PublishPresetRule, PublishTask, XianyuAccount, XianyuAccountListResponse, XianyuConnection } from './types';
 
 /** 解析本地服务 JSON 响应并提取错误信息。 */
-async function requestSideJob<ResponseType>(path: string, init?: RequestInit): Promise<ResponseType> {
+export async function requestSideJob<ResponseType>(path: string, init?: RequestInit): Promise<ResponseType> {
   // 本地服务响应。
   const response = await fetch(`${SIDEJOB_API_BASE_URL}${path}`, {
     ...init,

@@ -489,6 +489,10 @@ func (service *Service) processTask(runtimeContext context.Context, task model.P
 	}
 	if task.Action == "relist" {
 		input := xianyu.PublishInput{Quantity: task.Quantity, Title: task.Title, Description: task.Description, PriceCents: task.PriceCents, OriginalPriceCents: task.OriginalPriceCents, ImagePaths: imagePaths, RegionID: task.RegionID, Brand: task.Brand, Condition: task.Condition, AvailableSizes: task.AvailableSizes, Variants: xianyuPublishVariants(task.Variants, variantImagePaths), IsFootwear: task.IsFootwear}
+		if err := service.marketplace.RequireManagedItems(runtimeContext, task.AccountID, []string{task.XianyuItemID}); err != nil {
+			service.failTask(runtimeContext, task.ID, err.Error())
+			return
+		}
 		if err := service.xianyuService.ForAccount(task.AccountID).ReactivateManagedItem(runtimeContext, task.XianyuItemID, input, task.Before); err != nil {
 			if errors.Is(err, xianyu.ErrSessionExpired) {
 				_ = service.repository.UpdateStatus(runtimeContext, task.ID, model.PublishTaskNeedsLogin, "闲鱼登录已失效，请重新连接该账号", "", "")

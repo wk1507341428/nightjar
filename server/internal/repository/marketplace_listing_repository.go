@@ -14,12 +14,14 @@ import (
 
 // MarketplaceListingRepository 管理第三方渠道当前在售快照。
 type MarketplaceListingRepository struct {
-	collection *mongo.Collection
+	collection   *mongo.Collection
+	publishTasks *mongo.Collection
+	management   *mongo.Collection
 }
 
 // NewMarketplaceListingRepository 创建渠道在售商品仓储。
 func NewMarketplaceListingRepository(database *mongo.Database) *MarketplaceListingRepository {
-	return &MarketplaceListingRepository{collection: database.Collection("marketplace_listings")}
+	return &MarketplaceListingRepository{collection: database.Collection("marketplace_listings"), publishTasks: database.Collection("publish_tasks"), management: database.Collection("marketplace_listing_management")}
 }
 
 // EnsureIndexes 创建渠道商品唯一索引和查询索引。
@@ -35,6 +37,10 @@ func (repository *MarketplaceListingRepository) EnsureIndexes(ctx context.Contex
 		{Keys: bson.D{{Key: "accountId", Value: 1}, {Key: "platform", Value: 1}, {Key: "saleStatus", Value: 1}, {Key: "itemNo", Value: 1}, {Key: "offShelfAt", Value: -1}}},
 		{Keys: bson.D{{Key: "lastSyncedAt", Value: -1}}},
 	})
+	if err != nil {
+		return err
+	}
+	_, err = repository.management.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "accountId", Value: 1}, {Key: "platform", Value: 1}, {Key: "platformItemId", Value: 1}}, Options: options.Index().SetUnique(true)})
 	return err
 }
 

@@ -23,6 +23,12 @@ func RegisterHandlers(server *rest.Server, serviceContext *svc.ServiceContext) {
 	}
 	serviceContext.PublishService.Start()
 	server.AddRoutes([]rest.Route{
+		{Method: http.MethodGet, Path: "/api/finance/ledger", Handler: financeLedgerHandler(serviceContext)},
+		{Method: http.MethodPost, Path: "/api/finance/orders/sync", Handler: financeSyncHandler(serviceContext)},
+		{Method: http.MethodPut, Path: "/api/finance/orders/:id", Handler: saveOrderFinanceHandler(serviceContext)},
+		{Method: http.MethodPost, Path: "/api/finance/expenses", Handler: saveFinanceExpenseHandler(serviceContext, true)},
+		{Method: http.MethodPut, Path: "/api/finance/expenses/:id", Handler: saveFinanceExpenseHandler(serviceContext, false)},
+		{Method: http.MethodDelete, Path: "/api/finance/expenses/:id", Handler: deleteFinanceExpenseHandler(serviceContext)},
 		{Method: http.MethodGet, Path: "/api/xianyu/accounts", Handler: listXianyuAccountsHandler(serviceContext)},
 		{Method: http.MethodPost, Path: "/api/xianyu/accounts", Handler: createXianyuAccountHandler(serviceContext)},
 		{Method: http.MethodPatch, Path: "/api/xianyu/accounts/:accountId", Handler: updateXianyuAccountHandler(serviceContext)},

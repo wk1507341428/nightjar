@@ -13,6 +13,7 @@ import (
 
 	"sidejob-server/internal/catalog"
 	"sidejob-server/internal/config"
+	"sidejob-server/internal/finance"
 	"sidejob-server/internal/marketplace"
 	"sidejob-server/internal/model"
 	"sidejob-server/internal/publish"
@@ -39,6 +40,8 @@ type ServiceContext struct {
 	PublishService          *publish.Service
 	CatalogService          *catalog.Service
 	MarketplaceService      *marketplace.Service
+	FinanceRepository       *repository.FinanceRepository
+	FinanceService          *finance.Service
 	runtimeCancel           context.CancelFunc
 }
 
@@ -127,6 +130,16 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 	marketplaceService := marketplace.NewService(listingRepository, publishRepository, xianyuAccountRepository, xianyuService, sellerXianyuService)
 
 	runtimeContext, runtimeCancel := context.WithCancel(context.Background())
+	financeRepository := repository.NewFinanceRepository(mongoClient.Database(serviceConfig.Mongo.Database))
+	if err := financeRepository.EnsureIndexes(databaseContext); err != nil {
+		runtimeCancel()
+		return nil, fmt.Errorf("ensure finance indexes: %w", err)
+	}
+	if err := financeRepository.RecoverSync(databaseContext); err != nil {
+		runtimeCancel()
+		return nil, fmt.Errorf("recover finance sync: %w", err)
+	}
+	financeService := finance.NewService(runtimeContext, financeRepository, sellerXianyuService)
 	publishService := publish.NewService(runtimeContext, publishRepository, xianyuAccountRepository, sellerXianyuService, marketplaceService)
 	go syncXianyuListings(runtimeContext, marketplaceService, xianyuAccountRepository)
 
@@ -147,6 +160,8 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 		PublishService:          publishService,
 		CatalogService:          catalogService,
 		MarketplaceService:      marketplaceService,
+		FinanceRepository:       financeRepository,
+		FinanceService:          financeService,
 		runtimeCancel:           runtimeCancel,
 	}, nil
 }

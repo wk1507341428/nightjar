@@ -103,6 +103,11 @@ func retryFailedOperationHandler(sc *svc.ServiceContext) http.HandlerFunc {
 
 // prepareRetryContent 重新读取货源和远端状态，避免用旧 SKU 内容重试。
 func prepareRetryContent(ctx context.Context, sc *svc.ServiceContext, task model.PublishTask) (model.PublishTask, error) {
+	if task.XianyuItemID != "" && (task.Action == retryActionOffline || task.Action == retryActionUpdate || task.Action == retryActionRelist) {
+		if err := sc.ListingRepository.RequireManagedItems(ctx, task.AccountID, []string{task.XianyuItemID}); err != nil {
+			return task, err
+		}
+	}
 	if task.Action == retryActionOffline {
 		return task, nil
 	} // 下架 worker 自身会再次实时核对全部来源。

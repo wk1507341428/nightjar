@@ -148,6 +148,11 @@ func canonicalSpecValue(name, value string) string {
 
 // refreshReconcileTask 执行前重新拉齐货源，队列等待期间的缺货不能使用旧库存覆盖。
 func refreshReconcileTask(ctx context.Context, sc *svc.ServiceContext, task model.PublishTask) (model.PublishTask, error) {
+	if sc != nil && task.XianyuItemID != "" {
+		if err := sc.ListingRepository.RequireManagedItems(ctx, task.AccountID, []string{task.XianyuItemID}); err != nil {
+			return task, err
+		}
+	}
 	if task.Action == "offline" {
 		// 下架中心是人工确认后的强制操作，不重新依据小程序库存撤销。
 		return task, nil

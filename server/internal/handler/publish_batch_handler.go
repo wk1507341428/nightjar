@@ -560,6 +560,11 @@ func buildPublishBatchPlan(ctx context.Context, serviceContext *svc.ServiceConte
 	for _, listing := range listings {
 		listedItemNos[strings.ToUpper(strings.TrimSpace(listing.ItemNo))] = struct{}{}
 	}
+	// 全部在售链接用于查重；只有明确由系统发布且未独立维护的链接参与编辑和下架。
+	listings, err = serviceContext.ListingRepository.FilterManagedListings(ctx, plan.AccountID, listings)
+	if err != nil {
+		return publishBatchPlan{}, err
+	}
 	// 只有确实缺少正式在售商品时，才刷新一次账号级下架快照并批量匹配历史商品。
 	potentialItemNos := make([]string, 0)
 	for _, product := range products {
@@ -581,6 +586,10 @@ func buildPublishBatchPlan(ctx context.Context, serviceContext *svc.ServiceConte
 			return publishBatchPlan{}, fmt.Errorf("读取闲鱼下架历史失败：%w", err)
 		}
 		historyListings, historyErr := serviceContext.ListingRepository.ListOffShelfByItemNos(ctx, plan.AccountID, potentialItemNos)
+		if historyErr != nil {
+			return publishBatchPlan{}, historyErr
+		}
+		historyListings, historyErr = serviceContext.ListingRepository.FilterManagedListings(ctx, plan.AccountID, historyListings)
 		if historyErr != nil {
 			return publishBatchPlan{}, historyErr
 		}
@@ -1266,9 +1275,12 @@ func mergePublishProductsByItemNo(products []map[string]any) []map[string]any {
 			continue
 		}
 		// 无货来源不参与最低价格和地区合并；保留在原集合用于完整性核对。
-		if productNumber(product, "item_total_store") <= 0 && productNumber(product, "store") <= 0 {
+		availableStock := sourceAvailableStock(product)
+		if availableStock <= 0 {
 			continue
 		}
+		product["item_total_store"] = availableStock
+		product["store"] = availableStock
 		existing := productsByItemNo[itemNo]
 		if existing == nil {
 			product["_merged_spec_items"] = mergeProductSpecItems(nil, product["spec_items"])
@@ -1435,7 +1447,7 @@ func mergeProductSpecItems(existingValue, nextValue any) []any {
 			if !ok {
 				continue
 			}
-			if productNumber(item, "store") <= 0 || productString(item, "approve_status") == "offsale" {
+			if !sourceSKUAvailable(item) {
 				continue
 			}
 			label := productSpecLabel(item)
@@ -1576,7 +1588,7 @@ func productSizes(product map[string]any) []string {
 	values, _ := product["spec_items"].([]any)
 	for _, rawSKU := range values {
 		sku, _ := rawSKU.(map[string]any)
-		if productNumber(sku, "store") <= 0 || productString(sku, "approve_status") == "offsale" {
+		if !sourceSKUAvailable(sku) {
 			continue
 		}
 		specs, _ := sku["item_spec"].([]any)
@@ -1626,7 +1638,7 @@ func productPublishVariants(product map[string]any, isFootwear bool, fallbackPri
 	for _, rawItem := range rawItems {
 		item, _ := rawItem.(map[string]any)
 		quantity := productNumber(item, "store")
-		if quantity <= 0 || productString(item, "approve_status") == "offsale" {
+		if !sourceSKUAvailable(item) {
 			continue
 		}
 		properties := make(map[string]string)
