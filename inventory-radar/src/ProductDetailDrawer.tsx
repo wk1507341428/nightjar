@@ -326,7 +326,7 @@ export function ProductDetailDrawer({
           </section>
 
           {isLocalCatalog ? <section className="detail-local-sync">
-            <div><small>LOCAL CATALOG</small><strong>发布中心最近采集于 {product?.last_synced_at ? new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(product.last_synced_at)) : '尚未采集'}</strong><span>商品库会在发布中心读取实时货源后自动更新。</span></div>
+            <div><small>LOCAL CATALOG</small><strong>同步中心最近成功同步于 {product?.last_synced_at ? new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(product.last_synced_at)) : '尚未同步'}</strong><span>需要更新商品、价格或库存时，请前往同步中心。</span></div>
           </section> : null}
 
           {detailImageUrls.length > 0 || hasPurchaseNotice ? (

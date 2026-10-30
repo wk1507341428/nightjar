@@ -14,6 +14,7 @@ import { PriceHistoryPage } from './PriceHistoryPage';
 import { PublishCenterPage } from './PublishCenterPage';
 import { OfflineCenterPage } from './OfflineCenterPage';
 import { FinanceCenterPage } from './FinanceCenterPage';
+import { SyncCenterPage } from './SyncCenterPage';
 import { BrandSelectOption } from './BrandSelectOption';
 import { BrandMaintenancePage } from './BrandMaintenancePage';
 import { fetchMarketplaceListings, syncMarketplaceListings } from './xianyuApi';
@@ -45,8 +46,9 @@ const TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
 
 /** 运营工作台主导航。 */
 const WORKSPACE_ROUTES = [
-  { path: '/home', name: '全部货源', icon: <WorkspaceNavIcon kind="catalog" /> },
+  { path: '/home', name: '货源商品库', icon: <WorkspaceNavIcon kind="catalog" /> },
   { path: '/library', name: '我的商品库', icon: <WorkspaceNavIcon kind="library" /> },
+  { path: '/sync-center', name: '同步中心', icon: <WorkspaceNavIcon kind="sync" /> },
   { path: '/publish-center', name: '发布中心', icon: <WorkspaceNavIcon kind="publish" /> },
   { path: '/offline-center', name: '下架中心', icon: <WorkspaceNavIcon kind="offline" /> },
   { path: '/brand-maintenance', name: '品牌维护', icon: <WorkspaceNavIcon kind="brand" /> },
@@ -58,7 +60,7 @@ const WORKSPACE_ROUTES = [
 type SortMode = 'default' | 'priceAsc' | 'priceDesc' | 'discount' | 'xianyuLast';
 
 /** 商品列表展示模式。 */
-type CatalogMode = 'standard' | 'marketplace' | 'publishCenter' | 'offlineCenter' | 'brandMaintenance' | 'batchPublish' | 'priceHistory' | 'finance';
+type CatalogMode = 'standard' | 'marketplace' | 'publishCenter' | 'offlineCenter' | 'brandMaintenance' | 'batchPublish' | 'priceHistory' | 'finance' | 'syncCenter';
 
 /** 商品数据来源。 */
 type CatalogDataSource = 'live' | 'local';
@@ -74,6 +76,7 @@ function getWorkspaceMenuPath(mode: CatalogMode, source: CatalogDataSource): str
   if (mode === 'offlineCenter') return '/offline-center';
   if (mode === 'brandMaintenance') return '/brand-maintenance';
   if (mode === 'finance') return '/finance-center';
+  if (mode === 'syncCenter') return '/sync-center';
   return '/marketplace';
 }
 
@@ -145,6 +148,7 @@ function formatDiscount(discountRate?: string | number): string {
 
 /** 汇总商品全部在售 SKU 库存。 */
 function getProductStock(product: ProductSummary): number {
+  if (product?.approve_status && !['onsale', 'only_show'].includes(product.approve_status)) return 0;
   // 商品在售规格。
   const onSaleSkus = product?.spec_items?.filter(
     (sku) => sku?.approve_status === 'onsale',
@@ -382,7 +386,7 @@ function ProductCard({
     ? new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(new Date(product.last_synced_at))
     : '未同步';
   // 商品当前数据来源文案。
-  const dataSourceLabel = dataSource === 'live' ? '实时 · 小程序' : `本地 · ${localSyncLabel}`;
+  const dataSourceLabel = dataSource === 'live' ? `同步货源 · ${localSyncLabel}` : `本地 · ${localSyncLabel}`;
   // 商品是否已在闲鱼发布；本地库优先使用后端给出的全局排序状态。
   const isListedOnXianyu = product?.xianyu_listed === true || marketplacePlatforms.includes('xianyu');
 
@@ -546,7 +550,7 @@ export function App() {
   // 当前选择的品牌门店。
   const selectedBrandOption = brandOptions.find((brandOption) => brandOption.value === brandId);
   // 当前结果区标题。
-  const resultTitle = catalogDataSource === 'live' ? `${currentRegion.shortName}全部货源` : `${currentRegion.shortName}我的商品库`;
+  const resultTitle = catalogDataSource === 'live' ? `${currentRegion.shortName}货源商品库` : `${currentRegion.shortName}我的商品库`;
   // 页面级接口加载状态。
   const isGlobalLoading = searchState.isLoading || isMarketplaceLoading;
   // 是否还能继续加载。
@@ -718,7 +722,7 @@ export function App() {
   }
 
 
-  /** 按地区实时加载品牌门店。 */
+  /** 按地区加载本地已配置品牌门店。 */
   async function loadBrandOptions(nextRegionId: string, dataSource = catalogDataSource) {
     // 本次品牌请求序号。
     const requestSequence = brandRequestSequence.current + 1;
@@ -789,6 +793,11 @@ export function App() {
 
   /** 加载首页默认商品。 */
   function loadInitialProducts() {
+    if (window.location.hash === '#/sync-center') {
+      setCatalogMode('syncCenter');
+      setActiveCategory('同步中心');
+      return;
+    }
     if (window.location.hash === '#/finance-center') {
       setCatalogMode('finance');
       setActiveCategory('财务中心');
@@ -847,13 +856,18 @@ export function App() {
     }
     setCatalogDataSource('live');
     setSortMode('default');
-    setActiveCategory('全部货源');
+    setActiveCategory('货源商品库');
     void executeSearch({ nextQuery: '', nextRegionId: '3', nextSortMode: 'default', recordHistory: false, dataSource: 'live' });
     void loadBrandOptions('3', 'live');
   }
 
   /** 根据地址切换独立页面或选品主页。 */
   function handleRouteChange() {
+    if (window.location.hash === '#/sync-center') {
+      setCatalogMode('syncCenter');
+      setActiveCategory('同步中心');
+      return;
+    }
     if (window.location.hash === '#/finance-center') {
       setCatalogMode('finance');
       setActiveCategory('财务中心');
@@ -924,7 +938,7 @@ export function App() {
     setCatalogMode('standard');
     setCatalogDataSource('live');
     setSortMode('default');
-    setActiveCategory('全部货源');
+    setActiveCategory('货源商品库');
     setBrandId('all');
     setBrandCategories([]);
     setBrandCategoryId('');
@@ -1013,7 +1027,7 @@ export function App() {
     event.preventDefault();
     window.history.replaceState(null, '', catalogDataSource === 'live' ? '#/home' : '#/library');
     setCatalogMode('standard');
-    setActiveCategory(catalogDataSource === 'live' ? '全部货源' : '我的商品库');
+    setActiveCategory(catalogDataSource === 'live' ? '货源商品库' : '我的商品库');
     void executeSearch({ nextQuery: query, nextRegionId: regionId, dataSource: catalogDataSource });
   }
 
@@ -1022,7 +1036,7 @@ export function App() {
     currentRegionIdRef.current = nextRegionId;
     setRegionId(nextRegionId);
     setQuery('');
-    let nextActiveCategory = catalogDataSource === 'live' ? '全部货源' : '我的商品库';
+    let nextActiveCategory = catalogDataSource === 'live' ? '货源商品库' : '我的商品库';
     if (catalogMode === 'marketplace') {
       nextActiveCategory = '渠道上架';
     }
@@ -1043,11 +1057,15 @@ export function App() {
 
   /** 选择首页快捷分类。 */
   function handleSelectCategory(categoryName: string) {
+    if (categoryName === '同步中心') {
+      window.location.hash = '/sync-center';
+      return;
+    }
     if (categoryName === '财务中心') {
       window.location.hash = '/finance-center';
       return;
     }
-    if (categoryName === '全部货源') {
+    if (categoryName === '货源商品库') {
       window.location.hash = '/home';
       return;
     }
@@ -1072,7 +1090,7 @@ export function App() {
       return;
     }
     // 全部分类对应的空关键词。
-    const categoryQuery = categoryName === '全部货源' ? '' : categoryName;
+    const categoryQuery = categoryName === '货源商品库' ? '' : categoryName;
 
     window.history.replaceState(null, '', '#/home');
     setCatalogMode('standard');
@@ -1138,7 +1156,7 @@ export function App() {
     setCatalogMode('standard');
     setQuery(recentSearch.query);
     setRegionId(recentSearch.regionId);
-    setActiveCategory(catalogDataSource === 'live' ? '全部货源' : '我的商品库');
+    setActiveCategory(catalogDataSource === 'live' ? '货源商品库' : '我的商品库');
     void executeSearch({ nextQuery: recentSearch.query, nextRegionId: recentSearch.regionId, recordHistory: false, dataSource: catalogDataSource });
   }
 
@@ -1276,11 +1294,13 @@ export function App() {
         menuItemRender={(item, defaultDom) => <a href={`#${item.path}`} onClick={(event) => { event.preventDefault(); handleSelectCategory(String(item.name ?? '')); }}>{defaultDom}</a>}
         onMenuHeaderClick={() => { window.location.hash = '/home'; }}
       >
-      <header className="workspace-topbar"><Button className="workspace-mobile-menu-button" type="text" onClick={() => setIsMobileMenuOpen(true)} aria-label="打开主菜单">☰</Button><div className="workspace-header-content"><div className="workspace-header-heading"><small>WORKSPACE / {isCatalogWorkspace ? currentRegion.shortName : 'OPERATIONS'}</small><strong>{activeCategory === '全部' ? '全部货源' : activeCategory}</strong></div><form className="workspace-global-search" onSubmit={handleSubmitSearch}><Input value={query} onChange={(event) => setQuery(event.target.value)} prefix={<SearchIcon />} placeholder="搜索商品名称、品牌或货号" allowClear aria-label="搜索商品" /><Button type="primary" htmlType="submit" icon={<SearchIcon />} aria-label="提交搜索"><span>搜索</span></Button></form></div><div className="workspace-topbar-actions">{!isCompactViewport ? <XianyuConnectionControl /> : null}{isCatalogWorkspace ? <label className="workspace-region-picker"><PinIcon /><span>仓库</span><Select value={regionId} onChange={handleChangeRegion} options={REGION_OPTIONS.map((region) => ({ value: region.id, label: region.shortName }))} aria-label="仓库范围" /></label> : null}</div></header>
+      <header className="workspace-topbar"><Button className="workspace-mobile-menu-button" type="text" onClick={() => setIsMobileMenuOpen(true)} aria-label="打开主菜单">☰</Button><div className="workspace-header-content"><div className="workspace-header-heading"><small>WORKSPACE / {isCatalogWorkspace ? currentRegion.shortName : 'OPERATIONS'}</small><strong>{activeCategory === '全部' ? '货源商品库' : activeCategory}</strong></div><form className="workspace-global-search" onSubmit={handleSubmitSearch}><Input value={query} onChange={(event) => setQuery(event.target.value)} prefix={<SearchIcon />} placeholder="搜索商品名称、品牌或货号" allowClear aria-label="搜索商品" /><Button type="primary" htmlType="submit" icon={<SearchIcon />} aria-label="提交搜索"><span>搜索</span></Button></form></div><div className="workspace-topbar-actions">{!isCompactViewport ? <XianyuConnectionControl /> : null}{isCatalogWorkspace ? <label className="workspace-region-picker"><PinIcon /><span>仓库</span><Select value={regionId} onChange={handleChangeRegion} options={REGION_OPTIONS.map((region) => ({ value: region.id, label: region.shortName }))} aria-label="仓库范围" /></label> : null}</div></header>
       <Drawer className="workspace-mobile-drawer" title="SideJob 工作台" placement="left" size={270} open={isMobileMenuOpen} onClose={() => setIsMobileMenuOpen(false)}><nav aria-label="移动端主导航">{WORKSPACE_ROUTES.map((route) => <button type="button" key={route.path} className={activeMenuPath === route.path ? 'workspace-mobile-nav-item workspace-mobile-nav-item--active' : 'workspace-mobile-nav-item'} onClick={() => { setIsMobileMenuOpen(false); handleSelectCategory(route.name); }}>{route.icon}<span>{route.name}</span></button>)}</nav>{isCompactViewport ? <div className="workspace-mobile-connection"><span>平台连接</span><XianyuConnectionControl /></div> : null}</Drawer>
       <div className="workspace-content">
 
-      {catalogMode === 'finance' ? (
+      {catalogMode === 'syncCenter' ? (
+        <SyncCenterPage />
+      ) : catalogMode === 'finance' ? (
         <FinanceCenterPage />
       ) : catalogMode === 'batchPublish' && publishBatchRoute ? (
         <BrandPublishPage key={publishBatchRoute.routeKey} batchId={publishBatchRoute.batchId} brandStoreId={publishBatchRoute.brandStoreId} brandName={publishBatchRoute.brandName} onBack={() => { window.location.hash = '/library'; }} />
@@ -1294,6 +1314,7 @@ export function App() {
         <BrandMaintenancePage />
       ) : catalogMode === 'marketplace' ? (
         <MarketplacePage
+          key={currentAccountId}
           listings={marketplaceListings}
           lastSyncedAt={marketplaceLastSyncedAt}
           isLoading={isMarketplaceLoading}
@@ -1304,8 +1325,8 @@ export function App() {
       ) : (
       <main id="home" className="catalog-workspace-page">
         <div className="workspace-page-heading">
-          <div><span className="workspace-eyebrow">INVENTORY / {catalogDataSource === 'live' ? 'LIVE SOURCE' : 'LOCAL LIBRARY'}</span><h1>{resultTitle}</h1><p>按品牌、品类和库存状态快速定位商品，打开详情即可发布或比价。</p></div>
-          <div className="workspace-overview"><ProCard className="workspace-overview-card"><small>商品总量</small><strong>{searchState.total.toLocaleString('zh-CN')}</strong><span>当前筛选范围</span></ProCard><ProCard className="workspace-overview-card"><small>当前仓库</small><strong>{currentRegion.shortName}</strong><span>{catalogDataSource === 'live' ? '小程序实时货源' : '已同步本地商品'}</span></ProCard></div>
+          <div><span className="workspace-eyebrow">INVENTORY / {catalogDataSource === 'live' ? 'SYNCED SOURCE' : 'LOCAL LIBRARY'}</span><h1>{resultTitle}</h1><p>按品牌、品类和库存状态查询本地商品。数据未同步或需要更新时，请先前往同步中心。</p></div>
+          <div className="workspace-overview"><ProCard className="workspace-overview-card"><small>商品总量</small><strong>{searchState.total.toLocaleString('zh-CN')}</strong><span>当前筛选范围</span></ProCard><ProCard className="workspace-overview-card"><small>当前仓库</small><strong>{currentRegion.shortName}</strong><span>{catalogDataSource === 'live' ? '同步中心最近成功数据' : '已同步本地商品'}</span></ProCard></div>
         </div>
         {recentSearches.length > 0 ? (
           <section className="recent-strip">
@@ -1315,7 +1336,7 @@ export function App() {
         ) : null}
 
         <section className="catalog-section">
-          <ProCard className="catalog-filter-card" title="筛选与视图" extra={<Tag color={catalogDataSource === 'live' ? 'processing' : 'default'}>{catalogDataSource === 'live' ? '实时货源' : '本地商品库'}</Tag>}>
+          <ProCard className="catalog-filter-card" title="筛选与视图" extra={<Tag color={catalogDataSource === 'live' ? 'processing' : 'default'}>{catalogDataSource === 'live' ? '同步货源库' : '本地商品库'}</Tag>}>
                 <div className="catalog-controls">
                   <Select<string, BrandOption>
                     className="brand-select"
@@ -1361,7 +1382,7 @@ export function App() {
           isLoading={isDetailLoading}
           errorMessage={detailErrorMessage}
           marketplacePlatforms={getProductMarketplacePlatforms(selectedProduct?.item_no)}
-          isLocalCatalog={catalogDataSource === 'local'}
+          isLocalCatalog={true}
           onClose={handleCloseDetail}
           onPublish={handleOpenPublish}
           onCompare={handleCompareProduct}

@@ -165,19 +165,21 @@ type CatalogSyncChangeListResponse struct {
 
 // MarketplaceListingResponse 是一个渠道当前在售商品。
 type MarketplaceListingResponse struct {
-	ID             string                               `json:"id"`
-	AccountID      string                               `json:"accountId"`
-	Platform       string                               `json:"platform"`
-	PlatformItemID string                               `json:"platformItemId"`
-	SourceItemID   string                               `json:"sourceItemId,omitempty"`
-	ItemNo         string                               `json:"itemNo,omitempty"`
-	Title          string                               `json:"title"`
-	PriceCents     int64                                `json:"priceCents"`
-	ImageURL       string                               `json:"imageUrl,omitempty"`
-	ItemURL        string                               `json:"itemUrl,omitempty"`
-	ListedAt       string                               `json:"listedAt"`
-	LastSyncedAt   string                               `json:"lastSyncedAt"`
-	Stability      *MarketplaceListingStabilityResponse `json:"stability,omitempty"`
+	ID               string                               `json:"id"`
+	AccountID        string                               `json:"accountId"`
+	Platform         string                               `json:"platform"`
+	PlatformItemID   string                               `json:"platformItemId"`
+	SourceItemID     string                               `json:"sourceItemId,omitempty"`
+	BrandProfileID   string                               `json:"brandProfileId,omitempty"`
+	BrandProfileName string                               `json:"brandProfileName,omitempty"`
+	ItemNo           string                               `json:"itemNo,omitempty"`
+	Title            string                               `json:"title"`
+	PriceCents       int64                                `json:"priceCents"`
+	ImageURL         string                               `json:"imageUrl,omitempty"`
+	ItemURL          string                               `json:"itemUrl,omitempty"`
+	ListedAt         string                               `json:"listedAt"`
+	LastSyncedAt     string                               `json:"lastSyncedAt"`
+	Stability        *MarketplaceListingStabilityResponse `json:"stability,omitempty"`
 }
 
 // MarketplaceListingStabilityResponse 是闲鱼商品对应的小程序货源稳定度。
@@ -348,6 +350,8 @@ type UpdateXianyuAccountRequest struct {
 
 // XianyuAccountResponse 是脱敏后的闲鱼账号信息。
 type XianyuAccountResponse struct {
+	QueueStopReason      string `json:"queueStopReason,omitempty"`
+	QueueStoppedAt       string `json:"queueStoppedAt,omitempty"`
 	ID                   string `json:"id"`
 	Name                 string `json:"name"`
 	DisplayName          string `json:"displayName,omitempty"`
@@ -444,6 +448,7 @@ type PublishTaskListResponse struct {
 type CreatePublishBatchRequest struct {
 	AccountID                       string   `json:"accountId" bson:"accountId"`
 	PreviewID                       string   `json:"previewId,omitempty"`
+	SourceSnapshotID                string   `json:"sourceSnapshotId,omitempty" bson:"sourceSnapshotId,omitempty"`
 	PreservedOfflinePlatformItemIDs []string `json:"preservedOfflinePlatformItemIds,omitempty"`
 	BrandStoreID                    string   `json:"brandStoreId"`
 	BrandProfileID                  string   `json:"brandProfileId,omitempty"`
@@ -520,12 +525,13 @@ type PublishBatchCandidateResponse struct {
 
 // PublishBatchOfflineCandidateResponse 是品牌对账后准备下架的闲鱼商品。
 type PublishBatchOfflineCandidateResponse struct {
-	PlatformItemID string `json:"platformItemId"`
-	ItemNo         string `json:"itemNo"`
-	Title          string `json:"title"`
-	PriceCents     int64  `json:"priceCents"`
-	ImageURL       string `json:"imageUrl,omitempty"`
-	ItemURL        string `json:"itemUrl,omitempty"`
+	PlatformItemID string   `json:"platformItemId"`
+	ItemNo         string   `json:"itemNo"`
+	Title          string   `json:"title"`
+	PriceCents     int64    `json:"priceCents"`
+	ImageURL       string   `json:"imageUrl,omitempty"`
+	ItemURL        string   `json:"itemUrl,omitempty"`
+	ChangeReasons  []string `json:"changeReasons,omitempty"`
 }
 
 // PublishBatchResponse 是批次及其任务进度。

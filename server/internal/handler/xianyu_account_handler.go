@@ -80,6 +80,9 @@ func updateXianyuAccountHandler(serviceContext *svc.ServiceContext) http.Handler
 			writeError(responseWriter, http.StatusInternalServerError, "更新闲鱼账号失败")
 			return
 		}
+		if requestBody.Status == model.XianyuAccountActive && serviceContext.PublishService != nil {
+			serviceContext.PublishService.ClearAutomaticStop(accountID)
+		}
 		account, _ := serviceContext.XianyuAccountRepository.Get(request.Context(), accountID)
 		writeJSON(responseWriter, http.StatusOK, xianyuAccountToResponse(account))
 	}
@@ -232,7 +235,10 @@ func verifyXianyuAccountHandler(serviceContext *svc.ServiceContext) http.Handler
 
 // xianyuAccountToResponse 转换账号公开字段。
 func xianyuAccountToResponse(account model.XianyuAccount) types.XianyuAccountResponse {
-	response := types.XianyuAccountResponse{ID: account.ID, Name: account.Name, DisplayName: account.DisplayName, PlatformUserID: account.PlatformUserID, Status: account.Status, IsDefault: account.IsDefault, SessionConnected: account.SessionConnected, SellerConnected: account.SellerConnected, SearchReady: account.SearchReady, CreatedAt: account.CreatedAt.Format(time.RFC3339), UpdatedAt: account.UpdatedAt.Format(time.RFC3339)}
+	response := types.XianyuAccountResponse{QueueStopReason: account.QueueStopReason, ID: account.ID, Name: account.Name, DisplayName: account.DisplayName, PlatformUserID: account.PlatformUserID, Status: account.Status, IsDefault: account.IsDefault, SessionConnected: account.SessionConnected, SellerConnected: account.SellerConnected, SearchReady: account.SearchReady, CreatedAt: account.CreatedAt.Format(time.RFC3339), UpdatedAt: account.UpdatedAt.Format(time.RFC3339)}
+	if account.QueueStoppedAt != nil {
+		response.QueueStoppedAt = account.QueueStoppedAt.Format(time.RFC3339)
+	}
 	if account.LastVerifiedAt != nil {
 		response.LastVerifiedAt = account.LastVerifiedAt.Format(time.RFC3339)
 	}

@@ -42,9 +42,10 @@ type OfferListResult struct {
 
 // BrandCategory 是品牌门店用于商品筛选的平台类目。
 type BrandCategory struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	ImageURL string `json:"imageUrl,omitempty"`
+	SourceIDs []string `json:"sourceIds,omitempty"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	ImageURL  string   `json:"imageUrl,omitempty"`
 }
 
 // ListLiveBrandOffers 读取小程序某地区品牌门店的全部实时商品。
@@ -91,6 +92,9 @@ func (service *Service) ListLiveBrandOffers(ctx context.Context, regionID, distr
 		return nil, fmt.Errorf("门店%s商品列表为空但总数非零", distributorID)
 	}
 	if pageCount <= 1 {
+		if len(products) != firstPage.totalCount {
+			return nil, fmt.Errorf("门店%s分页数量不一致，请重新同步", distributorID)
+		}
 		return products, nil
 	}
 	if pageCount > 200 {
@@ -236,6 +240,44 @@ func (service *Service) ListSourceCategories(ctx context.Context, regionID, dist
 // GetLiveProductDetail 从小程序读取一件商品的最新商详。
 func (service *Service) GetLiveProductDetail(ctx context.Context, sourceProduct map[string]any, regionID string) (map[string]any, error) {
 	return service.fetchProductDetail(ctx, sourceProduct, regionID)
+}
+
+// GetFreshProductDetail 用于发布对账的库存复核，不读取或写入30分钟商详缓存。
+func (service *Service) GetFreshProductDetail(ctx context.Context, sourceProduct map[string]any, regionID string) (map[string]any, error) {
+	itemID := firstNonEmpty(mapString(sourceProduct, "default_item_id"), mapString(sourceProduct, "item_id"), mapString(sourceProduct, "goods_id"))
+	if itemID == "" {
+		return nil, errors.New("商品缺少详情 ID")
+	}
+	// 独立分组避免与普通缓存读取合并，所有商详请求仍共享同一并发上限。
+	result, err, _ := service.detailGroup.Do("fresh:"+regionID+":"+itemID, func() (any, error) {
+		select {
+		case service.detailSemaphore <- struct{}{}:
+			defer func() { <-service.detailSemaphore }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return service.fetchRawProductDetail(ctx, itemID, regionID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mergeFreshProductDetail(sourceProduct, result.(map[string]any)), nil
+}
+
+// mergeFreshProductDetail 保留来源身份和图文兜底，库存与可售状态只能来自本次商详。
+func mergeFreshProductDetail(sourceProduct, detail map[string]any) map[string]any {
+	merged := make(map[string]any, len(sourceProduct)+len(detail))
+	for key, value := range sourceProduct {
+		switch key {
+		case "item_no", "spec_items", "item_total_store", "store", "approve_status", "_merged_spec_items", "_source_detail_candidates":
+			continue
+		}
+		merged[key] = value
+	}
+	for key, value := range detail {
+		merged[key] = value
+	}
+	return merged
 }
 
 // IngestPublishSnapshots 把发布中心已经获取的实时货源批量写入商品库和价格趋势。

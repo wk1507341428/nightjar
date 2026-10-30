@@ -3,11 +3,12 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/zeromicro/go-zero/core/logx"
 	"net/http"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/zeromicro/go-zero/rest/pathvar"
@@ -40,27 +41,32 @@ const (
 
 // publishBatchPlan 是创建批次前重新计算的品牌商品计划。
 type publishBatchPlan struct {
-	AccountID       string
-	SourceType      string
-	BrandProfileID  string
-	BrandStoreID    string
-	DistributorID   string
-	BrandName       string
-	RegionID        string
-	CategoryIDs     []string
-	CategoryNames   []string
-	SourceRegions   []string
-	SourceMemberIDs []string
-	MinDelaySeconds int
-	MaxDelaySeconds int
-	Total           int
-	Candidates      []map[string]any
-	Skipped         []model.PublishBatchSkip
-	OfflineListings []model.MarketplaceListing
-	Updates         []model.PublishTask
-	Relists         []model.PublishTask
-	Unchanged       int
-	ActionMode      string
+	AccountID             string
+	SourceType            string
+	BrandProfileID        string
+	BrandStoreID          string
+	DistributorID         string
+	BrandName             string
+	RegionID              string
+	CategoryIDs           []string
+	CategoryNames         []string
+	SourceRegions         []string
+	SourceMemberIDs       []string
+	MinDelaySeconds       int
+	MaxDelaySeconds       int
+	Total                 int
+	Candidates            []map[string]any
+	Skipped               []model.PublishBatchSkip
+	OfflineListings       []model.MarketplaceListing
+	OfflineReasons        map[string][]string
+	Updates               []model.PublishTask
+	Relists               []model.PublishTask
+	Unchanged             int
+	ActionMode            string
+	SourceSyncVersion     string
+	SourceSnapshotVersion string
+	SourceRequest         types.CreatePublishBatchRequest
+	PreservedOfflineIDs   []string
 }
 
 // previewPublishBatchHandler 返回当前品牌的发布计划预览。
@@ -87,7 +93,12 @@ func createPublishBatchHandler(serviceContext *svc.ServiceContext) http.HandlerF
 		}
 		plan, err := consumePreview(request.Context(), serviceContext, requestBody)
 		if err != nil {
-			writeError(responseWriter, http.StatusInternalServerError, "生成品牌发布计划失败")
+			if errors.Is(err, errPreviewUnavailable) || errors.Is(err, errPreviewPolicyChanged) {
+				writeError(responseWriter, http.StatusConflict, err.Error())
+			} else {
+				logx.Errorf("consume publish preview %s: %v", requestBody.PreviewID, err)
+				writeError(responseWriter, http.StatusInternalServerError, "读取发布预览失败，请重新生成预览")
+			}
 			return
 		}
 		account, accountErr := serviceContext.XianyuAccountRepository.Get(request.Context(), plan.AccountID)
@@ -105,24 +116,10 @@ func createPublishBatchHandler(serviceContext *svc.ServiceContext) http.HandlerF
 		plan.MaxDelaySeconds = requestBody.MaxDelaySeconds
 
 		now := time.Now()
-		batch, activeErr := serviceContext.PublishBatchRepository.FindActive(request.Context(), plan.AccountID)
-		if activeErr == nil {
-			activeResponse := buildPublishBatchResponse(request.Context(), serviceContext, batch)
-			if activeResponse.Status == model.PublishBatchCompleted || activeResponse.Status == model.PublishBatchFailed || activeResponse.Status == model.PublishBatchCancelled {
-				_ = serviceContext.PublishBatchRepository.MarkStatus(request.Context(), batch.ID, activeResponse.Status)
-				activeErr = repository.ErrPublishBatchNotFound
-			}
-		}
-		if activeErr != nil && activeErr != repository.ErrPublishBatchNotFound {
-			writeError(responseWriter, http.StatusInternalServerError, "读取当前发布队列失败")
+		batch, err := findOrCreatePublishBatch(request.Context(), serviceContext, plan, requestBody, now)
+		if err != nil {
+			writeError(responseWriter, http.StatusInternalServerError, err.Error())
 			return
-		}
-		if activeErr == repository.ErrPublishBatchNotFound {
-			batch = model.PublishBatch{ID: primitive.NewObjectID().Hex(), AccountID: plan.AccountID, BrandStoreID: plan.BrandStoreID, BrandName: plan.BrandName, RegionID: plan.RegionID, CategoryIDs: plan.CategoryIDs, CategoryNames: plan.CategoryNames, Limit: 0, MinDelaySeconds: requestBody.MinDelaySeconds, MaxDelaySeconds: requestBody.MaxDelaySeconds, TaskIDs: []string{}, Skipped: []model.PublishBatchSkip{}, Segments: []model.PublishBatchSegment{}, Status: model.PublishBatchPreparing, CreatedAt: now, UpdatedAt: now}
-			if err := serviceContext.PublishBatchRepository.Create(request.Context(), batch); err != nil {
-				writeError(responseWriter, http.StatusInternalServerError, "保存发布操作失败")
-				return
-			}
 		}
 		operationCount := len(selectedProducts) + len(plan.Relists) + len(plan.Updates) + len(plan.OfflineListings)
 		if batch.Limit+operationCount > maxBatchPublishCount {
@@ -142,71 +139,65 @@ func createPublishBatchHandler(serviceContext *svc.ServiceContext) http.HandlerF
 	}
 }
 
+// findOrCreatePublishBatch 只复用当前账号有效队列，已结束队列不会承接新的品牌。
+func findOrCreatePublishBatch(ctx context.Context, serviceContext *svc.ServiceContext, plan publishBatchPlan, requestBody types.CreatePublishBatchRequest, now time.Time) (model.PublishBatch, error) {
+	batch, activeErr := serviceContext.PublishBatchRepository.FindActive(ctx, plan.AccountID)
+	if activeErr == nil {
+		activeResponse := buildPublishBatchResponse(ctx, serviceContext, batch)
+		if activeResponse.Status == model.PublishBatchCompleted || activeResponse.Status == model.PublishBatchFailed || activeResponse.Status == model.PublishBatchCancelled {
+			_ = serviceContext.PublishBatchRepository.MarkStatus(ctx, batch.ID, activeResponse.Status)
+			activeErr = repository.ErrPublishBatchNotFound
+		}
+	}
+	if activeErr != nil && activeErr != repository.ErrPublishBatchNotFound {
+		return model.PublishBatch{}, fmt.Errorf("读取当前发布队列失败")
+	}
+	if activeErr == repository.ErrPublishBatchNotFound {
+		batch = model.PublishBatch{ID: primitive.NewObjectID().Hex(), AccountID: plan.AccountID, BrandStoreID: plan.BrandStoreID, BrandName: plan.BrandName, RegionID: plan.RegionID, CategoryIDs: plan.CategoryIDs, CategoryNames: plan.CategoryNames, Limit: 0, MinDelaySeconds: requestBody.MinDelaySeconds, MaxDelaySeconds: requestBody.MaxDelaySeconds, TaskIDs: []string{}, Skipped: []model.PublishBatchSkip{}, Segments: []model.PublishBatchSegment{}, Status: model.PublishBatchPreparing, CreatedAt: now, UpdatedAt: now}
+		if err := serviceContext.PublishBatchRepository.Create(ctx, batch); err != nil {
+			return model.PublishBatch{}, fmt.Errorf("保存发布操作失败")
+		}
+	}
+
+	return batch, nil
+}
+
 // preparePublishBatch 在后台逐件读取实时商详并创建发布任务。
 func preparePublishBatch(serviceContext *svc.ServiceContext, batch model.PublishBatch, plan publishBatchPlan, selectedProducts []map[string]any) {
 	prepareContext, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
-	taskIDs := make([]string, 0, len(selectedProducts))
-	queuedTaskIDs := make([]string, 0, len(selectedProducts)+len(plan.Updates)+len(plan.Relists)+len(plan.OfflineListings))
-	skipped := append([]model.PublishBatchSkip{}, plan.Skipped...)
-	// 修改和下架也持久化为普通队列任务，按商品记录错误并参与整体进度。
-	changes := []model.PublishTask{}
-	for _, listing := range plan.OfflineListings {
-		changes = append(changes, buildReconcileOfflineTask(plan, listing, time.Now()))
+	// 大品牌复核放在后台准备阶段，避免确认接口超过 HTTP 超时；复核通过前不入执行队列。
+	var err error
+	plan, err = refreshAggregatePreview(prepareContext, serviceContext, plan.SourceRequest, plan, plan.PreservedOfflineIDs)
+	if err != nil {
+		_ = serviceContext.PublishBatchRepository.FailPreparation(context.Background(), batch.ID, err.Error())
+		return
 	}
-	changes = append(changes, plan.Updates...)
-	changes = append(changes, plan.Relists...)
-	for _, task := range changes {
-		task.MinDelaySeconds = plan.MinDelaySeconds
-		task.MaxDelaySeconds = plan.MaxDelaySeconds
-		task.BatchID = batch.ID
-		task.Status = model.PublishTaskQueued
-		task.CreatedAt = time.Now()
-		task.UpdatedAt = task.CreatedAt
-		if err := serviceContext.PublishRepository.Create(prepareContext, task); err != nil {
+	selectedProducts = plan.Candidates[:minInt(len(selectedProducts), len(plan.Candidates))]
+	prepared := preparedPublishTasks{skipped: append([]model.PublishBatchSkip{}, plan.Skipped...)}
+	for _, task := range prepareBatchChanges(batch.ID, plan) {
+		if err := prepared.persist(prepareContext, serviceContext.PublishRepository, task); err != nil {
 			_ = serviceContext.PublishBatchRepository.FailPreparation(context.Background(), batch.ID, err.Error())
 			return
 		}
-		taskIDs = append(taskIDs, task.ID)
-		queuedTaskIDs = append(queuedTaskIDs, task.ID)
 	}
-	for _, sourceProduct := range selectedProducts {
-		detailRegionID := firstProductString(sourceProduct, "_primary_region")
-		if detailRegionID == "" {
-			detailRegionID = plan.RegionID
-		}
-		detailProduct, detailErr := serviceContext.CatalogService.GetLiveProductDetail(prepareContext, sourceProduct, detailRegionID)
-		if detailErr != nil {
-			failedTask := buildFailedCatalogDetailTask(batch, plan, sourceProduct, detailErr, batch.CreatedAt.Add(time.Duration(len(taskIDs))*time.Millisecond))
-			if err := serviceContext.PublishRepository.Create(prepareContext, failedTask); err != nil {
-				_ = serviceContext.PublishBatchRepository.FailPreparation(context.Background(), batch.ID, "保存商详失败任务失败")
-				return
-			}
-			taskIDs = append(taskIDs, failedTask.ID)
+	for _, product := range selectedProducts {
+		task, err := prepareBatchSourceTask(prepareContext, serviceContext, batch, plan, product, len(prepared.taskIDs))
+		if err != nil {
+			prepared.skipped = append(prepared.skipped, model.PublishBatchSkip{ItemNo: productString(product, "item_no"), Title: productString(product, "item_name"), Reason: err.Error()})
 			continue
 		}
-		if mergedSpecItems, exists := sourceProduct["_merged_spec_items"]; exists {
-			detailProduct["spec_items"] = mergedSpecItems
-		}
-		task, taskErr := buildBatchPublishTask(batch.ID, plan, detailProduct, batch.CreatedAt.Add(time.Duration(len(taskIDs))*time.Millisecond))
-		if taskErr != nil {
-			skipped = append(skipped, model.PublishBatchSkip{ItemNo: productString(sourceProduct, "item_no"), Title: productString(sourceProduct, "item_name"), Reason: taskErr.Error()})
-			continue
-		}
-		if err := serviceContext.PublishRepository.Create(prepareContext, task); err != nil {
+		if err := prepared.persist(prepareContext, serviceContext.PublishRepository, task); err != nil {
 			_ = serviceContext.PublishBatchRepository.FailPreparation(context.Background(), batch.ID, "创建单商品发布任务失败")
 			return
 		}
-		taskIDs = append(taskIDs, task.ID)
-		queuedTaskIDs = append(queuedTaskIDs, task.ID)
 	}
-	if err := serviceContext.PublishBatchRepository.CompletePreparation(prepareContext, batch.ID, taskIDs, skipped); err != nil {
-		// 用户可能在准备阶段取消队列；清理已经提前写入但尚未入队的任务。
+	if err := serviceContext.PublishBatchRepository.CompletePreparation(prepareContext, batch.ID, prepared.taskIDs, prepared.skipped); err != nil {
 		_, _ = serviceContext.PublishRepository.CancelByBatchID(context.Background(), batch.ID)
 		_ = serviceContext.PublishBatchRepository.FailPreparation(context.Background(), batch.ID, "保存任务准备结果失败")
 		return
 	}
-	for _, taskID := range queuedTaskIDs {
+	for _, taskID := range prepared.queuedTaskIDs {
 		if err := serviceContext.PublishService.Enqueue(taskID); err != nil {
 			_ = serviceContext.PublishRepository.UpdateStatus(context.Background(), taskID, model.PublishTaskFailed, "发布队列已满", "", "")
 		}
@@ -223,7 +214,7 @@ func buildReconcileOfflineTask(plan publishBatchPlan, listing model.MarketplaceL
 	if len(sourceMemberIDs) == 0 {
 		sourceMemberIDs = plan.SourceMemberIDs
 	}
-	return model.PublishTask{ID: primitive.NewObjectID().Hex(), AccountID: plan.AccountID, Action: "offline", SourceItemID: listing.SourceItemID, ItemNo: listing.ItemNo, Title: listing.Title, PriceCents: listing.PriceCents, ImageURLs: uniqueStrings([]string{listing.ImageURL}), Brand: plan.BrandName, BrandProfileID: plan.BrandProfileID, SourceType: listing.SourceType, SourceRegions: sourceRegions, SourceMemberIDs: sourceMemberIDs, SourceItemIDs: listing.SourceItemIDs, RegionID: plan.RegionID, XianyuItemID: listing.PlatformItemID, XianyuURL: listing.ItemURL, PlannedAt: plannedAt, ChangeReasons: []string{"全部来源已无可售库存"}}
+	return model.PublishTask{ID: primitive.NewObjectID().Hex(), AccountID: plan.AccountID, Action: model.PublishActionOffline, SourceSyncVersion: plan.SourceSyncVersion, ReconcileMode: plan.ActionMode, StockOutOffline: plan.BrandProfileID != "", SourceItemID: listing.SourceItemID, ItemNo: listing.ItemNo, Title: listing.Title, PriceCents: listing.PriceCents, ImageURLs: uniqueStrings([]string{listing.ImageURL}), Brand: plan.BrandName, BrandProfileID: plan.BrandProfileID, SourceType: listing.SourceType, SourceRegions: sourceRegions, SourceMemberIDs: sourceMemberIDs, SourceItemIDs: listing.SourceItemIDs, RegionID: plan.RegionID, XianyuItemID: listing.PlatformItemID, XianyuURL: listing.ItemURL, PlannedAt: plannedAt, ChangeReasons: offlineListingReasons(plan, listing)}
 }
 
 // buildFailedCatalogDetailTask 把列表存在但商详无效的商品记录为发布失败，且不加入执行队列。
@@ -369,385 +360,40 @@ func decodePublishBatchRequest(responseWriter http.ResponseWriter, request *http
 
 // buildPublishBatchPlan 计算候选商品与自动跳过项。
 func buildPublishBatchPlan(ctx context.Context, serviceContext *svc.ServiceContext, requestBody types.CreatePublishBatchRequest) (publishBatchPlan, error) {
-	var products []map[string]any
-	catalogSnapshots := make([]catalog.PublishSourceSnapshot, 0)
-	// 全品类货源快照只用于缺货对账，避免选择品类时误判其他品类商品下架。
-	var allScopeProducts []map[string]any
-	account, accountErr := serviceContext.XianyuAccountRepository.Get(ctx, requestBody.AccountID)
-	if accountErr != nil || account.Status != model.XianyuAccountActive || !account.SellerConnected {
-		return publishBatchPlan{}, fmt.Errorf("目标闲鱼账号未连接卖家后台或队列不可用")
-	}
-	plan := publishBatchPlan{AccountID: requestBody.AccountID, SourceType: requestBody.SourceType, BrandProfileID: requestBody.BrandProfileID, BrandStoreID: requestBody.BrandStoreID, DistributorID: requestBody.DistributorID, BrandName: requestBody.BrandName, RegionID: requestBody.RegionID, CategoryIDs: requestBody.CategoryIDs, CategoryNames: requestBody.CategoryNames, Candidates: []map[string]any{}, Skipped: []model.PublishBatchSkip{}, ActionMode: requestBody.ActionMode}
-	if requestBody.BrandProfileID != "" {
-		profile, members, err := serviceContext.InventoryRepository.GetBrandProfile(ctx, requestBody.BrandProfileID)
-		if err != nil {
-			return publishBatchPlan{}, err
-		}
-		plan.BrandName = profile.Name
-		plan.RegionID = profile.DefaultRegionID
-		if plan.RegionID == "" && len(members) > 0 {
-			plan.RegionID = members[0].RegionID
-		}
-		type memberProductResult struct {
-			products    []map[string]any
-			allProducts []map[string]any
-			err         error
-		}
-		memberResults := make([]memberProductResult, len(members))
-		fetchSemaphore := make(chan struct{}, brandProfileFetchConcurrency)
-		var fetchWaitGroup sync.WaitGroup
-		for memberIndex, member := range members {
-			memberKey := member.RegionID + ":" + member.DistributorID
-			plan.SourceRegions = appendUniqueText(plan.SourceRegions, member.RegionID)
-			plan.SourceMemberIDs = appendUniqueText(plan.SourceMemberIDs, memberKey)
-			fetchWaitGroup.Add(1)
-			go func(resultIndex int, regionID, distributorID string) {
-				defer fetchWaitGroup.Done()
-				select {
-				case fetchSemaphore <- struct{}{}:
-					defer func() { <-fetchSemaphore }()
-				case <-ctx.Done():
-					memberResults[resultIndex].err = ctx.Err()
-					return
-				}
-				memberResults[resultIndex].products, memberResults[resultIndex].err = serviceContext.CatalogService.ListLiveBrandOffers(ctx, regionID, distributorID, requestBody.CategoryIDs)
-				if memberResults[resultIndex].err == nil && len(requestBody.CategoryIDs) > 0 {
-					memberResults[resultIndex].allProducts, memberResults[resultIndex].err = serviceContext.CatalogService.ListLiveBrandOffers(ctx, regionID, distributorID, nil)
-				} else {
-					memberResults[resultIndex].allProducts = memberResults[resultIndex].products
-				}
-			}(memberIndex, member.RegionID, member.DistributorID)
-		}
-		fetchWaitGroup.Wait()
-		for memberIndex, member := range members {
-			memberResult := memberResults[memberIndex]
-			if memberResult.err != nil {
-				return publishBatchPlan{}, memberResult.err
-			}
-			memberKey := member.RegionID + ":" + member.DistributorID
-			for _, product := range memberResult.products {
-				product["_source_regions"] = []string{member.RegionID}
-				product["_source_member_ids"] = []string{memberKey}
-				product["_source_item_ids"] = []string{firstProductString(product, "default_item_id", "item_id", "goods_id")}
-				product["_primary_region"] = member.RegionID
-				products = append(products, product)
-			}
-			for _, product := range memberResult.allProducts {
-				product["_source_regions"] = []string{member.RegionID}
-				product["_source_member_ids"] = []string{memberKey}
-				product["_source_item_ids"] = []string{firstProductString(product, "default_item_id", "item_id", "goods_id")}
-				product["_primary_region"] = member.RegionID
-				allScopeProducts = append(allScopeProducts, product)
-			}
-			catalogSnapshots = append(catalogSnapshots, catalog.PublishSourceSnapshot{BrandProfileID: profile.ID, BrandName: member.SourceName, RegionID: member.RegionID, DistributorID: member.DistributorID, Products: memberResult.allProducts, Complete: true})
-		}
-		products = mergePublishProductsByItemNo(products)
-		allScopeProducts = mergePublishProductsByItemNo(allScopeProducts)
-	} else if requestBody.SourceType == "live" {
-		liveProducts, err := serviceContext.CatalogService.ListLiveBrandOffers(ctx, requestBody.RegionID, requestBody.DistributorID, requestBody.CategoryIDs)
-		if err != nil {
-			return publishBatchPlan{}, err
-		}
-		products = liveProducts
-		if len(requestBody.CategoryIDs) > 0 {
-			allScopeProducts, err = serviceContext.CatalogService.ListLiveBrandOffers(ctx, requestBody.RegionID, requestBody.DistributorID, nil)
-			if err != nil {
-				return publishBatchPlan{}, err
-			}
-		} else {
-			allScopeProducts = products
-		}
-		catalogSnapshots = append(catalogSnapshots, catalog.PublishSourceSnapshot{BrandName: requestBody.BrandName, RegionID: requestBody.RegionID, DistributorID: requestBody.DistributorID, Products: allScopeProducts, Complete: true})
-	} else {
-		brandStore, err := serviceContext.CatalogService.GetBrandStore(ctx, requestBody.BrandStoreID)
-		if err != nil {
-			return publishBatchPlan{}, err
-		}
-		plan.BrandName = brandStore.BrandName
-		plan.RegionID = brandStore.RegionID
-		plan.DistributorID = brandStore.DistributorID
-		categoryFilter := strings.Join(requestBody.CategoryIDs, ",")
-		result, err := serviceContext.CatalogService.ListOffers(ctx, requestBody.AccountID, brandStore.RegionID, requestBody.BrandStoreID, categoryFilter, "", 1, 60, false, "")
-		if err != nil {
-			return publishBatchPlan{}, err
-		}
-		products = append([]map[string]any{}, result.List...)
-		allScopeProducts = append([]map[string]any{}, products...)
-		if len(requestBody.CategoryIDs) > 0 {
-			allScopeProducts = []map[string]any{}
-		}
-		for page := 2; len(products) < int(result.Total); page++ {
-			pageResult, pageErr := serviceContext.CatalogService.ListOffers(ctx, requestBody.AccountID, brandStore.RegionID, requestBody.BrandStoreID, categoryFilter, "", page, 60, false, "")
-			if pageErr != nil {
-				return publishBatchPlan{}, pageErr
-			}
-			products = append(products, pageResult.List...)
-			if len(pageResult.List) == 0 {
-				break
-			}
-		}
-		if len(requestBody.CategoryIDs) > 0 {
-			allResult, allErr := serviceContext.CatalogService.ListOffers(ctx, requestBody.AccountID, brandStore.RegionID, requestBody.BrandStoreID, "", "", 1, 60, false, "")
-			if allErr != nil {
-				return publishBatchPlan{}, allErr
-			}
-			allScopeProducts = append(allScopeProducts, allResult.List...)
-			for page := 2; len(allScopeProducts) < int(allResult.Total); page++ {
-				allPageResult, allPageErr := serviceContext.CatalogService.ListOffers(ctx, requestBody.AccountID, brandStore.RegionID, requestBody.BrandStoreID, "", "", page, 60, false, "")
-				if allPageErr != nil {
-					return publishBatchPlan{}, allPageErr
-				}
-				allScopeProducts = append(allScopeProducts, allPageResult.List...)
-				if len(allPageResult.List) == 0 {
-					break
-				}
-			}
-		}
-	}
-	serviceContext.CatalogService.IngestPublishSnapshotsAsync(catalogSnapshots)
-	if plan.BrandProfileID == "" {
-		plan.SourceRegions = []string{plan.RegionID}
-		plan.SourceMemberIDs = []string{plan.RegionID + ":" + plan.DistributorID}
-		for _, p := range products {
-			p["_source_regions"] = plan.SourceRegions
-			p["_source_member_ids"] = plan.SourceMemberIDs
-		}
-		for _, p := range allScopeProducts {
-			p["_source_regions"] = plan.SourceRegions
-			p["_source_member_ids"] = plan.SourceMemberIDs
-		}
-		products = mergePublishProductsByItemNo(products)
-		allScopeProducts = mergePublishProductsByItemNo(allScopeProducts)
-	}
-	if len(requestBody.ItemNos) > 0 {
-		requestedItemNos := make(map[string]struct{}, len(requestBody.ItemNos))
-		for _, itemNo := range requestBody.ItemNos {
-			requestedItemNos[itemNo] = struct{}{}
-		}
-		filteredProducts := make([]map[string]any, 0, len(products))
-		for _, product := range products {
-			if _, exists := requestedItemNos[strings.ToUpper(productString(product, "item_no"))]; exists {
-				filteredProducts = append(filteredProducts, product)
-			}
-		}
-		products = filteredProducts
-	}
-	plan.Total = len(products)
-	products, filterSkipped := filterPublishProducts(products, requestBody)
-	plan.Skipped = append(plan.Skipped, filterSkipped...)
-	detailValidations := validatePublishProductDetails(ctx, serviceContext, products)
-	itemNos := make([]string, 0, len(products))
-	for _, product := range products {
-		itemNos = append(itemNos, productString(product, "item_no"))
-	}
-	existingTaskNos, err := serviceContext.PublishRepository.ExistingItemNos(ctx, plan.AccountID, itemNos)
-	if err != nil {
+	state := &publishPlanBuildState{service: serviceContext, request: requestBody, plan: publishBatchPlan{
+		AccountID: requestBody.AccountID, SourceType: requestBody.SourceType, BrandProfileID: requestBody.BrandProfileID,
+		BrandStoreID: requestBody.BrandStoreID, DistributorID: requestBody.DistributorID, BrandName: requestBody.BrandName,
+		RegionID: requestBody.RegionID, CategoryIDs: requestBody.CategoryIDs, CategoryNames: requestBody.CategoryNames,
+		Candidates: []map[string]any{}, Skipped: []model.PublishBatchSkip{}, ActionMode: requestBody.ActionMode,
+		SourceSnapshotVersion: aggregateSnapshotVersion, SourceRequest: requestBody,
+	}}
+	if err := state.validateAccount(ctx); err != nil {
 		return publishBatchPlan{}, err
 	}
-	listings, err := serviceContext.ListingRepository.List(ctx, plan.AccountID, model.XianyuPlatform, 5000)
-	if err != nil {
+	if err := state.loadSources(ctx); err != nil {
 		return publishBatchPlan{}, err
 	}
-	listedItemNos := make(map[string]struct{}, len(listings))
-	listingNos := []string{}
-	for _, listing := range listings {
-		listingNos = append(listingNos, listing.ItemNo)
-	}
-	busyListings, busyErr := serviceContext.PublishRepository.ExistingItemNos(ctx, plan.AccountID, listingNos)
-	if busyErr != nil {
-		return publishBatchPlan{}, busyErr
-	}
-	for _, listing := range listings {
-		listedItemNos[strings.ToUpper(strings.TrimSpace(listing.ItemNo))] = struct{}{}
-	}
-	// 全部在售链接用于查重；只有明确由系统发布且未独立维护的链接参与编辑和下架。
-	listings, err = serviceContext.ListingRepository.FilterManagedListings(ctx, plan.AccountID, listings)
-	if err != nil {
+	actions := &publishPlanActions{build: state}
+	if err := actions.loadListings(ctx); err != nil {
 		return publishBatchPlan{}, err
 	}
-	// 只有确实缺少正式在售商品时，才刷新一次账号级下架快照并批量匹配历史商品。
-	potentialItemNos := make([]string, 0)
-	for _, product := range products {
-		itemNo := strings.ToUpper(productString(product, "item_no"))
-		if itemNo == "" {
-			continue
-		}
-		if _, listed := listedItemNos[itemNo]; listed {
-			continue
-		}
-		if _, busy := existingTaskNos[itemNo]; busy {
-			continue
-		}
-		potentialItemNos = append(potentialItemNos, itemNo)
+	state.refreshRequiredSources(ctx, actions)
+	if err := ctx.Err(); err != nil {
+		return publishBatchPlan{}, err
 	}
-	historyByItemNo := make(map[string][]model.MarketplaceListing)
-	if len(potentialItemNos) > 0 {
-		if err := serviceContext.MarketplaceService.EnsureOffShelfSnapshot(ctx, plan.AccountID); err != nil {
-			return publishBatchPlan{}, fmt.Errorf("读取闲鱼下架历史失败：%w", err)
-		}
-		historyListings, historyErr := serviceContext.ListingRepository.ListOffShelfByItemNos(ctx, plan.AccountID, potentialItemNos)
-		if historyErr != nil {
-			return publishBatchPlan{}, historyErr
-		}
-		historyListings, historyErr = serviceContext.ListingRepository.FilterManagedListings(ctx, plan.AccountID, historyListings)
-		if historyErr != nil {
-			return publishBatchPlan{}, historyErr
-		}
-		for _, historyListing := range historyListings {
-			if historyListing.BrandProfileID != "" && !listingBelongsToPlan(historyListing, plan) {
-				continue
-			}
-			itemNo := strings.ToUpper(strings.TrimSpace(historyListing.ItemNo))
-			historyByItemNo[itemNo] = append(historyByItemNo[itemNo], historyListing)
-		}
+	products, filtered := filterPublishProducts(state.products, requestBody)
+	state.products = products
+	state.plan.Skipped = append(state.plan.Skipped, filtered...)
+	if err := actions.loadHistory(ctx); err != nil {
+		return publishBatchPlan{}, err
 	}
-	// 已在售商品详情使用受控并发核对，避免数百件商品串行请求拖慢整个预览。
-	type productUpdateResult struct {
-		matched   bool
-		updates   []model.PublishTask
-		unchanged int
-		err       error
+	if err := actions.planUpdates(ctx); err != nil {
+		return publishBatchPlan{}, err
 	}
-	updateResults := make([]productUpdateResult, len(products))
-	updateSemaphore := make(chan struct{}, 4)
-	var updateWaitGroup sync.WaitGroup
-	for productIndex, product := range products {
-		itemNo := strings.ToUpper(productString(product, "item_no"))
-		if detailValidations[itemNo].missing {
-			continue
-		}
-		if _, listed := listedItemNos[itemNo]; !listed {
-			continue
-		}
-		productIndex, product := productIndex, product
-		updateWaitGroup.Add(1)
-		go func() {
-			defer updateWaitGroup.Done()
-			select {
-			case updateSemaphore <- struct{}{}:
-				defer func() { <-updateSemaphore }()
-			case <-ctx.Done():
-				updateResults[productIndex].err = ctx.Err()
-				return
-			}
-			for _, listing := range listings {
-				if !strings.EqualFold(listing.ItemNo, itemNo) || !listingBelongsToPlan(listing, plan) {
-					continue
-				}
-				updateResults[productIndex].matched = true
-				updated, changed, editErr := planListingUpdate(ctx, serviceContext, plan, product, listing)
-				if editErr != nil {
-					updateResults[productIndex].err = editErr
-					return
-				}
-				if changed {
-					updateResults[productIndex].updates = append(updateResults[productIndex].updates, updated)
-				} else {
-					updateResults[productIndex].unchanged++
-				}
-			}
-		}()
-	}
-	updateWaitGroup.Wait()
-	for _, updateResult := range updateResults {
-		if updateResult.err != nil {
-			return publishBatchPlan{}, updateResult.err
-		}
-	}
-	// 指定货号是单品发布，不执行整品牌缺失商品对账，避免误下架其他商品。
-	if len(requestBody.ItemNos) == 0 {
-		currentItemNos := make(map[string]struct{}, len(allScopeProducts))
-		for _, product := range allScopeProducts {
-			currentItemNos[strings.ToUpper(productString(product, "item_no"))] = struct{}{}
-		}
-		for itemNo, validation := range detailValidations {
-			if validation.missing {
-				delete(currentItemNos, itemNo)
-			}
-		}
-		for _, listing := range listings {
-			if !listingBelongsToPlan(listing, plan) {
-				continue
-			}
-			if _, busy := busyListings[strings.ToUpper(strings.TrimSpace(listing.ItemNo))]; busy {
-				continue
-			}
-			if _, exists := currentItemNos[strings.ToUpper(strings.TrimSpace(listing.ItemNo))]; !exists {
-				plan.OfflineListings = append(plan.OfflineListings, listing)
-			}
-		}
-	} else {
-		requestedItemNos := make(map[string]struct{}, len(requestBody.ItemNos))
-		for _, itemNo := range requestBody.ItemNos {
-			requestedItemNos[strings.ToUpper(strings.TrimSpace(itemNo))] = struct{}{}
-		}
-		for _, listing := range listings {
-			itemNo := strings.ToUpper(strings.TrimSpace(listing.ItemNo))
-			if _, requested := requestedItemNos[itemNo]; !requested || !detailValidations[itemNo].missing {
-				continue
-			}
-			if listingBelongsToPlan(listing, plan) {
-				plan.OfflineListings = append(plan.OfflineListings, listing)
-			}
-		}
-	}
-	// 当前计划中已经收录的货号，避免同品牌重复商品进入队列。
-	selectedItemNos := make(map[string]struct{}, len(products))
-	for productIndex, product := range products {
-		itemNo := strings.ToUpper(productString(product, "item_no"))
-		title := productString(product, "item_name")
-		reason := ""
-		validation := detailValidations[itemNo]
-		if itemNo == "" || title == "" || productString(product, "main_img") == "" {
-			reason = "商品信息不完整"
-		} else if validation.err != nil && !validation.missing {
-			reason = "商详核对失败，未操作：" + validation.err.Error()
-		} else if validation.missing {
-			if _, listed := listedItemNos[itemNo]; listed {
-				continue
-			}
-		} else if productNumber(product, "item_total_store") <= 0 && productNumber(product, "store") <= 0 {
-			reason = "库存为 0"
-		} else if _, exists := existingTaskNos[itemNo]; exists {
-			reason = "已有进行中的发布任务"
-		} else if _, exists := listedItemNos[itemNo]; exists {
-			updateResult := updateResults[productIndex]
-			if updateResult.matched {
-				plan.Updates = append(plan.Updates, updateResult.updates...)
-				plan.Unchanged += updateResult.unchanged
-				continue
-			}
-			reason = "已在售但来源未关联，请先确认品牌归属"
-		} else if _, exists := selectedItemNos[itemNo]; exists {
-			reason = "当前品牌存在重复货号"
-		}
-		if reason != "" {
-			plan.Skipped = append(plan.Skipped, model.PublishBatchSkip{ItemNo: itemNo, Title: title, Reason: reason})
-			continue
-		}
-		selectedItemNos[itemNo] = struct{}{}
-		historyListings := historyByItemNo[itemNo]
-		matchedRelist := false
-		for historyIndex, historyListing := range historyListings {
-			relistTask, relistErr := planListingRelist(plan, product, historyListing)
-			if relistErr != nil {
-				continue
-			}
-			for duplicateIndex, duplicateListing := range historyListings {
-				if duplicateIndex != historyIndex {
-					relistTask.DuplicateXianyuItemIDs = append(relistTask.DuplicateXianyuItemIDs, duplicateListing.PlatformItemID)
-				}
-			}
-			plan.Relists = append(plan.Relists, relistTask)
-			matchedRelist = true
-			break
-		}
-		if !matchedRelist {
-			plan.Candidates = append(plan.Candidates, product)
-		}
-	}
-	applyPublishActionMode(&plan)
-	return plan, nil
+	actions.appendMissingOfflines()
+	actions.selectActivations()
+	applyPublishActionMode(&state.plan)
+	return state.plan, nil
 }
 
 // applyPublishActionMode 移除方案未授权的任务类型，避免常用方案意外发布或下架。
@@ -811,6 +457,9 @@ func buildBatchPublishTask(batchID string, plan publishBatchPlan, product map[st
 			}
 		}
 	}
+	if err := model.ValidateListingSourcePriceCeiling(sourcePriceCents, originalPriceCents, priceCents, variants); err != nil {
+		return model.PublishTask{}, err
+	}
 	minDelaySeconds := plan.MinDelaySeconds
 	maxDelaySeconds := plan.MaxDelaySeconds
 	if minDelaySeconds == 0 {
@@ -819,45 +468,20 @@ func buildBatchPublishTask(batchID string, plan publishBatchPlan, product map[st
 	if maxDelaySeconds == 0 {
 		maxDelaySeconds = defaultMaxPublishDelaySeconds
 	}
-	return model.PublishTask{ID: primitive.NewObjectID().Hex(), AccountID: plan.AccountID, BatchID: batchID, SourceItemID: firstProductString(product, "default_item_id", "item_id", "goods_id"), ItemNo: itemNo, Title: buildPublishTitle(title, itemNo), Description: description, PriceCents: priceCents, SourcePriceCents: sourcePriceCents, OriginalPriceCents: originalPriceCents, CategoryIDs: categoryIDs, CategoryNames: categoryNames, ImageURLs: images, RegionID: plan.RegionID, Brand: brandName, BrandProfileID: plan.BrandProfileID, SourceType: plan.SourceType, SourceRegions: productStringSlice(product, "_source_regions", plan.SourceRegions), SourceMemberIDs: productStringSlice(product, "_source_member_ids", plan.SourceMemberIDs), SourceItemIDs: productStringSlice(product, "_source_item_ids", []string{firstProductString(product, "default_item_id", "item_id", "goods_id")}), Condition: "全新", AvailableSizes: availableSizes, Variants: variants, IsFootwear: isFootwear, MinDelaySeconds: minDelaySeconds, MaxDelaySeconds: maxDelaySeconds, Status: model.PublishTaskQueued, PublishedAt: createdAt, CreatedAt: createdAt, UpdatedAt: createdAt}, nil
+	return model.PublishTask{ID: primitive.NewObjectID().Hex(), AccountID: plan.AccountID, BatchID: batchID, SourceSyncVersion: plan.SourceSyncVersion, ReconcileMode: plan.ActionMode, Quantity: sourceAvailableStock(product), SourceItemID: firstProductString(product, "default_item_id", "item_id", "goods_id"), ItemNo: itemNo, Title: buildPublishTitle(title, itemNo), Description: description, PriceCents: priceCents, SourcePriceCents: sourcePriceCents, OriginalPriceCents: originalPriceCents, CategoryIDs: categoryIDs, CategoryNames: categoryNames, ImageURLs: images, RegionID: plan.RegionID, Brand: brandName, BrandProfileID: plan.BrandProfileID, SourceType: plan.SourceType, SourceRegions: productStringSlice(product, "_source_regions", plan.SourceRegions), SourceMemberIDs: productStringSlice(product, "_source_member_ids", plan.SourceMemberIDs), SourceItemIDs: productStringSlice(product, "_source_item_ids", []string{firstProductString(product, "default_item_id", "item_id", "goods_id")}), Condition: "全新", AvailableSizes: availableSizes, Variants: variants, IsFootwear: isFootwear, MinDelaySeconds: minDelaySeconds, MaxDelaySeconds: maxDelaySeconds, Status: model.PublishTaskQueued, PublishedAt: createdAt, CreatedAt: createdAt, UpdatedAt: createdAt}, nil
 }
 
-// buildPublishTitle 将货号固定放在标题末尾，并优先截断过长的商品名称。
+// buildPublishTitle 保留完整商品名称和货号，作为宝贝描述首行，不再自行截短。
 func buildPublishTitle(title, itemNo string) string {
 	cleanTitle := cleanPublishSourceTitle(title, itemNo)
-	const maxTitleLength = 30
-	prefix := "全新"
-	fixedLength := len([]rune(prefix))
+	parts := []string{"全新"}
+	if cleanTitle != "" {
+		parts = append(parts, cleanTitle)
+	}
 	if itemNo != "" {
-		fixedLength += len([]rune(itemNo)) + 1
+		parts = append(parts, itemNo)
 	}
-	nameLimit := maxTitleLength - fixedLength - 1
-	if nameLimit < 0 {
-		nameLimit = 0
-	}
-	cleanTitle = truncatePublishTitleName(cleanTitle, nameLimit)
-	return strings.TrimSpace(strings.Join([]string{prefix, cleanTitle, itemNo}, " "))
-}
-
-// truncatePublishTitleName 截断商品名称，并避免保留被截断的半个英文单词。
-func truncatePublishTitleName(value string, maxLength int) string {
-	runes := []rune(strings.TrimSpace(value))
-	if len(runes) <= maxLength {
-		return string(runes)
-	}
-	truncatedRunes := runes[:maxLength]
-	if maxLength > 0 && isASCIIWordRune(truncatedRunes[maxLength-1]) && isASCIIWordRune(runes[maxLength]) {
-		lastSpaceIndex := strings.LastIndex(string(truncatedRunes), " ")
-		if lastSpaceIndex >= 0 {
-			return strings.TrimSpace(string(truncatedRunes)[:lastSpaceIndex])
-		}
-	}
-	return strings.TrimSpace(string(truncatedRunes))
-}
-
-// isASCIIWordRune 判断字符是否属于英文或数字单词。
-func isASCIIWordRune(value rune) bool {
-	return value >= '0' && value <= '9' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
+	return strings.Join(parts, " ")
 }
 
 // cleanPublishSourceTitle 清理旧模板前缀及标题末尾重复货号。
@@ -874,8 +498,9 @@ func cleanPublishSourceTitle(title, itemNo string) string {
 }
 
 // buildPublishDescription 生成所有 SKU 发布共用的唯一商品描述模板。
-func buildPublishDescription(_ string, itemNo string, originalPriceCents int64, sizes []string, shippingRegionName string, publishedAt, updatedAt time.Time) string {
+func buildPublishDescription(title string, itemNo string, originalPriceCents int64, sizes []string, shippingRegionName string, publishedAt, updatedAt time.Time) string {
 	descriptionLines := []string{
+		buildPublishTitle(title, itemNo),
 		"",
 		"货号：" + itemNo,
 	}
@@ -1104,10 +729,10 @@ func publishBatchSkipResponses(skips []model.PublishBatchSkip) []types.PublishBa
 }
 
 // publishBatchOfflineCandidateResponses 转换品牌对账产生的待下架商品。
-func publishBatchOfflineCandidateResponses(listings []model.MarketplaceListing) []types.PublishBatchOfflineCandidateResponse {
-	responses := make([]types.PublishBatchOfflineCandidateResponse, 0, len(listings))
-	for _, listing := range listings {
-		responses = append(responses, types.PublishBatchOfflineCandidateResponse{PlatformItemID: listing.PlatformItemID, ItemNo: listing.ItemNo, Title: listing.Title, PriceCents: listing.PriceCents, ImageURL: listing.ImageURL, ItemURL: listing.ItemURL})
+func publishBatchOfflineCandidateResponses(plan publishBatchPlan) []types.PublishBatchOfflineCandidateResponse {
+	responses := make([]types.PublishBatchOfflineCandidateResponse, 0, len(plan.OfflineListings))
+	for _, listing := range plan.OfflineListings {
+		responses = append(responses, types.PublishBatchOfflineCandidateResponse{PlatformItemID: listing.PlatformItemID, ItemNo: listing.ItemNo, Title: listing.Title, PriceCents: listing.PriceCents, ImageURL: listing.ImageURL, ItemURL: listing.ItemURL, ChangeReasons: offlineListingReasons(plan, listing)})
 	}
 	return responses
 }
@@ -1202,7 +827,7 @@ func normalizeItemNos(itemNos []string) []string {
 	values := make([]string, 0, len(itemNos))
 	seen := make(map[string]struct{}, len(itemNos))
 	for _, itemNo := range itemNos {
-		normalized := strings.ToUpper(strings.TrimSpace(itemNo))
+		normalized := model.ItemNoKey(itemNo)
 		if normalized == "" {
 			continue
 		}
@@ -1270,7 +895,7 @@ func mergePublishProductsByItemNo(products []map[string]any) []map[string]any {
 		if json.Unmarshal(encoded, &product) != nil {
 			continue
 		}
-		itemNo := strings.ToUpper(productString(product, "item_no"))
+		itemNo := model.ItemNoKey(productString(product, "item_no"))
 		if itemNo == "" {
 			continue
 		}
@@ -1348,59 +973,9 @@ type publishDetailValidation struct {
 	err     error
 }
 
-// validatePublishProductDetails 并发核对商品全部来源，任一地区商详有效即视为可售。
+// validatePublishProductDetails 与计划和执行复用同一库存核验，禁止只以商详存在判断可售。
 func validatePublishProductDetails(ctx context.Context, serviceContext *svc.ServiceContext, products []map[string]any) map[string]publishDetailValidation {
-	results := make(map[string]publishDetailValidation, len(products))
-	var resultsMutex sync.Mutex
-	var validationWaitGroup sync.WaitGroup
-	for _, product := range products {
-		product := product
-		itemNo := strings.ToUpper(productString(product, "item_no"))
-		if itemNo == "" {
-			continue
-		}
-		validationWaitGroup.Add(1)
-		go func() {
-			defer validationWaitGroup.Done()
-			candidates, _ := product["_source_detail_candidates"].([]any)
-			if len(candidates) == 0 {
-				candidates = []any{product}
-			}
-			missingCount := 0
-			var uncertainErr error
-			for _, rawCandidate := range candidates {
-				candidate, validCandidate := rawCandidate.(map[string]any)
-				if !validCandidate {
-					continue
-				}
-				regionID := firstProductString(candidate, "_primary_region", "regionauth_id")
-				detail, detailErr := serviceContext.CatalogService.GetLiveProductDetail(ctx, candidate, regionID)
-				if detailErr == nil && strings.EqualFold(productString(detail, "item_no"), itemNo) {
-					enrichProductSpecImages(product, detail)
-					resultsMutex.Lock()
-					results[itemNo] = publishDetailValidation{}
-					resultsMutex.Unlock()
-					return
-				}
-				if detailErr == nil {
-					detailErr = fmt.Errorf("商详货号与列表货号不一致")
-				}
-				if catalog.IsExplicitMissingProductError(detailErr) {
-					missingCount++
-					continue
-				}
-				uncertainErr = detailErr
-			}
-			validation := publishDetailValidation{err: uncertainErr}
-			if uncertainErr == nil && missingCount == len(candidates) {
-				validation = publishDetailValidation{missing: true, err: fmt.Errorf("全部来源商详均不存在或已下架")}
-			}
-			resultsMutex.Lock()
-			results[itemNo] = validation
-			resultsMutex.Unlock()
-		}()
-	}
-	validationWaitGroup.Wait()
+	_, results := refreshPublishSources(ctx, syncedSourceDetail, products)
 	return results
 }
 
@@ -1496,44 +1071,17 @@ func productSpecLabel(item map[string]any) string {
 
 // filterPublishProducts 按用户填写的售价和折扣率范围筛选商品，空范围不产生限制。
 func filterPublishProducts(products []map[string]any, requestBody types.CreatePublishBatchRequest) ([]map[string]any, []model.PublishBatchSkip) {
-	priceFilterEnabled := requestBody.MinPriceCents > 0 || requestBody.MaxPriceCents > 0
-	discountFilterEnabled := requestBody.MinDiscountRate > 0 || requestBody.MaxDiscountRate > 0
-	if !priceFilterEnabled && !discountFilterEnabled && !requestBody.ExcludeBrokenSizeItems {
-		return products, nil
-	}
-	filteredProducts := make([]map[string]any, 0, len(products))
+	filtered := make([]map[string]any, 0, len(products))
 	skipped := make([]model.PublishBatchSkip, 0)
 	for _, product := range products {
-		publishedPrice := batchPriceCents(productNumber(product, "activity_price"), productNumber(product, "price"))
-		sourcePrice := productNumber(product, "activity_price")
-		if sourcePrice <= 0 {
-			sourcePrice = productNumber(product, "price")
-		}
-		marketPrice := productNumber(product, "market_price")
-		discountRate := 0
-		if marketPrice > 0 && sourcePrice > 0 {
-			discountRate = int((sourcePrice*100 + marketPrice/2) / marketPrice)
-		}
-		priceOutOfRange := (requestBody.MinPriceCents > 0 && publishedPrice < requestBody.MinPriceCents) || (requestBody.MaxPriceCents > 0 && publishedPrice > requestBody.MaxPriceCents)
-		discountOutOfRange := (requestBody.MinDiscountRate > 0 && discountRate < requestBody.MinDiscountRate) || (requestBody.MaxDiscountRate > 0 && (discountRate == 0 || discountRate > requestBody.MaxDiscountRate))
-		brokenSizeExcluded := requestBody.ExcludeBrokenSizeItems && isBrokenSizeProducts([]map[string]any{product})
-		if priceOutOfRange || discountOutOfRange || brokenSizeExcluded {
-			reasons := make([]string, 0, 3)
-			if priceOutOfRange {
-				reasons = append(reasons, fmt.Sprintf("发布售价%s不在筛选区间", formatPriceYuan(publishedPrice)))
-			}
-			if discountOutOfRange {
-				reasons = append(reasons, fmt.Sprintf("折扣率%d%%不在筛选区间", discountRate))
-			}
-			if brokenSizeExcluded {
-				reasons = append(reasons, "鞋服商品仅剩一个可售尺码，已按设置跳过")
-			}
+		reasons := publishProductExclusionReasons(product, requestBody)
+		if len(reasons) > 0 {
 			skipped = append(skipped, model.PublishBatchSkip{ItemNo: productString(product, "item_no"), Title: productString(product, "item_name"), Reason: strings.Join(reasons, "；")})
 			continue
 		}
-		filteredProducts = append(filteredProducts, product)
+		filtered = append(filtered, product)
 	}
-	return filteredProducts, skipped
+	return filtered, skipped
 }
 
 // formatPriceYuan 将分转换为便于跳过原因展示的元文案。

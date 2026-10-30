@@ -89,7 +89,11 @@ func (repository *XianyuAccountRepository) Update(ctx context.Context, accountID
 	if status != "" {
 		fields["status"] = status
 	}
-	result, err := repository.collection.UpdateOne(ctx, bson.M{"_id": accountID}, bson.M{"$set": fields})
+	update := bson.M{"$set": fields}
+	if status == model.XianyuAccountActive {
+		update["$unset"] = bson.M{"queueStopReason": "", "queueStoppedAt": ""}
+	}
+	result, err := repository.collection.UpdateOne(ctx, bson.M{"_id": accountID}, update)
 	if err != nil {
 		return err
 	}

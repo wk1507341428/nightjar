@@ -10,6 +10,7 @@ type MarketplaceListing struct {
 	PlatformItemID  string     `bson:"platformItemId" json:"platformItemId"`
 	SourceItemID    string     `bson:"sourceItemId,omitempty" json:"sourceItemId,omitempty"`
 	ItemNo          string     `bson:"itemNo,omitempty" json:"itemNo,omitempty"`
+	ItemNoKey       string     `bson:"itemNoKey,omitempty" json:"-"`
 	Title           string     `bson:"title" json:"title"`
 	PriceCents      int64      `bson:"priceCents" json:"priceCents"`
 	ImageURL        string     `bson:"imageUrl,omitempty" json:"imageUrl,omitempty"`

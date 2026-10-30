@@ -131,7 +131,7 @@ export function PriceHistoryPage({ offerId, onBack }: { offerId: string; onBack:
     <main className="price-history-page">
       <header className="price-history-header">
         <button type="button" onClick={onBack}>← 返回商品详情</button>
-        <div><small>PRICE ARCHIVE / SKU LEDGER</small><h1>价格走势</h1><p>只记录首次价格与真实变价节点，避免重复同步制造噪声。</p></div>
+        <div><small>PRICE ARCHIVE / SKU LEDGER</small><h1>价格走势</h1><p>按完整同步版本查看 SKU 价格和库存变化。</p></div>
       </header>
 
       {isLoading ? <div className="price-history-loading"><Spin size="large" /><span>正在整理 SKU 价格档案…</span></div> : null}

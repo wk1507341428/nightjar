@@ -48,6 +48,8 @@ export interface ProductCategoryNode {
 
 /** 商品搜索结果。 */
 export interface ProductSummary {
+	/** 最近完整同步时的商品销售状态。 */
+	approve_status?: string;
   catalog_offer_id?: string;
   goods_id?: string;
   item_id?: string;
@@ -251,6 +253,8 @@ export interface MarketplaceListing {
 	platform: 'xianyu' | 'taobao' | string;
 	platformItemId: string;
 	sourceItemId?: string;
+	brandProfileId?: string;
+	brandProfileName?: string;
 	itemNo?: string;
 	title: string;
 	priceCents: number;
@@ -471,7 +475,7 @@ export interface PublishBatchPreview {
 	publishable: number;
 	selected: number;
 	skipped: PublishBatchSkip[];
-	offlineCandidates: Array<{ platformItemId: string; itemNo: string; title: string; priceCents: number; imageUrl?: string; itemUrl?: string }>;
+	offlineCandidates: Array<{ platformItemId: string; itemNo: string; title: string; priceCents: number; imageUrl?: string; itemUrl?: string; changeReasons?: string[] }>;
 }
 
 /** 当前品牌批量发布进度。 */
@@ -524,6 +528,8 @@ export interface PublishOperationListResponse {
 /** 品牌批量发布的筛选与节奏配置。 */
 export interface PublishBatchSettings {
 	accountId: string;
+	/** 同轮常用方案复用只读货源，不跨轮复用库存。 */
+	sourceSnapshotId?: string;
 	previewId?: string;
 	/** 用户确认保留、不加入下架队列的闲鱼商品 ID。 */
 	preservedOfflinePlatformItemIds?: string[];

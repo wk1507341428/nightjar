@@ -10,7 +10,6 @@ import (
 	"sidejob-server/internal/svc"
 	"sidejob-server/internal/xianyu"
 	"strings"
-	"time"
 )
 
 const (
@@ -131,7 +130,7 @@ func prepareRetryContent(ctx context.Context, sc *svc.ServiceContext, task model
 	if err := sc.MarketplaceService.EnsureRetrySnapshot(ctx, task.AccountID, retryRequiresFreshSnapshot(task.ErrorMessage)); err != nil {
 		return task, fmt.Errorf("重试前核对闲鱼在售状态失败：%w", err)
 	}
-	listed, err := sc.ListingRepository.ListByItemNos(ctx, task.AccountID, "xianyu", []string{task.ItemNo})
+	listed, err := sc.ListingRepository.ListActivationConflictsByItemNos(ctx, task.AccountID, "xianyu", []string{task.ItemNo})
 	if err != nil {
 		return task, err
 	}
@@ -141,16 +140,7 @@ func prepareRetryContent(ctx context.Context, sc *svc.ServiceContext, task model
 	if task.BrandProfileID != "" || len(task.SourceMemberIDs) > 0 {
 		return refreshReconcileTask(ctx, sc, task)
 	}
-	product, err := sc.CatalogService.GetLiveProductDetail(ctx, map[string]any{"default_item_id": task.SourceItemID, "item_no": task.ItemNo}, task.RegionID)
-	if err != nil {
-		return task, err
-	}
-	updated, err := buildBatchPublishTask(task.BatchID, publishBatchPlan{RegionID: task.RegionID, BrandName: task.Brand, MinDelaySeconds: task.MinDelaySeconds, MaxDelaySeconds: task.MaxDelaySeconds}, product, time.Now())
-	if err != nil {
-		return task, err
-	}
-	updated.ID = task.ID
-	return updated, nil
+	return task, fmt.Errorf("旧版任务缺少同步货源，请重新生成预览")
 }
 
 // 对发布结果可能不确定的错误强制刷新，避免超时后重复发布；已知准备失败可复用快照。

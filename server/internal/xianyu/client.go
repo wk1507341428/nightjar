@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zeromicro/go-zero/core/logx"
+
 	"sidejob-server/internal/config"
 )
 
@@ -134,6 +136,8 @@ func (client *Client) call(ctx context.Context, api string, version string, requ
 		if isSessionError(code) {
 			return ErrSessionExpired
 		}
+		// Persist only the business response identity; never log signed URLs, request bodies or cookies.
+		logx.Errorf("xianyu business response api=%s code=%s message=%s ret=%s", api, code, message, mustJSON(envelope.Ret))
 		return &APIError{Code: code, Message: message}
 	}
 	return ErrSessionExpired

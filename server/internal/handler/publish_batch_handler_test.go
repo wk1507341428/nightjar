@@ -60,8 +60,11 @@ func TestBuildBatchPublishTaskMatchesSingleDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build batch task: %v", err)
 	}
-	if len([]rune(task.Title)) > 30 || !strings.HasPrefix(task.Title, "全新 ") || !strings.HasSuffix(task.Title, " DM6822-410") {
+	if !strings.HasPrefix(task.Title, "全新 ") || !strings.HasSuffix(task.Title, " DM6822-410") {
 		t.Fatalf("unexpected title: %s", task.Title)
+	}
+	if !strings.Contains(task.Title, "男子拉链卫衣开衫夹克薄外套运动休闲") || !strings.HasPrefix(task.Description, task.Title+"\n\n") {
+		t.Fatalf("full product name missing: %s", task.Description)
 	}
 	if task.PriceCents != 31490 {
 		t.Fatalf("unexpected price: %d", task.PriceCents)

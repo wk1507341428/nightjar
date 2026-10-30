@@ -7,6 +7,40 @@ import { useXianyuAccount } from './XianyuAccountContext';
 /** 稳定度筛选范围。 */
 type StabilityFilter = 'all' | 'stable' | 'normal' | 'volatile' | 'pending';
 
+/** 品牌筛选中的固定选项。 */
+const MARKETPLACE_BRAND_FILTER = { ALL: 'all', UNASSIGNED: 'unassigned' } as const;
+
+/** 当前账号一项在售品牌统计。 */
+interface MarketplaceBrandCount {
+  key: string;
+  name: string;
+  count: number;
+}
+
+/** 使用真实品牌归属作为筛选键，未关联记录单独统计。 */
+function getMarketplaceBrandKey(listing: MarketplaceListing): string {
+  return listing.brandProfileId || MARKETPLACE_BRAND_FILTER.UNASSIGNED;
+}
+
+/** 汇总全部在售记录，数量不受搜索、稳定度和分页影响。 */
+function countMarketplaceBrands(listings: MarketplaceListing[]): MarketplaceBrandCount[] {
+  // 品牌档案对应的在售链接数量。
+  const counts = new Map<string, MarketplaceBrandCount>();
+  for (const listing of listings) {
+    // 当前记录所属品牌及已有统计。
+    const key = getMarketplaceBrandKey(listing);
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+    // 缺失档案名称时明确显示归属状态，不从商品标题推断。
+    const name = listing.brandProfileId ? (listing.brandProfileName || '品牌档案不可用') : '未关联品牌';
+    counts.set(key, { key, name, count: 1 });
+  }
+  return Array.from(counts.values()).sort((left, right) => right.count - left.count || left.name.localeCompare(right.name, 'zh-CN'));
+}
+
 /** 稳定度筛选选项。 */
 const STABILITY_FILTER_OPTIONS: Array<{ label: string; value: StabilityFilter }> = [
   { label: '全部稳定度', value: 'all' },
@@ -118,7 +152,15 @@ export function MarketplacePage({
   const [marketplaceKeyword, setMarketplaceKeyword] = useState('');
   // 当前稳定度筛选条件。
   const [stabilityFilter, setStabilityFilter] = useState<StabilityFilter>('all');
-  // 搜索和稳定度筛选后的渠道商品。
+  // 当前选择的品牌标签。
+  const [selectedBrandKey, setSelectedBrandKey] = useState<string>(MARKETPLACE_BRAND_FILTER.ALL);
+  // 表格分页，切换筛选时返回第一页。
+  const [pagination, setPagination] = useState({ current: 1, pageSize: 20 });
+  // 基于当前账号全部在售商品生成的品牌标签。
+  const brandCounts = useMemo(() => countMarketplaceBrands(listings), [listings]);
+  // 同步后选中品牌已无在售时自动展示全部商品。
+  const effectiveBrandKey = brandCounts.some((brand) => brand.key === selectedBrandKey) ? selectedBrandKey : MARKETPLACE_BRAND_FILTER.ALL;
+  // 搜索、品牌和稳定度筛选后的渠道商品。
   const filteredListings = useMemo(() => {
     // 用于大小写无关匹配的关键词。
     const normalizedKeyword = marketplaceKeyword.trim().toLocaleLowerCase('zh-CN');
@@ -126,9 +168,28 @@ export function MarketplacePage({
       // 当前商品可被检索的标题和货号文本。
       const searchableText = `${listing.itemNo ?? ''} ${listing.title}`.toLocaleLowerCase('zh-CN');
       return (!normalizedKeyword || searchableText.includes(normalizedKeyword))
+        && (effectiveBrandKey === MARKETPLACE_BRAND_FILTER.ALL || getMarketplaceBrandKey(listing) === effectiveBrandKey)
         && matchesStabilityFilter(listing.stability, stabilityFilter);
     });
-  }, [listings, marketplaceKeyword, stabilityFilter]);
+  }, [listings, marketplaceKeyword, stabilityFilter, effectiveBrandKey]);
+
+  /** 切换品牌标签并从第一页展示匹配商品。 */
+  function handleBrandFilterChange(brandKey: string) {
+    setSelectedBrandKey(brandKey);
+    setPagination((current) => ({ ...current, current: 1 }));
+  }
+
+  /** 搜索商品时回到第一页。 */
+  function handleKeywordChange(keyword: string) {
+    setMarketplaceKeyword(keyword);
+    setPagination((current) => ({ ...current, current: 1 }));
+  }
+
+  /** 调整稳定度筛选时回到第一页。 */
+  function handleStabilityFilterChange(filter: StabilityFilter) {
+    setStabilityFilter(filter);
+    setPagination((current) => ({ ...current, current: 1 }));
+  }
   // 渠道商品列：保留货号、售价、同步时间和原平台跳转。
   const listingColumns: ProColumns<MarketplaceListing>[] = [
     { title: '商品', dataIndex: 'title', width: 460, render: (_, listing) => <div className="marketplace-product-cell">{listing.imageUrl ? <img src={listing.imageUrl} alt="" loading="lazy" /> : <span>闲</span>}<div><strong>{listing.title}</strong><small>{listing.itemNo || '未关联货号'}</small></div></div> },
@@ -145,7 +206,27 @@ export function MarketplacePage({
       <div className="workspace-overview marketplace-overview"><ProCard className="workspace-overview-card"><small>闲鱼在售</small><strong>{listings.length.toLocaleString('zh-CN')}</strong><span>已同步商品</span></ProCard><ProCard className="workspace-overview-card"><small>最近同步</small><strong className="workspace-overview-card__date">{formatMarketplaceDate(lastSyncedAt)}</strong><span>点击右上角可手动刷新</span></ProCard></div>
       <div className="marketplace-channel-tabs" aria-label="销售渠道"><Tag color="gold">闲鱼 · {listings.length}</Tag></div>
       {errorMessage ? <div className="notice notice--error">{errorMessage}</div> : null}
-      <ProTable<MarketplaceListing> className="workspace-data-table marketplace-listing-table" rowKey="id" columns={listingColumns} dataSource={filteredListings} loading={isLoading} search={false} pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 件` }} scroll={{ x: 1080 }} headerTitle={`闲鱼在售商品 · 匹配 ${filteredListings.length.toLocaleString('zh-CN')} 件`} toolBarRender={() => [<Input.Search key="marketplace-search" allowClear value={marketplaceKeyword} onChange={(event) => setMarketplaceKeyword(event.target.value)} placeholder="搜索货号或商品标题" aria-label="搜索闲鱼在售商品" />, <Select<StabilityFilter> key="stability-filter" value={stabilityFilter} options={STABILITY_FILTER_OPTIONS} onChange={setStabilityFilter} aria-label="筛选货源稳定度" />]} options={{ density: true, reload: onRefresh }} locale={{ emptyText: '没有符合条件的闲鱼商品' }} />
+      <ProTable<MarketplaceListing>
+        className="workspace-data-table marketplace-listing-table"
+        rowKey="id"
+        columns={listingColumns}
+        dataSource={filteredListings}
+        loading={isLoading}
+        search={false}
+        pagination={{ ...pagination, onChange: (current, pageSize) => setPagination({ current, pageSize }), showSizeChanger: true, showTotal: (total) => `共 ${total} 件` }}
+        scroll={{ x: 1080 }}
+        headerTitle={`闲鱼在售商品 · 匹配 ${filteredListings.length.toLocaleString('zh-CN')} 件`}
+        toolbar={{ multipleLine: true, filter: (
+          <div className="marketplace-brand-filter" role="group" aria-label="按在售品牌筛选">
+            <span className="marketplace-brand-filter__label">在售品牌</span>
+            <button type="button" className="marketplace-brand-tag" aria-pressed={effectiveBrandKey === MARKETPLACE_BRAND_FILTER.ALL} onClick={() => handleBrandFilterChange(MARKETPLACE_BRAND_FILTER.ALL)}>全部 <strong>{listings.length.toLocaleString('zh-CN')}</strong></button>
+            {brandCounts.map((brand) => <button type="button" key={brand.key} className="marketplace-brand-tag" aria-pressed={effectiveBrandKey === brand.key} onClick={() => handleBrandFilterChange(brand.key)}>{brand.name} <strong>{brand.count.toLocaleString('zh-CN')}</strong></button>)}
+          </div>
+        ) }}
+        toolBarRender={() => [<Input.Search key="marketplace-search" allowClear value={marketplaceKeyword} onChange={(event) => handleKeywordChange(event.target.value)} placeholder="搜索货号或商品标题" aria-label="搜索闲鱼在售商品" />, <Select<StabilityFilter> key="stability-filter" value={stabilityFilter} options={STABILITY_FILTER_OPTIONS} onChange={handleStabilityFilterChange} aria-label="筛选货源稳定度" />]}
+        options={{ density: true, reload: onRefresh }}
+        locale={{ emptyText: '没有符合条件的闲鱼商品' }}
+      />
     </main>
   );
 }

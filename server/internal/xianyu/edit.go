@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // GetSellerEditDetail 读取可用于编辑的原商品快照。
@@ -28,8 +27,8 @@ func (service *Service) GetSellerEditDetail(ctx context.Context, itemID string) 
 
 // EditSellerText 基于原商品快照编辑文案，保留库存、规格和服务配置。
 func (service *Service) EditSellerText(ctx context.Context, itemID, title, description string) error {
-	if strings.TrimSpace(title) == "" || len([]rune(title)) > 30 || strings.TrimSpace(description) == "" {
-		return errors.New("编辑文案为空或标题超过30字")
+	if err := validateItemDescription(title, description); err != nil {
+		return err
 	}
 	detail, err := service.GetSellerEditDetail(ctx, itemID)
 	if err != nil {
@@ -57,7 +56,7 @@ func sellerTextEditPayload(detail map[string]any, title, description string) map
 	for key, value := range detail {
 		payload[key] = value
 	}
-	payload["itemTextDTO"] = map[string]any{"title": title, "desc": description, "titleDescSeparate": true}
+	payload["itemTextDTO"] = unifiedItemText(title, description)
 	payload["uniqueCode"] = uniqueCode()
 	payload["sourceId"] = "pcBackendPublish"
 	payload["bizcode"] = "pcMainPublish"

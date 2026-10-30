@@ -16,6 +16,8 @@ import (
 // ErrPublishTaskNotFound 表示发布任务不存在。
 var ErrPublishTaskNotFound = errors.New("publish task not found")
 
+var ErrActivePublishTaskExists = errors.New("同账号同货号已有新建或恢复任务，已阻止重复入队")
+
 // PublishTaskRepository 管理闲鱼发布任务。
 type PublishTaskRepository struct {
 	collection *mongo.Collection
@@ -40,9 +42,21 @@ func NewPublishTaskRepository(database *mongo.Database) *PublishTaskRepository {
 
 // EnsureIndexes 创建任务列表和货号查询索引。
 func (repository *PublishTaskRepository) EnsureIndexes(ctx context.Context) error {
+	if err := backfillItemNoKeys(ctx, repository.collection, true); err != nil {
+		return err
+	}
 	_, err := repository.collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "createdAt", Value: -1}}},
 		{Keys: bson.D{{Key: "accountId", Value: 1}, {Key: "itemNo", Value: 1}}},
+		{Keys: bson.D{{Key: "accountId", Value: 1}, {Key: "itemNoKey", Value: 1}}},
+		{
+			Keys: bson.D{{Key: "accountId", Value: 1}, {Key: "itemNoKey", Value: 1}},
+			Options: options.Index().SetName("active_listing_identity").SetUnique(true).SetPartialFilterExpression(bson.M{
+				"itemNoKey": bson.M{"$gt": ""},
+				"action":    bson.M{"$in": []string{model.PublishActionPublish, model.PublishActionRelist}},
+				"status":    bson.M{"$in": activePublishStatuses()},
+			}),
+		},
 		{Keys: bson.D{{Key: "accountId", Value: 1}, {Key: "xianyuItemId", Value: 1}, {Key: "updatedAt", Value: -1}}},
 		{Keys: bson.D{{Key: "batchId", Value: 1}, {Key: "createdAt", Value: 1}}},
 	})
@@ -117,7 +131,7 @@ func (repository *PublishTaskRepository) ExistingItemNos(ctx context.Context, ac
 	if accountID == model.DefaultXianyuAccountID {
 		accountFilter = append(accountFilter, bson.M{"accountId": bson.M{"$exists": false}})
 	}
-	cursor, err := repository.collection.Find(ctx, bson.M{"$or": accountFilter, "itemNo": bson.M{"$in": itemNos}, "status": bson.M{"$in": bson.A{model.PublishTaskQueued, model.PublishTaskPreparing, model.PublishTaskPublishing}}}, options.Find().SetProjection(bson.M{"itemNo": 1}))
+	cursor, err := repository.collection.Find(ctx, bson.M{"$or": accountFilter, "itemNoKey": bson.M{"$in": itemNoKeys(itemNos)}, "status": bson.M{"$in": activePublishStatuses()}}, options.Find().SetProjection(bson.M{"itemNo": 1}))
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +141,7 @@ func (repository *PublishTaskRepository) ExistingItemNos(ctx context.Context, ac
 		return nil, err
 	}
 	for _, task := range tasks {
-		result[strings.ToUpper(strings.TrimSpace(task.ItemNo))] = struct{}{}
+		result[model.ItemNoKey(task.ItemNo)] = struct{}{}
 	}
 	return result, nil
 }
@@ -137,16 +151,35 @@ func (repository *PublishTaskRepository) Create(ctx context.Context, task model.
 	if task.AccountID == "" {
 		task.AccountID = model.DefaultXianyuAccountID
 	}
+	task.ItemNoKey = model.ItemNoKey(task.ItemNo)
+	if task.Action == "" {
+		task.Action = model.PublishActionPublish
+	}
 	_, err := repository.collection.InsertOne(ctx, task)
+	return publishIdentityError(err)
+}
+
+func publishIdentityError(err error) error {
+	if mongo.IsDuplicateKeyError(err) && strings.Contains(err.Error(), "active_listing_identity") {
+		return ErrActivePublishTaskExists
+	}
 	return err
 }
 
 // Get 按任务 ID 查询发布任务。
 // ClaimRetry 原子领取失败任务，避免重复点击或单件与批量重试造成重复入队。
 func (repository *PublishTaskRepository) ClaimRetry(ctx context.Context, taskID string) (bool, error) {
-	result, err := repository.collection.UpdateOne(ctx, bson.M{"_id": taskID, "status": bson.M{"$in": bson.A{model.PublishTaskFailed, model.PublishTaskNeedsLogin}}, "cancelledAt": bson.M{"$exists": false}}, bson.M{"$set": bson.M{"status": model.PublishTaskQueued, "retryRequested": true, "updatedAt": time.Now()}, "$inc": bson.M{"retryCount": 1}})
+	task, err := repository.Get(ctx, taskID)
 	if err != nil {
 		return false, err
+	}
+	action := task.Action
+	if action == "" {
+		action = model.PublishActionPublish
+	}
+	result, err := repository.collection.UpdateOne(ctx, bson.M{"_id": taskID, "status": bson.M{"$in": bson.A{model.PublishTaskFailed, model.PublishTaskNeedsLogin}}, "cancelledAt": bson.M{"$exists": false}}, bson.M{"$set": bson.M{"status": model.PublishTaskQueued, "action": action, "itemNoKey": model.ItemNoKey(task.ItemNo), "retryRequested": true, "updatedAt": time.Now()}, "$inc": bson.M{"retryCount": 1}})
+	if err != nil {
+		return false, publishIdentityError(err)
 	}
 	return result.ModifiedCount == 1, nil
 }
@@ -449,7 +482,12 @@ func (repository *PublishTaskRepository) UpdateStatus(
 
 // CancelByBatchID 取消批次中尚未执行的任务。
 func (repository *PublishTaskRepository) CancelByBatchID(ctx context.Context, batchID string) (int64, error) {
-	result, err := repository.collection.UpdateMany(ctx, bson.M{"batchId": batchID, "status": bson.M{"$in": bson.A{model.PublishTaskQueued, model.PublishTaskPreparing}}}, bson.M{"$set": bson.M{"status": model.PublishTaskFailed, "errorMessage": "用户取消队列，未执行", "cancelledAt": time.Now(), "updatedAt": time.Now()}})
+	reason := "用户取消队列，未执行"
+	var batch model.PublishBatch
+	if err := repository.collection.Database().Collection("publish_batches").FindOne(ctx, bson.M{"_id": batchID, "status": model.PublishBatchCancelled}).Decode(&batch); err == nil && batch.ErrorMessage != "" {
+		reason = batch.ErrorMessage
+	}
+	result, err := repository.collection.UpdateMany(ctx, bson.M{"batchId": batchID, "status": bson.M{"$in": bson.A{model.PublishTaskQueued, model.PublishTaskPreparing}}}, bson.M{"$set": bson.M{"status": model.PublishTaskFailed, "errorMessage": reason, "cancelledAt": time.Now(), "updatedAt": time.Now()}})
 	if err != nil {
 		return 0, err
 	}
@@ -459,8 +497,15 @@ func (repository *PublishTaskRepository) CancelByBatchID(ctx context.Context, ba
 // UpdateContent 更新重试前重新生成的发布内容。
 func (repository *PublishTaskRepository) UpdateContent(ctx context.Context, task model.PublishTask) error {
 	_, err := repository.collection.UpdateOne(ctx, bson.M{"_id": task.ID}, bson.M{"$set": bson.M{
+		"sourceSyncVersion":  task.SourceSyncVersion,
+		"action":             task.Action,
+		"reconcileMode":      task.ReconcileMode,
+		"stockOutOffline":    task.StockOutOffline,
+		"changeReasons":      task.ChangeReasons,
+		"sourcePriceCents":   task.SourcePriceCents,
 		"sourceItemId":       task.SourceItemID,
 		"itemNo":             task.ItemNo,
+		"itemNoKey":          model.ItemNoKey(task.ItemNo),
 		"title":              task.Title,
 		"description":        task.Description,
 		"priceCents":         task.PriceCents,
@@ -479,5 +524,5 @@ func (repository *PublishTaskRepository) UpdateContent(ctx context.Context, task
 		"publishedAt":        task.PublishedAt,
 		"updatedAt":          time.Now(),
 	}})
-	return err
+	return publishIdentityError(err)
 }

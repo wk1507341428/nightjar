@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Drawer, Empty, Input, InputNumber, Popconfirm, Radio, Select, Switch, Tag } from 'antd';
-import { fetchLiveBrandCategories } from './api';
-import { fetchBrandMaintenance } from './catalogManagementApi';
+import { fetchSyncedProfileCategories } from './api';
+import { fetchSyncProfiles } from './syncCenterApi';
 import { REGION_OPTIONS } from './constants';
 import type { BrandCategory, BrandProfile, PublishPreset, PublishPresetActionMode, PublishPresetRule } from './types';
 import { createPublishPreset, deletePublishPreset, fetchPublishPresets, updatePublishPreset } from './xianyuApi';
@@ -29,27 +29,6 @@ function createEmptyPresetRule(): PublishPresetRule {
   };
 }
 
-/** 聚合一个品牌档案跨地区的同名品类。 */
-async function fetchProfileCategories(profile: BrandProfile): Promise<BrandCategory[]> {
-  const categoryResults = await Promise.allSettled(profile.members.map((member) => fetchLiveBrandCategories(member.regionId, member.distributorId)));
-  // 按品类名称聚合后的选项。
-  const categoriesByName = new Map<string, BrandCategory>();
-  for (const result of categoryResults) {
-    if (result.status !== 'fulfilled') continue;
-    for (const category of result.value) {
-      const categoryKey = category.name.trim().toLocaleLowerCase('zh-CN');
-      const existingCategory = categoriesByName.get(categoryKey);
-      if (!existingCategory) {
-        categoriesByName.set(categoryKey, { ...category, sourceIds: [category.id] });
-        continue;
-      }
-      existingCategory.sourceIds = Array.from(new Set([...(existingCategory.sourceIds ?? [existingCategory.id]), category.id]));
-      if (!existingCategory.imageUrl && category.imageUrl) existingCategory.imageUrl = category.imageUrl;
-    }
-  }
-  return Array.from(categoriesByName.values());
-}
-
 /** 常用发布方案配置管理抽屉。 */
 export function PublishPresetDrawer({
   open,
@@ -66,6 +45,12 @@ export function PublishPresetDrawer({
   const [brandProfiles, setBrandProfiles] = useState<BrandProfile[]>([]);
   // 品牌对应的聚合品类。
   const [categoriesByProfileId, setCategoriesByProfileId] = useState<Record<string, BrandCategory[]>>({});
+  // 品类请求状态按品牌区分，空结果与请求失败不会伪装成加载中。
+  const [categoryLoadingByProfileId, setCategoryLoadingByProfileId] = useState<Record<string, boolean>>({});
+  // 每个品牌的具体读取错误。
+  const [categoryErrorsByProfileId, setCategoryErrorsByProfileId] = useState<Record<string, string>>({});
+  // 编辑生命周期序号，防止旧请求覆盖重新打开后的品类。
+  const categoryLifecycleRef = useRef(0);
   // 当前抽屉视图。
   const [viewMode, setViewMode] = useState<'list' | 'edit'>('list');
   // 当前编辑的方案 ID，新建时为空。
@@ -83,9 +68,9 @@ export function PublishPresetDrawer({
   async function loadDrawerData() {
     setIsLoading(true);
     try {
-      const [nextPresets, maintenance] = await Promise.all([fetchPublishPresets(accountId), fetchBrandMaintenance()]);
+      const [nextPresets, profiles] = await Promise.all([fetchPublishPresets(accountId), fetchSyncProfiles()]);
       setPresets(nextPresets);
-      setBrandProfiles(maintenance.profiles);
+      setBrandProfiles(profiles);
       setErrorMessage('');
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '读取常用发布方案失败');
@@ -96,25 +81,43 @@ export function PublishPresetDrawer({
 
   useEffect(() => {
     if (!open) return;
+    resetProfileCategories();
     setViewMode('list');
     void loadDrawerData();
+    return () => { categoryLifecycleRef.current += 1; };
   }, [open, accountId]);
 
-  /** 确保指定品牌的品类已经加载。 */
-  async function ensureProfileCategories(profileId: string) {
-    if (!profileId || categoriesByProfileId[profileId]) return;
-    const profile = brandProfiles.find((item) => item.id === profileId);
-    if (!profile) return;
+  /** 新编辑读取最新本地快照，同时保留同次编辑内的成功结果。 */
+  function resetProfileCategories() {
+    categoryLifecycleRef.current += 1;
+    setCategoriesByProfileId({});
+    setCategoryLoadingByProfileId({});
+    setCategoryErrorsByProfileId({});
+  }
+
+  /** 同品牌多条规则只发一个本地请求，失败可以手动重试。 */
+  async function ensureProfileCategories(profileId: string, forceReload = false) {
+    if (!profileId || (!forceReload && categoriesByProfileId[profileId])) return;
+    // 捕获本次编辑生命周期。
+    const requestLifecycle = categoryLifecycleRef.current;
+    setCategoryLoadingByProfileId((current) => ({ ...current, [profileId]: true }));
+    setCategoryErrorsByProfileId((current) => ({ ...current, [profileId]: '' }));
     try {
-      const categories = await fetchProfileCategories(profile);
+      // 共享 API 按同名聚合并保留各地区 sourceIds，不再按 members 查询。
+      const categories = await fetchSyncedProfileCategories(profileId);
+      if (requestLifecycle !== categoryLifecycleRef.current) return;
       setCategoriesByProfileId((current) => ({ ...current, [profileId]: categories }));
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '读取品牌品类失败');
+      if (requestLifecycle !== categoryLifecycleRef.current) return;
+      setCategoryErrorsByProfileId((current) => ({ ...current, [profileId]: error instanceof Error ? error.message : '读取本地品类失败，请确认品牌已同步' }));
+    } finally {
+      if (requestLifecycle === categoryLifecycleRef.current) setCategoryLoadingByProfileId((current) => ({ ...current, [profileId]: false }));
     }
   }
 
   /** 进入新建方案界面。 */
   function handleCreatePreset() {
+    resetProfileCategories();
     setEditingPresetId('');
     setPresetName('');
     setEditingRules([createEmptyPresetRule()]);
@@ -124,13 +127,14 @@ export function PublishPresetDrawer({
 
   /** 进入编辑方案界面。 */
   function handleEditPreset(preset: PublishPreset) {
+    resetProfileCategories();
     setEditingPresetId(preset.id);
     setPresetName(preset.name);
     setEditingRules(preset.rules.map((rule) => ({ ...rule })));
     setViewMode('edit');
     setErrorMessage('');
     for (const rule of preset.rules) {
-      if (rule.brandProfileId) void ensureProfileCategories(rule.brandProfileId);
+      if (rule.brandProfileId) void ensureProfileCategories(rule.brandProfileId, true);
     }
   }
 
@@ -239,7 +243,7 @@ export function PublishPresetDrawer({
           return <section className="publish-preset-rule-card" key={rule.id}>
             <header><div><span>RULE {String(ruleIndex + 1).padStart(2, '0')}</span><strong>{rule.brandName || '选择一个品牌'}</strong></div>{editingRules.length > 1 ? <button type="button" onClick={() => setEditingRules((currentRules) => currentRules.filter((_, index) => index !== ruleIndex))}>移除</button> : null}</header>
             <div className="publish-preset-field-grid publish-preset-field-grid--brand"><label><span>聚合品牌</span><Select showSearch optionFilterProp="label" value={rule.brandProfileId || undefined} placeholder="选择品牌" onChange={(profileId) => handleRuleBrandChange(ruleIndex, profileId)} options={brandProfiles.map((profile) => ({ value: profile.id, label: profile.name }))} /></label></div>
-            <div className="publish-preset-category-field"><span>商品品类</span><div className="publish-center-category-list"><button type="button" className={rule.categoryNames.length === 0 ? 'is-selected' : ''} onClick={() => handleRuleCategoryChange(ruleIndex, [])}><strong>ALL</strong><span>全部商品</span></button>{categories.map((category) => <button type="button" key={category.name} className={rule.categoryNames.includes(category.name) ? 'is-selected' : ''} onClick={() => handleRuleCategoryToggle(ruleIndex, category.name)}>{category.imageUrl ? <img src={category.imageUrl} alt="" /> : <strong>{category.name.slice(0, 1)}</strong>}<span>{category.name}</span></button>)}{rule.brandProfileId && categories.length === 0 ? <span className="publish-center-category-loading">正在聚合品类…</span> : null}</div></div>
+            <div className="publish-preset-category-field"><span>商品品类</span><div className="publish-center-category-list"><button type="button" className={rule.categoryNames.length === 0 ? 'is-selected' : ''} onClick={() => handleRuleCategoryChange(ruleIndex, [])}><strong>ALL</strong><span>全部商品</span></button>{categories.map((category) => <button type="button" key={category.name} className={rule.categoryNames.includes(category.name) ? 'is-selected' : ''} onClick={() => handleRuleCategoryToggle(ruleIndex, category.name)}>{category.imageUrl ? <img src={category.imageUrl} alt="" /> : <strong>{category.name.slice(0, 1)}</strong>}<span>{category.name}</span></button>)}{categoryLoadingByProfileId[rule.brandProfileId ?? ''] ? <span className="publish-center-category-loading">正在读取本地品类…</span> : null}{categoryErrorsByProfileId[rule.brandProfileId ?? ''] ? <span role="alert">{categoryErrorsByProfileId[rule.brandProfileId ?? '']}<Button type="link" onClick={() => void ensureProfileCategories(rule.brandProfileId ?? '', true)}>重试</Button></span> : null}{rule.brandProfileId && categoriesByProfileId[rule.brandProfileId] && categories.length === 0 && !categoryLoadingByProfileId[rule.brandProfileId] ? <span className="publish-center-category-loading">暂无品类</span> : null}</div></div>
             <div className="publish-preset-mode"><span>操作范围</span><Radio.Group value={rule.actionMode} onChange={(event) => updateRule(ruleIndex, { actionMode: event.target.value })}>{ACTION_MODE_OPTIONS.map((option) => <Radio.Button value={option.value} key={option.value}>{option.label}</Radio.Button>)}</Radio.Group><small>{actionMode.hint}</small></div>
             <section className="publish-preset-filter-panel"><header><div><strong>数量与商品筛选</strong><span>筛选条件留空时不限制，折扣按活动价与原价计算</span></div><Tag>OPTIONAL</Tag></header><div className="publish-preset-number-grid"><label><span>最多处理</span><InputNumber min={1} max={3000} value={rule.limit} addonAfter="件" onChange={(value) => updateRule(ruleIndex, { limit: Number(value ?? 500) })} /></label><label><span>最低售价</span><InputNumber min={0} precision={2} value={rule.minPriceCents ? rule.minPriceCents / 100 : undefined} addonAfter="元" placeholder="不限" onChange={(value) => updateRule(ruleIndex, { minPriceCents: value == null ? undefined : Math.round(Number(value) * 100) })} /></label><label><span>最高售价</span><InputNumber min={0} precision={2} value={rule.maxPriceCents ? rule.maxPriceCents / 100 : undefined} addonAfter="元" placeholder="不限" onChange={(value) => updateRule(ruleIndex, { maxPriceCents: value == null ? undefined : Math.round(Number(value) * 100) })} /></label><label><span>最低折扣率（含）</span><InputNumber min={0} max={100} value={rule.minDiscountRate || undefined} addonAfter="%" placeholder="不限" onChange={(value) => updateRule(ruleIndex, { minDiscountRate: value == null ? undefined : Number(value) })} /></label><label><span>最高折扣率（含）</span><InputNumber min={0} max={100} value={rule.maxDiscountRate || undefined} addonAfter="%" placeholder="不限" onChange={(value) => updateRule(ruleIndex, { maxDiscountRate: value == null ? undefined : Number(value) })} /></label></div><label className="publish-preset-switch-field"><span>不发布断码商品</span><Switch checked={rule.excludeBrokenSizeItems ?? false} onChange={(checked) => updateRule(ruleIndex, { excludeBrokenSizeItems: checked })} checkedChildren="开启" unCheckedChildren="关闭" /></label></section>
           </section>;

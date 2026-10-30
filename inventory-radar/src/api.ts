@@ -1,15 +1,48 @@
-import { API_BASE_URL, COMPANY_ID, PRODUCT_PAGE_SIZE, SIDEJOB_API_BASE_URL } from './constants';
+import { PRODUCT_PAGE_SIZE, SIDEJOB_API_BASE_URL } from './constants';
 import type {
   BrandOption,
   BrandCategory,
   ProductDetail,
-  ProductPurchaseNoticeResponse,
   ProductSummary,
   SearchMode,
 } from './types';
 
-/** 各地区购买须知请求缓存。 */
-const purchaseNoticeRequestCache = new Map<string, Promise<ProductPurchaseNoticeResponse>>();
+/** 合并同名地区品类，同时保留所有源 ID，筛选和保存时不会漏掉其他地区。 */
+function mergeSyncedBrandCategories(categories: BrandCategory[]): BrandCategory[] {
+  // 显示一个同名选项，对应多个地区源分类 ID。
+  const categoriesByName = new Map<string, BrandCategory>();
+  for (const category of categories) {
+    // 跨地区名称忽略首尾空白与大小写。
+    const categoryKey = category.name.trim().toLocaleLowerCase('zh-CN');
+    // 含后端可能已合并的源 ID。
+    const sourceIds = category.sourceIds ?? [category.id];
+    // 已记录的同名品类。
+    const existingCategory = categoriesByName.get(categoryKey);
+    if (!existingCategory) {
+      categoriesByName.set(categoryKey, { ...category, sourceIds: [...sourceIds] });
+      continue;
+    }
+    existingCategory.sourceIds = Array.from(new Set([...(existingCategory.sourceIds ?? [existingCategory.id]), ...sourceIds]));
+    if (!existingCategory.imageUrl && category.imageUrl) existingCategory.imageUrl = category.imageUrl;
+  }
+  return Array.from(categoriesByName.values());
+}
+
+/** 同一聚合品牌的并行品类读取共享请求，完成后释放以便下次编辑读取新快照。 */
+const profileCategoryRequests = new Map<string, Promise<BrandCategory[]>>();
+
+/** 只读取一个品牌的本地品类元数据，不按门店逐个查询。 */
+export function fetchSyncedProfileCategories(brandProfileId: string): Promise<BrandCategory[]> {
+  // 正在读取的相同品牌请求。
+  const existingRequest = profileCategoryRequests.get(brandProfileId);
+  if (existingRequest) return existingRequest;
+  // 完成和失败都释放请求，避免永久缓存旧 generation 或失败状态。
+  const categoryRequest = requestCatalog<BrandCategory[]>('/catalog/source-categories', { brandProfileId })
+    .then(mergeSyncedBrandCategories)
+    .finally(() => { profileCategoryRequests.delete(brandProfileId); });
+  profileCategoryRequests.set(brandProfileId, categoryRequest);
+  return categoryRequest;
+}
 
 /** 商品查询参数。 */
 interface SearchProductsParams {
@@ -31,29 +64,6 @@ interface SearchProductsResult {
   total: number;
 }
 
-/** 构造小程序实时商品列表请求。 */
-function buildLiveSearchUrl(query: string, regionId: string, page: number, distributorId?: string, goodsSort?: number, categoryId?: string): URL {
-  const requestUrl = new URL(`${API_BASE_URL}/goods/items`);
-  requestUrl.searchParams.set('company_id', COMPANY_ID);
-  requestUrl.searchParams.set('regionauth_id', regionId);
-  requestUrl.searchParams.set('page', String(page));
-  requestUrl.searchParams.set('pageSize', String(PRODUCT_PAGE_SIZE));
-  requestUrl.searchParams.set('keywords', query.trim());
-  requestUrl.searchParams.set('approve_status', 'onsale,only_show');
-  requestUrl.searchParams.set('item_type', 'normal');
-  requestUrl.searchParams.set('is_point', 'false');
-  if (distributorId) {
-    requestUrl.searchParams.set('distributor_id', distributorId);
-  }
-  if (goodsSort) {
-    requestUrl.searchParams.set('goodsSort', String(goodsSort));
-  }
-  if (categoryId) {
-    requestUrl.searchParams.set('main_category', categoryId);
-  }
-  return requestUrl;
-}
-
 /** 请求并解析 JSON 数据。 */
 async function requestJson<ResponseType>(url: URL): Promise<ResponseType> {
   // 接口响应对象。
@@ -65,7 +75,9 @@ async function requestJson<ResponseType>(url: URL): Promise<ResponseType> {
   });
 
   if (!response.ok) {
-    throw new Error(`请求失败（HTTP ${response.status}）`);
+    // 原样提示未同步或版本失效，不把错误误显示为无商品。
+    const failure = await response.json().catch(() => ({})) as { message?: string };
+    throw new Error(failure?.message || `请求失败（HTTP ${response.status}）`);
   }
 
   return response.json() as Promise<ResponseType>;
@@ -101,6 +113,8 @@ export async function searchProducts({
     catalogSort = 'priceAsc';
   } else if (goodsSort === 2) {
     catalogSort = 'priceDesc';
+  } else if (goodsSort === 6) {
+    catalogSort = 'discount';
   }
   // 本地商品库搜索结果。
   const response = await requestCatalog<{ list?: ProductSummary[]; total?: number }>('/catalog/offers', {
@@ -121,32 +135,12 @@ export async function searchProducts({
   };
 }
 
-/** 查询小程序实时货源。 */
-export async function searchLiveProducts({ query, regionId, page = 1, brandDistributorIds = [], goodsSort, categoryId }: SearchProductsParams): Promise<SearchProductsResult> {
-  const distributorId = brandDistributorIds[0];
-  const response = await requestJson<{ data?: { list?: ProductSummary[]; total_count?: number } }>(buildLiveSearchUrl(query, regionId, page, distributorId, goodsSort, categoryId));
-  return { products: response?.data?.list ?? [], similarProducts: [], total: Number(response?.data?.total_count ?? 0) };
+/** 兼容原货源入口，统一查询同步中心本地成功快照。 */
+export function searchLiveProducts(params: SearchProductsParams): Promise<SearchProductsResult> {
+  return searchProducts(params);
 }
 
-/** 将多个门店商品列表按索引交错合并。 */
-function interleaveProductLists(productLists: ProductSummary[][]): ProductSummary[] {
-  // 最长门店列表长度。
-  const maxListLength = Math.max(0, ...productLists.map((productList) => productList.length));
-  // 交错后的商品列表。
-  const mergedProducts: ProductSummary[] = [];
-
-  for (let productIndex = 0; productIndex < maxListLength; productIndex += 1) {
-    productLists.forEach((productList) => {
-      const product = productList[productIndex];
-      if (product) {
-        mergedProducts.push(product);
-      }
-    });
-  }
-  return mergedProducts;
-}
-
-/** 按地区加载小程序品牌馆的完整在售品牌门店。 */
+/** 按地区加载本地聚合品牌配置中的门店。 */
 export async function fetchBrandOptions(regionId: string): Promise<BrandOption[]> {
   // 当前地区已启用的本地品牌门店。
   const response = await requestCatalog<Array<{ id?: string; brandName?: string; distributorId?: string; shopCode?: string }>>('/catalog/brand-stores', { regionId });
@@ -156,29 +150,14 @@ export async function fetchBrandOptions(regionId: string): Promise<BrandOption[]
     .sort((firstBrand, secondBrand) => firstBrand.label.localeCompare(secondBrand.label, 'zh-CN'));
 }
 
-/** 读取小程序实时品牌门店列表。 */
-export async function fetchLiveBrandOptions(regionId: string): Promise<BrandOption[]> {
-  const requestUrl = new URL(`${API_BASE_URL}/distributor/get_all_distributor`);
-  requestUrl.searchParams.set('company_id', COMPANY_ID);
-  requestUrl.searchParams.set('regionauth_id', regionId);
-  requestUrl.searchParams.set('page', '1');
-  requestUrl.searchParams.set('pageSize', '1000');
-  requestUrl.searchParams.set('sort_type', '5');
-  const response = await requestJson<{ data?: { list?: Array<{ distributor_id?: string; name?: string; logo?: string; online_goods_num?: string | number; shop_code?: string }> } }>(requestUrl);
-  return (response?.data?.list ?? []).filter((brandStore) => Boolean(brandStore?.distributor_id) && Boolean(brandStore?.name)).map((brandStore) => ({ value: `live:${brandStore.distributor_id}`, label: brandStore.name?.trim() ?? '', logoUrl: brandStore.logo?.trim(), onlineGoodsCount: Number(brandStore.online_goods_num ?? 0), shopCode: brandStore.shop_code, categoryDistributorId: brandStore.distributor_id, distributorIds: brandStore.distributor_id ? [brandStore.distributor_id] : [] })).sort((firstBrand, secondBrand) => firstBrand.label.localeCompare(secondBrand.label, 'zh-CN'));
+/** 兼容原品牌入口，读取本地已配置的地区门店。 */
+export function fetchLiveBrandOptions(regionId: string): Promise<BrandOption[]> {
+  return fetchBrandOptions(regionId);
 }
 
-/** 读取小程序为品牌门店配置的商品品类。 */
-export async function fetchLiveBrandCategories(regionId: string, distributorId: string): Promise<BrandCategory[]> {
-  const requestUrl = new URL(`${API_BASE_URL}/goods/shopcategory`);
-  requestUrl.searchParams.set('company_id', COMPANY_ID);
-  requestUrl.searchParams.set('regionauth_id', regionId);
-  requestUrl.searchParams.set('distributor_id', distributorId);
-  requestUrl.searchParams.set('is_marketing_category', '1');
-  const response = await requestJson<{ data?: Array<{ category_id?: string; category_name?: string; image_url?: string }> }>(requestUrl);
-  return (response?.data ?? [])
-    .filter((category) => Boolean(category?.category_id) && Boolean(category?.category_name))
-    .map((category) => ({ id: category.category_id ?? '', name: category.category_name ?? '', imageUrl: category.image_url }));
+/** 查询成功快照内保存的品牌品类，不调用小程序。 */
+export function fetchLiveBrandCategories(regionId: string, distributorId: string): Promise<BrandCategory[]> {
+  return requestCatalog<BrandCategory[]>('/catalog/source-categories', { regionId, distributorId });
 }
 
 /** 读取本地品牌门店对应的小程序商品品类。 */
@@ -186,54 +165,15 @@ export function fetchLocalBrandCategories(brandStoreId: string): Promise<BrandCa
   return requestCatalog<BrandCategory[]>(`/catalog/brand-stores/${encodeURIComponent(brandStoreId)}/categories`);
 }
 
-/** 获取指定商品的完整商详。 */
-export async function fetchProductDetail(
-  itemId: string,
-  regionId: string,
-): Promise<ProductDetail> {
-  // 本地商品详情响应。
-  const productDetail = await requestCatalog<ProductDetail>(`/catalog/offers/${encodeURIComponent(itemId)}`);
-
-  // 当前地区购买须知地址。
-  const purchaseNoticeUrl = new URL(`${API_BASE_URL}/setting/itemNotice`);
-  purchaseNoticeUrl.searchParams.set('company_id', COMPANY_ID);
-  purchaseNoticeUrl.searchParams.set('regionauth_id', regionId);
-  // 地区级购买须知请求。
-  let purchaseNoticeRequest = purchaseNoticeRequestCache.get(regionId);
-  if (!purchaseNoticeRequest) {
-    purchaseNoticeRequest = requestJson<ProductPurchaseNoticeResponse>(purchaseNoticeUrl);
-    purchaseNoticeRequestCache.set(regionId, purchaseNoticeRequest);
-  }
-  // 商品详情和购买须知并行响应。
-  const purchaseNoticeResponse = await purchaseNoticeRequest.catch(() => ({ data: undefined }));
-
-  if (!productDetail) {
-    throw new Error('未获取到本地商品详情');
-  }
-
-  return {
-    ...productDetail,
-    purchase_notice: purchaseNoticeResponse?.data?.product_purchase_notice,
-    purchase_notice_open: purchaseNoticeResponse?.data?.product_purchase_notice_open === true,
-  };
+/** 获取本地完整商详与 SKU，更新数据请前往同步中心。 */
+export async function fetchProductDetail(itemId: string, regionId: string): Promise<ProductDetail> {
+  // 读取已成功同步的商品版本，不补发任何源站购买须知请求。
+  const productDetail = await requestCatalog<ProductDetail>(`/catalog/offers/${encodeURIComponent(itemId)}`, { regionId });
+  if (!productDetail) throw new Error('暂无本地商品详情，请先在同步中心同步该品牌');
+  return productDetail;
 }
 
-/** 获取小程序实时商品详情。 */
-export async function fetchLiveProductDetail(itemId: string, regionId: string): Promise<ProductDetail> {
-  const requestUrl = new URL(`${API_BASE_URL}/goods/items/${itemId}`);
-  requestUrl.searchParams.set('company_id', COMPANY_ID);
-  requestUrl.searchParams.set('regionauth_id', regionId);
-  const response = await requestJson<{ data?: ProductDetail; message?: string }>(requestUrl);
-  if (!response?.data) {
-    throw new Error(response?.message ?? '未获取到实时商品详情');
-  }
-  const purchaseNoticeUrl = new URL(`${API_BASE_URL}/setting/itemNotice`);
-  purchaseNoticeUrl.searchParams.set('company_id', COMPANY_ID);
-  purchaseNoticeUrl.searchParams.set('regionauth_id', regionId);
-  const purchaseNoticeResponse = await requestJson<ProductPurchaseNoticeResponse>(purchaseNoticeUrl).catch(() => ({ data: undefined }));
-  return {
-    ...response.data,
-    purchase_notice: purchaseNoticeResponse?.data?.product_purchase_notice,
-    purchase_notice_open: purchaseNoticeResponse?.data?.product_purchase_notice_open === true,
-  };
+/** 保留旧调用签名，源商详统一由本地权威表提供。 */
+export function fetchLiveProductDetail(itemId: string, regionId: string): Promise<ProductDetail> {
+  return fetchProductDetail(itemId, regionId);
 }

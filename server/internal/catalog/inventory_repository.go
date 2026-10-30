@@ -271,6 +271,38 @@ func (repository *InventoryRepository) FindBrandProfileIDByMember(ctx context.Co
 
 // UpsertSKUCategoryBinding 保存一条可重复刷新、不会因商品消失而删除的 SKU 品类归属。
 func (repository *InventoryRepository) UpsertSKUCategoryBinding(ctx context.Context, binding SKUCategoryBinding) error {
+	write := skuCategoryBindingWrite(binding)
+	if write == nil {
+		return nil
+	}
+	_, err := repository.skuCategoryBindings.UpdateOne(ctx, write.Filter, write.Update, options.Update().SetUpsert(true))
+	return err
+}
+
+// BulkUpsertSKUCategoryBindings 保持历史归属幂等语义，将网络写入次数限制为每500条一次。
+func (repository *InventoryRepository) BulkUpsertSKUCategoryBindings(ctx context.Context, bindings []SKUCategoryBinding) error {
+	const batchSize = 500
+	writes := make([]mongo.WriteModel, 0, batchSize)
+	for _, binding := range bindings {
+		if write := skuCategoryBindingWrite(binding); write != nil {
+			writes = append(writes, write)
+		}
+		if len(writes) == batchSize {
+			if _, err := repository.skuCategoryBindings.BulkWrite(ctx, writes); err != nil {
+				return err
+			}
+			writes = writes[:0]
+		}
+	}
+	if len(writes) == 0 {
+		return nil
+	}
+	_, err := repository.skuCategoryBindings.BulkWrite(ctx, writes)
+	return err
+}
+
+// skuCategoryBindingWrite 供单条和批量写入共享字段、唯一键及首次观察时间规则。
+func skuCategoryBindingWrite(binding SKUCategoryBinding) *mongo.UpdateOneModel {
 	binding.ItemNo = strings.ToUpper(strings.TrimSpace(binding.ItemNo))
 	if binding.ItemNo == "" || binding.BrandStoreID == "" {
 		return nil
@@ -291,11 +323,7 @@ func (repository *InventoryRepository) UpsertSKUCategoryBinding(ctx context.Cont
 	if binding.BrandProfileID != "" {
 		setFields["brandProfileId"] = binding.BrandProfileID
 	}
-	_, err := repository.skuCategoryBindings.UpdateOne(ctx, filter, bson.M{
-		"$set":         setFields,
-		"$setOnInsert": bson.M{"_id": binding.ID, "firstSeenAt": binding.FirstSeenAt},
-	}, options.Update().SetUpsert(true))
-	return err
+	return mongo.NewUpdateOneModel().SetFilter(filter).SetUpdate(bson.M{"$set": setFields, "$setOnInsert": bson.M{"_id": binding.ID, "firstSeenAt": binding.FirstSeenAt}}).SetUpsert(true)
 }
 
 // skuCategoryBindingUniqueFilter 与 Mongo 唯一索引保持一致，保证不同写入路径都能幂等更新。

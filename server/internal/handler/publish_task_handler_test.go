@@ -61,17 +61,17 @@ func TestUniqueImageURLs(t *testing.T) {
 // TestSinglePublishUsesSharedTemplate 验证单件发布与批量发布使用同一标题和描述模板。
 func TestSinglePublishUsesSharedTemplate(t *testing.T) {
 	title := buildPublishTitle("【全新】343846-002 NIKE耐克 AIR MAX TORCH 4男子缓震运动跑步鞋343846-002", "343846-002")
-	if len([]rune(title)) > 30 || !strings.HasPrefix(title, "全新 ") || !strings.HasSuffix(title, " 343846-002") {
+	if !strings.HasPrefix(title, "全新 ") || !strings.HasSuffix(title, " 343846-002") {
 		t.Fatalf("unexpected shared title: %s", title)
 	}
-	if title != "全新 NIKE耐克 AIR MAX 343846-002" {
-		t.Fatalf("unexpected readable title truncation: %s", title)
+	if title != "全新 NIKE耐克 AIR MAX TORCH 4男子缓震运动跑步鞋 343846-002" {
+		t.Fatalf("unexpected full product name: %s", title)
 	}
 	publishedAt := time.Date(2026, 10, 8, 12, 0, 0, 0, time.Local)
 	updatedAt := time.Date(2026, 10, 11, 12, 0, 0, 0, time.Local)
 	description := buildPublishDescription("NIKE耐克 AIR MAX TORCH 4男子缓震运动跑步鞋343846-002", "343846-002", 79900, []string{"42", "40.5", "42"}, "成都、武汉", publishedAt, updatedAt)
-	if !strings.HasPrefix(description, "\n货号：343846-002\n") || strings.Contains(description, "NIKE耐克 AIR MAX") {
-		t.Fatalf("description repeats the title: %s", description)
+	if !strings.HasPrefix(description, title+"\n\n货号：343846-002\n") {
+		t.Fatalf("description must begin with full product name: %s", description)
 	}
 	for _, expected := range []string{"货号：343846-002", "商品原价：¥799.00", "有货尺码/型号：42、40.5", "发货地区：成都、武汉", "按“假一赔三”处理。", "48小时内发出，最晚不超过72小时", "默认使用京东快递或顺丰快递", "7. 关于售后", "发布时间： 2026-10-08", "更新时间： 2026-10-11 12:00"} {
 		if !strings.Contains(description, expected) {

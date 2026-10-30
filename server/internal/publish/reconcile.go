@@ -22,10 +22,15 @@ func (service *Service) processReconcileTask(ctx context.Context, task model.Pub
 	}
 	task = refreshed
 	if task.Action == "update" {
-		if err := service.repository.UpdateContent(ctx, task); err != nil {
+		if err := model.ValidateListingSourcePriceCeiling(task.SourcePriceCents, task.OriginalPriceCents, task.PriceCents, task.Variants); err != nil {
 			service.failTask(ctx, task.ID, err.Error())
 			return
 		}
+	}
+	// 动作转换和库存更新先落库，重启后仍按核验后的动作执行。
+	if err := service.repository.UpdateContent(ctx, task); err != nil {
+		service.failTask(ctx, task.ID, err.Error())
+		return
 	}
 	publishing, err := service.repository.MarkPublishingIfExecutable(ctx, task.ID)
 	if err != nil || !publishing {
@@ -56,6 +61,9 @@ func (service *Service) processReconcileTask(ctx context.Context, task model.Pub
 		}
 	}
 	if err != nil {
+		if service.stopOnPublishCountLimit(task, err) {
+			return
+		}
 		if errors.Is(err, xianyu.ErrSessionExpired) {
 			_ = service.repository.UpdateStatus(ctx, task.ID, model.PublishTaskNeedsLogin, "闲鱼登录已失效，请重新连接该账号", "", "")
 			if account, accountErr := service.accountRepository.Get(ctx, task.AccountID); accountErr == nil {

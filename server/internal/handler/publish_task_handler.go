@@ -80,7 +80,27 @@ func createPublishTaskHandler(serviceContext *svc.ServiceContext) http.HandlerFu
 			UpdatedAt:          now,
 		}
 
+		source, sourceErr := loadManualPublishSource(request.Context(), serviceContext, task.RegionID, task.SourceItemID, task.ItemNo)
+		if sourceErr != nil {
+			writeError(responseWriter, http.StatusConflict, sourceErr.Error())
+			return
+		}
+		task, sourceErr = bindManualPublishSource(task, source)
+		if sourceErr != nil {
+			writeError(responseWriter, http.StatusConflict, sourceErr.Error())
+			return
+		}
+		task.Description = buildPublishDescription(sourceTitle, itemNo, task.OriginalPriceCents, availableSizes, publishRegionName(task.RegionID), now, now)
+
+		if err := serviceContext.MarketplaceService.CheckListingActivation(request.Context(), task); err != nil {
+			writeError(responseWriter, http.StatusConflict, err.Error())
+			return
+		}
 		if err := serviceContext.PublishRepository.Create(request.Context(), task); err != nil {
+			if errors.Is(err, repository.ErrActivePublishTaskExists) {
+				writeError(responseWriter, http.StatusConflict, err.Error())
+				return
+			}
 			logx.Errorf("create publish task: %v", err)
 			writeError(responseWriter, http.StatusInternalServerError, "创建发布任务失败")
 			return

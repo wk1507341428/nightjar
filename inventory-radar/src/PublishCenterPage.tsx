@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Drawer, Form, Image, Input, InputNumber, Modal, Popconfirm, Popover, Progress, Radio, Select, Space, Statistic, Switch, Tag, Typography } from 'antd';
 import { ProTable, type ProColumns } from '@ant-design/pro-components';
-import { fetchBrandOptions, fetchLiveBrandCategories, fetchLiveBrandOptions, fetchLocalBrandCategories } from './api';
+import { fetchBrandOptions, fetchLiveBrandCategories, fetchLiveBrandOptions, fetchLocalBrandCategories, fetchSyncedProfileCategories } from './api';
 import { REGION_OPTIONS } from './constants';
 import { appendPublishOperation, cancelPublishOperation, fetchPublishOperation, fetchPublishOperations, previewPublishOperation, retryPublishTask } from './xianyuApi';
 import type { BrandCategory, BrandOption, PublishBatch, PublishBatchPreview, PublishBatchSettings, PublishTask } from './types';
 import { BrandSelectOption } from './BrandSelectOption';
-import { fetchBrandMaintenance } from './catalogManagementApi';
+import { fetchSyncProfiles } from './syncCenterApi';
 import { retryFailedOperation } from './xianyuApi';
 import { useXianyuAccount } from './XianyuAccountContext';
 import { PublishPresetDrawer } from './PublishPresetDrawer';
@@ -88,6 +88,13 @@ function renderTaskChangeReason(task: PublishTask) {
   return <Popover title="触发编辑的具体变化" trigger={['hover', 'click']} placement="topLeft" content={<Typography.Paragraph style={{ maxWidth: 'min(520px, 78vw)', marginBottom: 0, whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>{changeReasons.map((reason) => <span className="publish-task-change-line" key={reason}>{reason}</span>)}</Typography.Paragraph>}><button type="button" className="publish-task-change-reason"><span>{changeReason}</span>{changeReasons.length > 1 ? <em>共 {changeReasons.length} 项</em> : null}</button></Popover>;
 }
 
+/** 展示后端核验的下架原因；旧预览缺失原因时不能推断为无货。 */
+export function formatOfflineCandidateReason(changeReasons?: string[]): string {
+  // 保留具体库存核验结果，过滤无效空文案。
+  const verifiedReasons = changeReasons?.map((reason) => reason.trim()).filter(Boolean) ?? [];
+  return verifiedReasons.join('；') || '下架原因待核验，请重新生成预览';
+}
+
 /** 判断发布操作是否仍需刷新进度。 */
 function isOperationActive(operation: PublishBatch): boolean {
   return operation.status === 'running' || operation.status === 'preparing';
@@ -133,6 +140,10 @@ export function PublishCenterPage({ operationId }: { operationId?: string }) {
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
   // 品牌品类加载状态。
   const [isCategoryLoading, setIsCategoryLoading] = useState(false);
+  // 当前品牌的本地品类读取错误，与成功空结果分开展示。
+  const [categoryErrorMessage, setCategoryErrorMessage] = useState('');
+  // 品牌切换请求序号，避免慢响应覆盖新品牌。
+  const categoryRequestVersion = useRef(0);
   // 发布数量。
   const [publishLimit, setPublishLimit] = useState(500);
   // 最小安全间隔。
@@ -225,17 +236,18 @@ export function PublishCenterPage({ operationId }: { operationId?: string }) {
 
   /** 加载当前来源与地区的品牌。 */
   async function loadBrands(nextSourceType: 'live' | 'local', nextRegionId: string) {
+    categoryRequestVersion.current += 1;
+    setCategoryErrorMessage('');
+    setIsCategoryLoading(false);
     setBrandId('');
     setBrandCategories([]);
     setCategoryIds([]);
     clearPreview();
     try {
-      const [sourceBrands, maintenance] = await Promise.all([nextSourceType === 'live' ? fetchLiveBrandOptions(nextRegionId) : fetchBrandOptions(nextRegionId), fetchBrandMaintenance()]);
-      const sourcesByKey = new Map(maintenance.sources.map((source) => [`${source.regionId}:${source.distributorId}`, source]));
-      const profileOptions: BrandOption[] = maintenance.profiles.map((profile) => {
-        const memberSources = profile.members.map((member) => sourcesByKey.get(`${member.regionId}:${member.distributorId}`)).filter(Boolean);
+      const [sourceBrands, profiles] = await Promise.all([nextSourceType === 'live' ? fetchLiveBrandOptions(nextRegionId) : fetchBrandOptions(nextRegionId), fetchSyncProfiles()]);
+      const profileOptions: BrandOption[] = profiles.map((profile) => {
         const regionNames = Array.from(new Set(profile.members.map((member) => REGION_OPTIONS.find((region) => region.id === member.regionId)?.shortName ?? member.regionId))).join('、');
-        return { value: `profile:${profile.id}`, label: `${profile.name}（${regionNames}）`, brandProfileId: profile.id, logoUrl: memberSources.find((source) => source?.logoUrl)?.logoUrl, onlineGoodsCount: memberSources.reduce((total, source) => total + Number(source?.onlineGoodsCount ?? 0), 0), profileMembers: profile.members };
+        return { value: `profile:${profile.id}`, label: `${profile.name}（${regionNames}）`, brandProfileId: profile.id, logoUrl: profile.logoUrl, onlineGoodsCount: profile.onlineGoodsCount, profileMembers: profile.members };
       });
       setBrandOptions([...profileOptions, ...sourceBrands]);
     } catch (error) {
@@ -246,14 +258,16 @@ export function PublishCenterPage({ operationId }: { operationId?: string }) {
 
   /** 加载并聚合当前品牌覆盖门店的商品品类。 */
   async function loadBrandCategories(brandOption: BrandOption) {
+    // 仅当前品牌请求可写入品类和错误。
+    const requestVersion = ++categoryRequestVersion.current;
+    setCategoryErrorMessage('');
     setIsCategoryLoading(true);
     setBrandCategories([]);
     setCategoryIds([]);
     try {
       let categoryLists: BrandCategory[][] = [];
       if (brandOption.brandProfileId) {
-        const categoryResults = await Promise.allSettled((brandOption.profileMembers ?? []).map((member) => fetchLiveBrandCategories(member.regionId, member.distributorId)));
-        categoryLists = categoryResults.filter((result): result is PromiseFulfilledResult<BrandCategory[]> => result.status === 'fulfilled').map((result) => result.value);
+        categoryLists = [await fetchSyncedProfileCategories(brandOption.brandProfileId)];
       } else if (sourceType === 'live') {
         categoryLists = [await fetchLiveBrandCategories(regionId, brandOption.categoryDistributorId ?? '')];
       } else {
@@ -266,17 +280,19 @@ export function PublishCenterPage({ operationId }: { operationId?: string }) {
         const categoryKey = category.name.trim().toLocaleLowerCase('zh-CN');
         const existingCategory = categoriesByName.get(categoryKey);
         if (!existingCategory) {
-          categoriesByName.set(categoryKey, { ...category, sourceIds: [category.id] });
+          categoriesByName.set(categoryKey, { ...category, sourceIds: category.sourceIds ?? [category.id] });
           return;
         }
-        existingCategory.sourceIds = Array.from(new Set([...(existingCategory.sourceIds ?? [existingCategory.id]), category.id]));
+        existingCategory.sourceIds = Array.from(new Set([...(existingCategory.sourceIds ?? [existingCategory.id]), ...(category.sourceIds ?? [category.id])]));
         if (!existingCategory.imageUrl && category.imageUrl) existingCategory.imageUrl = category.imageUrl;
       });
+      if (requestVersion !== categoryRequestVersion.current) return;
       setBrandCategories(Array.from(categoriesByName.values()));
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '品牌品类读取失败');
+      if (requestVersion !== categoryRequestVersion.current) return;
+      setCategoryErrorMessage(error instanceof Error ? error.message : '读取本地品类失败，请确认品牌已同步');
     } finally {
-      setIsCategoryLoading(false);
+      if (requestVersion === categoryRequestVersion.current) setIsCategoryLoading(false);
     }
   }
 
@@ -559,6 +575,7 @@ export function PublishCenterPage({ operationId }: { operationId?: string }) {
     <main className="publish-center-page">
       <header className="workspace-page-heading"><div><span className="workspace-eyebrow">PUBLISH / OPERATIONS</span><h1>{operationId ? '队列任务详情' : '发布中心'}</h1><p>当前账号：{displayedAccountName} · 所有发布、修改、下架与重试均绑定该账号。</p></div><div className="workspace-page-actions">{operationId ? <><Popconfirm title="确认取消这个队列？" description="已完成任务会保留，未执行任务将停止。" okText="确认取消" cancelText="返回" onConfirm={() => operation && void handleCancelOperation(operation.id)}><Button danger disabled={!operation || (operation.status !== 'running' && operation.status !== 'preparing')} loading={cancellingOperationId === operation?.id}>取消队列</Button></Popconfirm><Button onClick={() => { window.location.hash = '/publish-center'; }}>返回队列列表</Button></> : <><Button className="publish-preset-entry" onClick={() => setIsPresetDrawerOpen(true)}>常用发布方案</Button><Button type="primary" disabled={!targetAccount?.sellerConnected || targetAccount.status !== 'active'} onClick={handleOpenAddBrand}>加入品牌到队列</Button></>}</div></header>
       {errorMessage ? <Alert type="error" showIcon closable onClose={() => setErrorMessage('')} message={errorMessage} /> : null}
+      {operation?.errorMessage ? <Alert type="warning" showIcon message={operation.errorMessage} /> : null}
       {!operationId ? <section className="publish-center-dashboard">
         <div className="publish-center-metrics"><article><span>操作记录</span><strong>{operationTotal}</strong></article><article><span>当前队列容量</span><strong>{activeOperation?.limit ?? 0}<em> / 3000</em></strong></article><article><span>剩余可追加</span><strong>{remainingCapacity}</strong></article><article className="publish-center-metrics__live"><span>队列状态</span><strong>{activeOperation ? '运行中' : '空闲'}</strong></article></div>
         <div className="workspace-list-heading"><div><strong>发布队列与历史记录</strong><span>已加载 {operations.length} 条操作</span></div><Button onClick={() => void loadOperations()} loading={isLoading}>刷新记录</Button></div>
@@ -569,12 +586,12 @@ export function PublishCenterPage({ operationId }: { operationId?: string }) {
         <Form layout="vertical" className="publish-center-form">
           <Form.Item label="配置方式"><Radio.Group optionType="button" buttonStyle="solid" value={addConfigurationMode} onChange={(event) => { setAddConfigurationMode(event.target.value); clearPreview(); }} options={[{ value: 'manual', label: '手动配置' }, { value: 'preset', label: '常用方案' }]} /></Form.Item>
           {addConfigurationMode === 'preset' ? <PublishPresetRunner accountId={targetAccountId} remainingCapacity={remainingCapacity} onManagePresets={() => { setIsAddBrandOpen(false); setIsPresetDrawerOpen(true); }} onOperationCreated={(nextOperation) => { setIsAddBrandOpen(false); window.location.hash = `/publish-operations/${encodeURIComponent(nextOperation.id)}`; }} /> : <>
-          <Form.Item label="商品来源"><Radio.Group optionType="button" buttonStyle="solid" value={sourceType} onChange={(event) => handleChangeSource(event.target.value)} options={[{ value: 'live', label: '全部货源（实时）' }, { value: 'local', label: '我的商品库' }]} /></Form.Item>
+          <Form.Item label="商品来源"><Radio.Group optionType="button" buttonStyle="solid" value={sourceType} onChange={(event) => handleChangeSource(event.target.value)} options={[{ value: 'live', label: '同步货源库' }, { value: 'local', label: '我的商品库' }]} /></Form.Item>
           <div className="publish-center-form__grid"><Form.Item label="仓库地区"><Select value={regionId} onChange={handleChangeRegion} options={REGION_OPTIONS.map((region) => ({ value: region.id, label: region.name }))} /></Form.Item><Form.Item label="指定品牌" required><Select<string, BrandOption> value={brandId || undefined} onChange={handleChangeBrand} showSearch optionFilterProp="label" popupMatchSelectWidth={340} placeholder="选择要加入队列的品牌" options={brandOptions} optionRender={(option) => <BrandSelectOption brandOption={option.data} />} /></Form.Item></div>
-          {brandId ? <Form.Item label="商品品类"><div className="publish-center-category-list"><button type="button" className={categoryIds.length === 0 ? 'is-selected' : ''} onClick={() => { setCategoryIds([]); clearPreview(); }}><strong>ALL</strong><span>全部商品</span></button>{brandCategories.map((category) => <button type="button" key={category.id} className={categoryIds.includes(category.id) ? 'is-selected' : ''} onClick={() => handleToggleCategory(category.id)}>{category.imageUrl ? <img src={category.imageUrl} alt="" /> : <strong>{category.name.slice(0, 1)}</strong>}<span>{category.name}</span></button>)}{isCategoryLoading ? <span className="publish-center-category-loading">正在聚合品类…</span> : null}</div></Form.Item> : null}
+          {brandId ? <Form.Item label="商品品类"><div className="publish-center-category-list"><button type="button" className={categoryIds.length === 0 ? 'is-selected' : ''} onClick={() => { setCategoryIds([]); clearPreview(); }}><strong>ALL</strong><span>全部商品</span></button>{brandCategories.map((category) => <button type="button" key={category.id} className={categoryIds.includes(category.id) ? 'is-selected' : ''} onClick={() => handleToggleCategory(category.id)}>{category.imageUrl ? <img src={category.imageUrl} alt="" /> : <strong>{category.name.slice(0, 1)}</strong>}<span>{category.name}</span></button>)}{isCategoryLoading ? <span className="publish-center-category-loading">正在读取本地品类…</span> : null}{categoryErrorMessage ? <span role="alert">{categoryErrorMessage}<Button type="link" onClick={() => { if (selectedBrand) void loadBrandCategories(selectedBrand); }}>重试</Button></span> : null}{!isCategoryLoading && !categoryErrorMessage && brandCategories.length === 0 ? <span className="publish-center-category-loading">暂无品类</span> : null}</div></Form.Item> : null}
           <div className="publish-center-form__grid publish-center-form__grid--three"><Form.Item label="发布数量"><InputNumber min={1} max={Math.max(1, remainingCapacity)} value={publishLimit} onChange={(value) => { setPublishLimit(Number(value ?? 500)); clearPreview(); }} addonAfter="件" /></Form.Item><Form.Item label="最小间隔"><InputNumber min={1} max={60} value={minDelaySeconds} onChange={(value) => setMinDelaySeconds(Number(value ?? 1))} addonAfter="秒" /></Form.Item><Form.Item label="最大间隔"><InputNumber min={1} max={60} value={maxDelaySeconds} onChange={(value) => setMaxDelaySeconds(Number(value ?? 2))} addonAfter="秒" /></Form.Item></div>
           <section className="publish-filter-panel"><header><div><strong>商品筛选</strong><span>只在填写条件后生效，默认不限制</span></div><Space size={12}><span>不发布断码商品</span><Switch checked={excludeBrokenSizeItems} onChange={(checked) => { setExcludeBrokenSizeItems(checked); clearPreview(); }} checkedChildren="开启" unCheckedChildren="关闭" /><Tag color="processing">按活动价与原价计算折扣</Tag></Space></header><div className="publish-center-form__grid publish-center-form__grid--four"><Form.Item label="最低售价"><InputNumber min={0} precision={2} value={minPriceYuan ?? undefined} onChange={(value) => { setMinPriceYuan(value); clearPreview(); }} addonAfter="元" placeholder="不限" /></Form.Item><Form.Item label="最高售价"><InputNumber min={0} precision={2} value={maxPriceYuan ?? undefined} onChange={(value) => { setMaxPriceYuan(value); clearPreview(); }} addonAfter="元" placeholder="不限" /></Form.Item><Form.Item label="最低折扣率（含）"><InputNumber min={0} max={100} precision={0} value={minDiscountRate ?? undefined} onChange={(value) => { setMinDiscountRate(value); clearPreview(); }} addonAfter="%" placeholder="不限" /></Form.Item><Form.Item label="最高折扣率（含）"><InputNumber min={0} max={100} precision={0} value={maxDiscountRate ?? undefined} onChange={(value) => { setMaxDiscountRate(value); clearPreview(); }} addonAfter="%" placeholder="不限" /></Form.Item></div></section>
-          {preview ? <><div className="publish-center-preview"><div><span>品牌商品</span><strong>{preview.total}</strong></div><div><span>可发布</span><strong>{preview.publishable}</strong></div><div><span>恢复旧商品</span><strong>{preview.relists?.length ?? 0}</strong></div><div><span>本次入队</span><strong>{preview.selected + (preview.updates?.length ?? 0) + (preview.offlineCandidates?.length ?? 0)}</strong></div><div><span>待修改</span><strong>{preview.updates?.length ?? 0}</strong></div><div><span>无需修改</span><strong>{preview.unchanged ?? 0}</strong></div><div><span>待下架</span><strong>{preview.offlineCandidates?.length ?? 0}</strong></div><div><span>自动跳过</span><strong>{preview.skipped.length}</strong></div></div>{preview.relists?.length ? <ProTable rowKey="id" cardBordered search={false} options={false} scroll={{ x: 1650 }} pagination={{ pageSize: 5 }} dataSource={preview.relists} headerTitle={`恢复旧商品 · ${preview.relists.length} 件`} columns={relistPreviewColumns} /> : null}{preview.candidates?.length ? <ProTable rowKey="itemNo" cardBordered search={false} options={false} scroll={{ x: 1560 }} pagination={{ pageSize: 10, total: filteredPreviewCandidates.length }} dataSource={filteredPreviewCandidates} headerTitle={'全新发布商品 · 匹配 ' + filteredPreviewCandidates.length + ' 件'} toolBarRender={() => [<Input.Search key="candidate-search" allowClear size="small" value={candidatePreviewKeyword} onChange={(event) => setCandidatePreviewKeyword(event.target.value)} placeholder="搜索货号或商品名称" />]} columns={publishCandidateColumns} /> : null}{preview.offlineCandidates?.length > 0 ? <><Alert type="warning" showIcon message="确认后同时下架" description={`${preview.offlineCandidates.length} 件闲鱼商品已不在合并品牌任一地区货源中`} /><ProTable rowKey="platformItemId" cardBordered search={false} options={false} scroll={{ x: 760 }} pagination={{ pageSize: 5, total: filteredOfflineCandidates.length }} dataSource={filteredOfflineCandidates} headerTitle={`待下架商品 · 匹配 ${filteredOfflineCandidates.length} 件`} toolBarRender={() => [<Input.Search key="offline-search" allowClear size="small" value={offlinePreviewKeyword} onChange={(event) => setOfflinePreviewKeyword(event.target.value)} placeholder="搜索货号或商品名称" />]} columns={[{ title: 'SKU 图片', width: 88, render: (_, item) => renderSkuImage(item.imageUrl, item.title) }, { title: '货号', render: (_, item) => item.itemNo || '无货号' }, { title: '闲鱼商品', dataIndex: 'title' }, { title: '售价', render: (_, item) => formatPrice(item.priceCents) }, { title: '操作', width: 128, render: (_, item) => { const isPreserved = preservedOfflinePlatformItemIds.includes(item.platformItemId); return <Button type="link" danger={!isPreserved} onClick={() => handleToggleOfflinePreservation(item.platformItemId)}>{isPreserved ? '取消保留' : '保留商品'}</Button>; } }]} /></> : null}</> : null}
+          {preview ? <><div className="publish-center-preview"><div><span>品牌商品</span><strong>{preview.total}</strong></div><div><span>可发布</span><strong>{preview.publishable}</strong></div><div><span>恢复旧商品</span><strong>{preview.relists?.length ?? 0}</strong></div><div><span>本次入队</span><strong>{preview.selected + (preview.updates?.length ?? 0) + (preview.offlineCandidates?.length ?? 0)}</strong></div><div><span>待修改</span><strong>{preview.updates?.length ?? 0}</strong></div><div><span>无需修改</span><strong>{preview.unchanged ?? 0}</strong></div><div><span>待下架</span><strong>{preview.offlineCandidates?.length ?? 0}</strong></div><div><span>自动跳过</span><strong>{preview.skipped.length}</strong></div></div>{preview.relists?.length ? <ProTable rowKey="id" cardBordered search={false} options={false} scroll={{ x: 1650 }} pagination={{ pageSize: 5 }} dataSource={preview.relists} headerTitle={`恢复旧商品 · ${preview.relists.length} 件`} columns={relistPreviewColumns} /> : null}{preview.candidates?.length ? <ProTable rowKey="itemNo" cardBordered search={false} options={false} scroll={{ x: 1560 }} pagination={{ pageSize: 10, total: filteredPreviewCandidates.length }} dataSource={filteredPreviewCandidates} headerTitle={'全新发布商品 · 匹配 ' + filteredPreviewCandidates.length + ' 件'} toolBarRender={() => [<Input.Search key="candidate-search" allowClear size="small" value={candidatePreviewKeyword} onChange={(event) => setCandidatePreviewKeyword(event.target.value)} placeholder="搜索货号或商品名称" />]} columns={publishCandidateColumns} /> : null}{preview.offlineCandidates?.length > 0 ? <><Alert type="warning" showIcon message="确认后同时下架" description={`${pendingOfflineCandidates.length} 件商品将按下方核验原因下架；筛选条件不符仅跳过，不触发下架。`} /><ProTable rowKey="platformItemId" cardBordered search={false} options={false} scroll={{ x: 1100 }} pagination={{ pageSize: 5, total: filteredOfflineCandidates.length }} dataSource={filteredOfflineCandidates} headerTitle={`待下架商品 · 匹配 ${filteredOfflineCandidates.length} 件`} toolBarRender={() => [<Input.Search key="offline-search" allowClear size="small" value={offlinePreviewKeyword} onChange={(event) => setOfflinePreviewKeyword(event.target.value)} placeholder="搜索货号或商品名称" />]} columns={[{ title: 'SKU 图片', width: 88, render: (_, item) => renderSkuImage(item.imageUrl, item.title) }, { title: '货号', render: (_, item) => item.itemNo || '无货号' }, { title: '闲鱼商品', dataIndex: 'title' }, { title: '售价', render: (_, item) => formatPrice(item.priceCents) }, { title: '下架原因', width: 320, render: (_, item) => formatOfflineCandidateReason(item.changeReasons) }, { title: '操作', width: 128, render: (_, item) => { const isPreserved = preservedOfflinePlatformItemIds.includes(item.platformItemId); return <Button type="link" danger={!isPreserved} onClick={() => handleToggleOfflinePreservation(item.platformItemId)}>{isPreserved ? '取消保留' : '保留商品'}</Button>; } }]} /></> : null}</> : null}
           {isPlanning ? <Alert type="info" showIcon message="正在读取各地区货源及闲鱼规格，生成对账计划，请稍候…" /> : null}
           {preview ? <ProTable rowKey="id" cardBordered search={false} options={false} scroll={{ x: 860 }} pagination={{ pageSize: 5, total: filteredPreviewUpdates.length }} dataSource={filteredPreviewUpdates} headerTitle={`待修改商品 · 匹配 ${filteredPreviewUpdates.length} 件`} toolBarRender={() => [<Space key="update-tools"><Tag color="processing">待修改 {preview.updates?.length ?? 0}</Tag><Tag>无需修改 {preview.unchanged ?? 0}</Tag><Input.Search allowClear size="small" value={updatePreviewKeyword} onChange={(event) => setUpdatePreviewKeyword(event.target.value)} placeholder="搜索货号、商品或变更原因" /></Space>]} columns={[{ title: 'SKU 图片', width: 88, render: (_, item) => renderSkuImage(item.imageUrls?.[0], item.title) }, { title: '货号', dataIndex: 'itemNo' }, { title: '触发编辑的具体变化', render: (_, item) => <div>{item.changeReasons?.map((reason) => <div key={reason}>{reason}</div>)}</div> }, { title: '售价', render: (_, item) => `${formatPrice(Number(item.before?.price ?? 0))} → ${formatPrice(item.priceCents)}` }]} /> : null}
           <div className="publish-center-form__actions"><Button onClick={() => setIsAddBrandOpen(false)}>取消</Button><Button onClick={() => void handlePreview()} loading={isPlanning} disabled={!brandId}>生成预览</Button><Button type="primary" onClick={() => void handleAppendBrand()} loading={isPlanning} disabled={!preview || (preview.selected + (preview.updates?.length ?? 0) + (preview.offlineCandidates?.length ?? 0)) === 0}>确认加入队列</Button></div>

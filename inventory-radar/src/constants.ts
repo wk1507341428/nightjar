@@ -1,13 +1,7 @@
 import type { ProductSearchState, RegionOption } from './types';
 
-/** 商品数据接口根地址。 */
-export const API_BASE_URL = 'https://aiopro.fvo2o.com/api/h5app/wxapp';
-
 /** SideJob 后端地址；容器环境由 Nginx 转发相对路径。 */
 export const SIDEJOB_API_BASE_URL = import.meta.env.VITE_SIDEJOB_API_URL ?? '/api';
-
-/** 平台公司 ID。 */
-export const COMPANY_ID = '1';
 
 /** 商品名称搜索每页数量。 */
 export const PRODUCT_PAGE_SIZE = 24;

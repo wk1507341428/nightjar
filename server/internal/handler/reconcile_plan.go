@@ -24,9 +24,16 @@ func listingBelongsToPlan(listing model.MarketplaceListing, plan publishBatchPla
 	return false
 }
 
-// prepareOfflineBatch 保持用户确认的下架意图；下架中心不再因货源恢复而撤销任务。
-func prepareOfflineBatch(_ context.Context, _ *svc.ServiceContext, _ []model.PublishTask) map[string]error {
-	return map[string]error{}
+// prepareOfflineBatch 保留人工下架意图，自动缺货任务则在执行前复核补货与读取异常。
+func prepareOfflineBatch(ctx context.Context, sc *svc.ServiceContext, tasks []model.PublishTask) map[string]error {
+	results := make(map[string]error)
+	load := batchReconcileSourceLoader()
+	for _, task := range tasks {
+		if err := checkStockOutOfflineWithLoader(ctx, sc, task, load); err != nil {
+			results[task.ID] = err
+		}
+	}
+	return results
 }
 
 func taskPublishInput(task model.PublishTask) xianyu.PublishInput {
@@ -146,53 +153,33 @@ func canonicalSpecValue(name, value string) string {
 	return value
 }
 
-// refreshReconcileTask 执行前重新拉齐货源，队列等待期间的缺货不能使用旧库存覆盖。
+// refreshReconcileTask 执行前核对完整本地同步版本，不隐式查询小程序。
 func refreshReconcileTask(ctx context.Context, sc *svc.ServiceContext, task model.PublishTask) (model.PublishTask, error) {
 	if sc != nil && task.XianyuItemID != "" {
 		if err := sc.ListingRepository.RequireManagedItems(ctx, task.AccountID, []string{task.XianyuItemID}); err != nil {
 			return task, err
 		}
 	}
-	if task.Action == "offline" {
-		// 下架中心是人工确认后的强制操作，不重新依据小程序库存撤销。
-		return task, nil
+	if task.Action == model.PublishActionOffline {
+		return task, checkStockOutOffline(ctx, sc, task)
 	}
-	keys := task.SourceMemberIDs
-	if task.BrandProfileID != "" {
-		_, members, err := sc.InventoryRepository.GetBrandProfile(ctx, task.BrandProfileID)
-		if err != nil {
-			return task, err
-		}
-		keys = nil
-		for _, m := range members {
-			keys = append(keys, m.RegionID+":"+m.DistributorID)
-		}
+	if err := validateTaskSourceVersion(ctx, sc, task); err != nil {
+		return task, err
 	}
-	if len(keys) == 0 {
-		return task, fmt.Errorf("缺少可核对的货源门店，请重新关联")
+	if task.ReconcileMode == "" && model.IsListingActivationAction(task.Action) {
+		return refreshManualPublishTask(ctx, sc, task)
 	}
-	rows, err := loadReconcileSources(ctx, sc, keys, task.Action == "offline")
+	product, err := reconcileSourceProduct(ctx, sc, task)
 	if err != nil {
 		return task, err
 	}
-	products := []map[string]any{}
-	for _, p := range rows {
-		if strings.EqualFold(productString(p, "item_no"), task.ItemNo) {
-			products = append(products, p)
-		}
+	if product == nil {
+		return reconcileStockOutTask(task)
 	}
-	merged := mergePublishProductsByItemNo(products)
-	if len(merged) == 0 {
-		return task, fmt.Errorf("全部来源已无货，请重新预览并确认下架")
+	if len(productImages(product)) == 0 || (len(task.ImageURLs) > 1 && len(productImages(product)) == 1) {
+		return task, fmt.Errorf("实时商详图片不完整，已阻止图片降级修改")
 	}
-	product := merged[0]
-	if task.Action != "offline" {
-		product, err = retryPublishDetail(ctx, sc.CatalogService.GetLiveProductDetail, product, task)
-		if err != nil {
-			return task, err
-		}
-	}
-	updated, err := buildBatchPublishTask(task.BatchID, publishBatchPlan{AccountID: task.AccountID, BrandProfileID: task.BrandProfileID, BrandName: task.Brand, RegionID: task.RegionID}, product, task.CreatedAt)
+	updated, err := buildBatchPublishTask(task.BatchID, publishBatchPlan{AccountID: task.AccountID, BrandProfileID: task.BrandProfileID, BrandName: task.Brand, RegionID: task.RegionID, SourceType: task.SourceType, ActionMode: task.ReconcileMode, SourceSyncVersion: task.SourceSyncVersion}, product, task.CreatedAt)
 	if err != nil {
 		return task, err
 	}
@@ -200,7 +187,7 @@ func refreshReconcileTask(ctx context.Context, sc *svc.ServiceContext, task mode
 	updated.MaxDelaySeconds = task.MaxDelaySeconds
 	updated.ID = task.ID
 	updated.AccountID = task.AccountID
-	updated.Quantity = productNumber(merged[0], "item_total_store")
+	updated.Quantity = productNumber(product, "item_total_store")
 	updated.Action = task.Action
 	updated.Before = task.Before
 	updated.ChangeReasons = task.ChangeReasons
@@ -222,7 +209,7 @@ func retryPublishDetail(ctx context.Context, fetch func(context.Context, map[str
 	if err != nil {
 		return nil, fmt.Errorf("重试读取完整商详失败，未发布：%w", err)
 	}
-	if !strings.EqualFold(productString(detail, "item_no"), task.ItemNo) {
+	if model.ItemNoKey(productString(detail, "item_no")) != model.ItemNoKey(task.ItemNo) {
 		return nil, fmt.Errorf("重试商详货号不一致，未发布")
 	}
 	for _, key := range []string{"_source_regions", "_source_member_ids", "_source_item_ids", "_primary_region", "item_total_store", "store"} {

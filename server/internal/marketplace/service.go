@@ -37,6 +37,7 @@ type accountSyncState struct {
 	lastFullSyncCount int
 	lastOffShelfSync  time.Time
 	lastOffShelfCount int
+	activationBatchID string
 }
 
 // OfflineResult 是渠道下架后的逐商品处理结果。
@@ -81,6 +82,9 @@ func NewService(
 
 // stateForAccount 返回账号独立的同步状态。
 func (service *Service) stateForAccount(accountID string) *accountSyncState {
+	if accountID == "" {
+		accountID = model.DefaultXianyuAccountID
+	}
 	service.stateMutex.Lock()
 	defer service.stateMutex.Unlock()
 	state := service.accountStates[accountID]
@@ -121,10 +125,21 @@ func (service *Service) EnsureOffShelfSnapshot(ctx context.Context, accountID st
 
 // syncOffShelfSnapshot 保存商家后台完整下架列表，供货号批量匹配。
 func (service *Service) syncOffShelfSnapshot(ctx context.Context, accountID string) (int, error) {
+	snapshotStartedAt := time.Now()
+	previous, err := service.listingRepository.ListSnapshotCandidates(ctx, accountID, model.XianyuPlatform)
+	if err != nil {
+		return 0, err
+	}
+
 	remoteItems, err := service.sellerXianyuService.ForAccount(accountID).ListItemsByStatus(ctx, "-2,-12,-3,-11,1")
 	if err != nil {
 		return 0, err
 	}
+	remoteItems, verifiedConflicts, err := reconcileHistoryConflicts(ctx, previous, remoteItems, service.sellerXianyuService.ForAccount(accountID).GetSellerEditDetail)
+	if err != nil {
+		return 0, err
+	}
+
 	itemIDs := make([]string, 0, len(remoteItems))
 	for _, item := range remoteItems {
 		itemIDs = append(itemIDs, item.ItemID)
@@ -149,7 +164,9 @@ func (service *Service) syncOffShelfSnapshot(ctx context.Context, accountID stri
 		offShelfAt := syncedAt
 		listings = append(listings, model.MarketplaceListing{ID: model.XianyuPlatform + ":" + remoteItem.ItemID, AccountID: accountID, Platform: model.XianyuPlatform, PlatformItemID: remoteItem.ItemID, SourceItemID: task.SourceItemID, ItemNo: itemNo, Title: remoteItem.Title, PriceCents: remoteItem.PriceCents, ImageURL: remoteItem.ImageURL, ItemURL: "https://www.goofish.com/item?id=" + remoteItem.ItemID, ListedAt: listedAt, LastSyncedAt: syncedAt, LastSeenAt: syncedAt, SaleStatus: "off_shelf", RemoteStatus: remoteItem.Status, OffShelfAt: &offShelfAt, BrandProfileID: task.BrandProfileID, SourceType: task.SourceType, SourceRegions: task.SourceRegions, SourceMemberIDs: task.SourceMemberIDs, SourceItemIDs: task.SourceItemIDs})
 	}
-	if err := service.listingRepository.UpsertOffShelfSnapshot(ctx, accountID, listings); err != nil {
+	listings = append(listings, verifiedConflicts...)
+
+	if err := service.listingRepository.UpsertOffShelfSnapshot(ctx, accountID, listings, snapshotStartedAt); err != nil {
 		return 0, err
 	}
 	return len(listings), nil
@@ -177,6 +194,12 @@ func (service *Service) ensureRetrySnapshot(ctx context.Context, accountID strin
 
 // syncXianyuSnapshot 必须在 syncMutex 内执行；仅完整同步成功才允许更新时间戳。
 func (service *Service) syncXianyuSnapshot(ctx context.Context, accountID string) (int, error) {
+	snapshotStartedAt := time.Now()
+	previous, err := service.listingRepository.ListSnapshotCandidates(ctx, accountID, model.XianyuPlatform)
+	if err != nil {
+		return 0, err
+	}
+
 	// 在售商品属于卖家工作台能力，必须使用卖家工作台凭证；普通闲鱼凭证只负责发布和市场搜索。
 	remoteItems, err := service.sellerXianyuService.ForAccount(accountID).ListOnSaleItems(ctx)
 	if err != nil {
@@ -186,6 +209,11 @@ func (service *Service) syncXianyuSnapshot(ctx context.Context, accountID string
 				_ = service.accountRepository.Update(ctx, accountID, "", model.XianyuAccountPaused)
 			}
 		}
+		return 0, err
+	}
+
+	remoteItems, verifiedMissing, err := reconcileMissingListings(ctx, previous, remoteItems, service.sellerXianyuService.ForAccount(accountID).GetSellerEditDetail)
+	if err != nil {
 		return 0, err
 	}
 
@@ -250,7 +278,7 @@ func (service *Service) syncXianyuSnapshot(ctx context.Context, accountID string
 		})
 	}
 
-	if err := service.listingRepository.ReplacePlatformSnapshot(ctx, accountID, model.XianyuPlatform, listings); err != nil {
+	if err := service.listingRepository.ReplaceVerifiedPlatformSnapshot(ctx, accountID, model.XianyuPlatform, listings, verifiedMissing, snapshotStartedAt); err != nil {
 		return 0, err
 	}
 	if err := service.publishRepository.BackfillOfflineTaskPresentation(ctx, accountID, listings); err != nil {

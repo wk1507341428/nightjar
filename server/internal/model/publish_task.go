@@ -13,8 +13,13 @@ const (
 
 // PublishTask 保存一次闲鱼发布任务及其结果，不包含任何登录凭证。
 type PublishTask struct {
-	AccountID              string           `bson:"accountId" json:"accountId"`
-	RetryRequested         bool             `bson:"retryRequested,omitempty" json:"-"`
+	SourceSyncVersion string `bson:"sourceSyncVersion,omitempty" json:"sourceSyncVersion,omitempty"`
+	AccountID         string `bson:"accountId" json:"accountId"`
+	RetryRequested    bool   `bson:"retryRequested,omitempty" json:"-"`
+	// ReconcileMode 由服务端记录本次对账授权，旧任务不自动获得下架权限。
+	ReconcileMode string `bson:"reconcileMode,omitempty" json:"reconcileMode,omitempty"`
+	// StockOutOffline 标记已核验全部地区缺货的自动下架；筛选不符合不产生下架。
+	StockOutOffline        bool             `bson:"stockOutOffline,omitempty" json:"stockOutOffline,omitempty"`
 	Quantity               int64            `bson:"quantity,omitempty" json:"quantity,omitempty"`
 	Action                 string           `bson:"action,omitempty" json:"action,omitempty"`
 	Before                 map[string]any   `bson:"before,omitempty" json:"before,omitempty"`
@@ -25,6 +30,7 @@ type PublishTask struct {
 	BatchID                string           `bson:"batchId,omitempty" json:"batchId,omitempty"`
 	SourceItemID           string           `bson:"sourceItemId" json:"sourceItemId"`
 	ItemNo                 string           `bson:"itemNo" json:"itemNo"`
+	ItemNoKey              string           `bson:"itemNoKey,omitempty" json:"-"`
 	Title                  string           `bson:"title" json:"title"`
 	Description            string           `bson:"description" json:"description"`
 	PriceCents             int64            `bson:"priceCents" json:"priceCents"`

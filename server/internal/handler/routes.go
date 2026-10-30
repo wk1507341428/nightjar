@@ -23,6 +23,14 @@ func RegisterHandlers(server *rest.Server, serviceContext *svc.ServiceContext) {
 	}
 	serviceContext.PublishService.Start()
 	server.AddRoutes([]rest.Route{
+		{Method: http.MethodGet, Path: "/api/catalog/sync-center/profiles", Handler: syncCenterProfilesHandler(serviceContext)},
+		{Method: http.MethodGet, Path: "/api/catalog/sync-center/profiles/:id/metadata", Handler: syncCenterMetadataHandler(serviceContext)},
+		{Method: http.MethodGet, Path: "/api/catalog/sync-center/brands", Handler: listSyncCenterBrandsHandler(serviceContext)},
+		{Method: http.MethodDelete, Path: "/api/catalog/sync-center/brands/:id", Handler: deleteSyncCenterBrandHandler(serviceContext)},
+		{Method: http.MethodGet, Path: "/api/catalog/sync-center/runs", Handler: listSyncCenterRunsHandler(serviceContext)},
+		{Method: http.MethodPost, Path: "/api/catalog/sync-center/runs", Handler: startSyncCenterRunsHandler(serviceContext)},
+		{Method: http.MethodGet, Path: "/api/catalog/sync-center/skus", Handler: searchSyncedSKUsHandler(serviceContext)},
+		{Method: http.MethodGet, Path: "/api/catalog/source-categories", Handler: syncedSourceCategoriesHandler(serviceContext)},
 		{Method: http.MethodGet, Path: "/api/finance/ledger", Handler: financeLedgerHandler(serviceContext)},
 		{Method: http.MethodPost, Path: "/api/finance/orders/sync", Handler: financeSyncHandler(serviceContext)},
 		{Method: http.MethodPut, Path: "/api/finance/orders/:id", Handler: saveOrderFinanceHandler(serviceContext)},

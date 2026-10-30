@@ -3,14 +3,24 @@ package xianyu
 import (
 	"context"
 	"fmt"
+	"sidejob-server/internal/model"
 	"strings"
 )
 
 // ReactivateManagedItem 用最新模板、图片、价格和规格编辑旧商品并重新上架。
 func (service *Service) ReactivateManagedItem(ctx context.Context, itemID string, input PublishInput, before map[string]any) error {
+	if err := validateItemDescription(input.Title, input.Description); err != nil {
+		return err
+	}
+	if err := validateSKUProtocolProperties(input.Variants); err != nil {
+		return err
+	}
 	detail, err := service.GetSellerEditDetail(ctx, itemID)
 	if err != nil {
 		return err
+	}
+	if status := stringValue(detail["itemStatus"]); model.ObservedMarketplaceStatus(status) == model.MarketplaceStatusUnknown {
+		return &UnconfirmedRelistError{Status: status}
 	}
 	input.Variants = hydrateVariantImagesFromDetail(input.Variants, detail)
 	plannedPayload := ManagedRelistPayload(detail, input)
@@ -52,7 +62,16 @@ func (service *Service) ReactivateManagedItem(ctx context.Context, itemID string
 	}
 	after, err := service.GetSellerEditDetail(ctx, itemID)
 	if err != nil {
-		return err
+		return fmt.Errorf("历史商品编辑已提交，但回读失败，未确认在售：%w", err)
+	}
+	return validateRelistReadback(after, desiredState)
+}
+
+// validateRelistReadback distinguishes a successful edit from a confirmed activation.
+// ManagedState intentionally omits sale status, so relisting must check it separately.
+func validateRelistReadback(after, desiredState map[string]any) error {
+	if status := stringValue(after["itemStatus"]); status != "0" {
+		return &UnconfirmedRelistError{Status: status, Submitted: true}
 	}
 	if !SameManagedState(ManagedState(after), desiredState) {
 		return fmt.Errorf("历史商品编辑回读不一致")
@@ -87,4 +106,17 @@ func (service *Service) DeleteSellerItems(ctx context.Context, itemIDs []string)
 		}
 	}
 	return nil
+}
+
+// UnconfirmedRelistError preserves the platform observation for safe local handling.
+type UnconfirmedRelistError struct {
+	Status    string
+	Submitted bool
+}
+
+func (err *UnconfirmedRelistError) Error() string {
+	if !err.Submitted {
+		return fmt.Sprintf("历史商品状态待核验（itemStatus=%q），未重复提交恢复", err.Status)
+	}
+	return fmt.Sprintf("历史商品编辑已提交，但未确认在售（itemStatus=%q），请核对平台商品状态", err.Status)
 }

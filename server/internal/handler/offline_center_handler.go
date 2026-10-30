@@ -7,12 +7,10 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/zeromicro/go-zero/rest/pathvar"
-	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"sidejob-server/internal/catalog"
@@ -26,12 +24,11 @@ import (
 func listOfflineCenterCategoriesHandler(serviceContext *svc.ServiceContext) http.HandlerFunc {
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
 		profileID := strings.TrimSpace(pathvar.Vars(request)["id"])
-		_, members, err := serviceContext.InventoryRepository.GetBrandProfile(request.Context(), profileID)
+		categories, err := serviceContext.SyncCenter.ReadCategories(request.Context(), profileID, "", "")
 		if err != nil {
-			writeError(responseWriter, http.StatusNotFound, "品牌档案不存在")
+			writeError(responseWriter, http.StatusConflict, err.Error())
 			return
 		}
-		categories := collectProfileCategories(request.Context(), serviceContext, members)
 		writeJSON(responseWriter, http.StatusOK, categories)
 	}
 }
@@ -68,7 +65,7 @@ func previewOfflineCenterHandler(serviceContext *svc.ServiceContext) http.Handle
 		}
 		liveSources, err := refreshOfflineCenterBindings(request.Context(), serviceContext, profile, members, body.CategoryIDs)
 		if err != nil {
-			writeError(responseWriter, http.StatusBadGateway, "读取小程序品牌商品失败："+err.Error())
+			writeError(responseWriter, http.StatusBadGateway, "读取同步货源失败："+err.Error())
 			return
 		}
 		candidates, err := buildOfflineCenterCandidates(request.Context(), serviceContext, body, profile, members, liveSources)
@@ -209,96 +206,16 @@ func marketplacePlatformItemIDs(listings []model.MarketplaceListing) []string {
 	return itemIDs
 }
 
-// collectProfileCategories 合并品牌成员门店品类并按名称排序。
-func collectProfileCategories(ctx context.Context, serviceContext *svc.ServiceContext, members []catalog.BrandProfileMember) []catalog.BrandCategory {
-	categoryByID := make(map[string]catalog.BrandCategory)
-	var categoryMutex sync.Mutex
-	var categoryWaitGroup sync.WaitGroup
-	for _, member := range members {
-		member := member
-		categoryWaitGroup.Add(1)
-		go func() {
-			defer categoryWaitGroup.Done()
-			categories, err := serviceContext.CatalogService.ListSourceCategories(ctx, member.RegionID, member.DistributorID)
-			if err != nil {
-				return
-			}
-			categoryMutex.Lock()
-			defer categoryMutex.Unlock()
-			for _, category := range categories {
-				categoryByID[category.ID] = category
-			}
-		}()
+// offlineBindingCategory preserves existing category fallback while reading its name from local metadata.
+func offlineBindingCategory(product map[string]any, selected []string, names map[string]string) (string, string) {
+	id, name := offlineProductCategory(product)
+	if id == "" && len(selected) == 1 {
+		id = selected[0]
 	}
-	categoryWaitGroup.Wait()
-	categories := make([]catalog.BrandCategory, 0, len(categoryByID))
-	for _, category := range categoryByID {
-		categories = append(categories, category)
+	if name == "" {
+		name = names[id]
 	}
-	sort.Slice(categories, func(leftIndex, rightIndex int) bool { return categories[leftIndex].Name < categories[rightIndex].Name })
-	return categories
-}
-
-// refreshOfflineCenterBindings 拉取小程序当前商品，保留历史归属并返回本次实时有效货源。
-// 历史归属只用于趋势与审计，不能参与下架预览的实时价格、地区与折扣计算。
-type offlineCenterLiveSources struct {
-	activeBindingKeys map[string]struct{}
-	productsByItemNo  map[string][]map[string]any
-}
-
-func refreshOfflineCenterBindings(ctx context.Context, serviceContext *svc.ServiceContext, profile catalog.BrandProfile, members []catalog.BrandProfileMember, categoryIDs []string) (offlineCenterLiveSources, error) {
-	categoryNameByID := make(map[string]string)
-	for _, category := range collectProfileCategories(ctx, serviceContext, members) {
-		categoryNameByID[category.ID] = category.Name
-	}
-	type memberResult struct {
-		member   catalog.BrandProfileMember
-		products []map[string]any
-		err      error
-	}
-	results := make([]memberResult, len(members))
-	var waitGroup sync.WaitGroup
-	for memberIndex, member := range members {
-		memberIndex, member := memberIndex, member
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-			results[memberIndex].member = member
-			results[memberIndex].products, results[memberIndex].err = serviceContext.CatalogService.ListLiveBrandOffers(ctx, member.RegionID, member.DistributorID, categoryIDs)
-		}()
-	}
-	waitGroup.Wait()
-	for _, result := range results {
-		if result.err != nil {
-			return offlineCenterLiveSources{}, result.err
-		}
-		brandStoreID := catalog.BrandStoreIDForSource(result.member.RegionID, result.member.DistributorID)
-		for _, product := range result.products {
-			categoryID, categoryName := offlineProductCategory(product)
-			if categoryID == "" && len(categoryIDs) == 1 {
-				categoryID = categoryIDs[0]
-			}
-			if categoryName == "" {
-				categoryName = categoryNameByID[categoryID]
-			}
-			binding := catalog.SKUCategoryBinding{ItemNo: firstProductString(product, "item_no"), BrandProfileID: profile.ID, BrandStoreID: brandStoreID, BrandName: profile.Name, RegionID: result.member.RegionID, DistributorID: result.member.DistributorID, SourceItemID: firstProductString(product, "default_item_id", "item_id", "goods_id"), CategoryID: categoryID, CategoryName: categoryName, SourcePriceCents: offlineSourcePrice(product), MarketPriceCents: productNumber(product, "market_price"), LastSeenAt: time.Now()}
-			if err := serviceContext.InventoryRepository.UpsertSKUCategoryBinding(ctx, binding); err != nil {
-				return offlineCenterLiveSources{}, err
-			}
-		}
-	}
-	liveSources := offlineCenterLiveSources{activeBindingKeys: make(map[string]struct{}), productsByItemNo: make(map[string][]map[string]any)}
-	for _, result := range results {
-		for _, product := range result.products {
-			itemNo := strings.ToUpper(strings.TrimSpace(firstProductString(product, "item_no")))
-			if itemNo == "" {
-				continue
-			}
-			liveSources.activeBindingKeys[offlineCenterBindingKey(itemNo, result.member.RegionID, firstProductString(product, "default_item_id", "item_id", "goods_id"))] = struct{}{}
-			liveSources.productsByItemNo[itemNo] = append(liveSources.productsByItemNo[itemNo], product)
-		}
-	}
-	return liveSources, nil
+	return id, name
 }
 
 // buildOfflineCenterCandidates 匹配当前账号闲鱼在售商品并应用筛选条件。
@@ -401,7 +318,11 @@ func isBrokenSizeProducts(products []map[string]any) bool {
 
 // isShoeOrApparelCategory 防止包、配件等单规格商品被误判为断码。
 func isShoeOrApparelCategory(categoryName string) bool {
-	return strings.Contains(categoryName, "鞋") || strings.Contains(categoryName, "服") || strings.Contains(categoryName, "上装") || strings.Contains(categoryName, "下装") || strings.Contains(categoryName, "裙") || strings.Contains(categoryName, "裤") || strings.Contains(categoryName, "套装") || strings.Contains(categoryName, "童装")
+	if strings.Contains(categoryName, "包") || strings.Contains(categoryName, "配件") || strings.Contains(categoryName, "饰品") {
+		return false
+	}
+
+	return strings.Contains(categoryName, "鞋") || strings.Contains(categoryName, "服") || strings.Contains(categoryName, "上装") || strings.Contains(categoryName, "下装") || strings.Contains(categoryName, "裙") || strings.Contains(categoryName, "裤") || strings.Contains(categoryName, "套装") || strings.Contains(categoryName, "童装") || strings.Contains(categoryName, "男装") || strings.Contains(categoryName, "女装")
 }
 
 // offlineCenterBindingKey 标识一次实时小程序读取中仍可用的具体货源。
@@ -515,37 +436,17 @@ func smallProgramDiscountRate(sourcePriceCents, marketPriceCents int64) int {
 
 // offlineProductCategory 读取小程序商品主品类。
 func offlineProductCategory(product map[string]any) (string, string) {
-	categoryValue := product["item_category_main"]
-	categories := make([]map[string]any, 0)
-	appendCategory := func(rawCategory any) {
-		switch category := rawCategory.(type) {
-		case map[string]any:
-			categories = append(categories, category)
-		case bson.M:
-			categories = append(categories, map[string]any(category))
-		}
+
+	nodes := flattenSourceCategories(product["item_category_main"], 1)
+	if len(nodes) == 0 {
+		nodes = flattenSourceCategories(product["item_category_info"], 1)
 	}
-	switch hierarchy := categoryValue.(type) {
-	case []any:
-		for _, category := range hierarchy {
-			appendCategory(category)
-		}
-	case bson.A:
-		for _, category := range hierarchy {
-			appendCategory(category)
-		}
-	default:
-		appendCategory(categoryValue)
-	}
-	if len(categories) == 0 {
+	if len(nodes) == 0 {
 		return "", ""
 	}
-	selectedCategory := categories[len(categories)-1]
-	for _, category := range categories {
-		if firstProductString(category, "category_level") == "2" {
-			selectedCategory = category
-			break
-		}
+	selected := nodes[len(nodes)-1].data
+	if second := secondLevelSourceCategories(nodes); len(second) > 0 {
+		selected = second[0]
 	}
-	return firstProductString(selectedCategory, "category_id", "id"), firstProductString(selectedCategory, "category_name", "name")
+	return firstProductString(selected, "category_id", "id"), firstProductString(selected, "category_name", "name")
 }

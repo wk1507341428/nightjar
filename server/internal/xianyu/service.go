@@ -659,6 +659,12 @@ func parseSearchOriginalPriceCents(result map[string]any) int64 {
 
 // Publish 通过闲鱼 API 完成图片上传、属性推荐、服务配置和正式发布。
 func (service *Service) Publish(ctx context.Context, input PublishInput) (PublishResult, error) {
+	if err := validateItemDescription(input.Title, input.Description); err != nil {
+		return PublishResult{}, err
+	}
+	if err := validateSKUProtocolProperties(input.Variants); err != nil {
+		return PublishResult{}, err
+	}
 	client, displayName, err := service.loadClient(ctx)
 	if err != nil {
 		return PublishResult{}, err
@@ -1163,11 +1169,7 @@ func buildPublishPayload(
 		"quantity":        publishQuantity(input.Variants),
 		"simpleItem":      "true",
 		"imageInfoDOList": imageInfos,
-		"itemTextDTO": map[string]any{
-			"desc":              input.Description,
-			"title":             input.Title,
-			"titleDescSeparate": true,
-		},
+		"itemTextDTO":     unifiedItemText(input.Title, input.Description),
 		"itemPriceDTO": map[string]any{
 			"priceInCent":     strconv.FormatInt(input.PriceCents, 10),
 			"origPriceInCent": optionalPrice(input.OriginalPriceCents),
@@ -1214,9 +1216,9 @@ func selectVariantImageProperty(variants []PublishVariant) variantImageProperty 
 			continue
 		}
 		for _, property := range variant.Properties {
-			name := strings.TrimSpace(property.Name)
-			value := strings.TrimSpace(property.Value)
-			if name == "" || value == "" {
+			name := property.Name
+			value := property.Value
+			if strings.TrimSpace(name) == "" || strings.TrimSpace(value) == "" {
 				continue
 			}
 			if candidates[name] == nil {
@@ -1272,8 +1274,9 @@ func buildPublishPropertyImages(variants []PublishVariant) any {
 	sort.Strings(values)
 	images := make([]any, 0, len(values))
 	for _, value := range values {
+		axis, label := skuProtocolProperty(selected.name, value)
 		images = append(images, map[string]any{
-			"property": map[string]any{"propertyText": selected.name, "valueText": value},
+			"property": map[string]any{"propertyText": axis, "valueText": label},
 			"url":      selected.valueURLs[value],
 		})
 	}
@@ -1309,12 +1312,13 @@ func buildPublishSKUList(variants []PublishVariant) any {
 		}
 		properties := make([]map[string]string, 0, len(variant.Properties))
 		for _, property := range variant.Properties {
-			name := strings.TrimSpace(property.Name)
-			value := strings.TrimSpace(property.Value)
-			if name == "" || value == "" {
+			name := property.Name
+			value := property.Value
+			if strings.TrimSpace(name) == "" || strings.TrimSpace(value) == "" {
 				continue
 			}
-			properties = append(properties, map[string]string{"propertyText": name, "valueText": value})
+			axis, label := skuProtocolProperty(name, value)
+			properties = append(properties, map[string]string{"propertyText": axis, "valueText": label})
 		}
 		if len(properties) == 0 {
 			continue
@@ -1340,8 +1344,7 @@ func buildPublishProperties(variants []PublishVariant) any {
 	propertyValues := make(map[string][]string)
 	for _, variant := range variants {
 		for _, property := range variant.Properties {
-			name := strings.TrimSpace(property.Name)
-			value := strings.TrimSpace(property.Value)
+			name, value := skuProtocolProperty(property.Name, property.Value)
 			if name == "" || value == "" {
 				continue
 			}
@@ -1364,7 +1367,7 @@ func buildPublishProperties(variants []PublishVariant) any {
 		}
 		properties = append(properties, map[string]any{
 			"propertyName":   propertyName,
-			"supportImage":   propertyName == selectedImageProperty.name,
+			"supportImage":   propertyName == skuProtocolLabel("name", "", selectedImageProperty.name),
 			"propertyValues": propertyValueList,
 		})
 	}

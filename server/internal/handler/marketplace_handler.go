@@ -85,30 +85,7 @@ func listMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.Han
 			return
 		}
 
-		itemNosByScope := make(map[string][]string)
-		for _, listing := range listings {
-			scopeID := strings.TrimSpace(listing.BrandProfileID)
-			itemNo := strings.ToUpper(strings.TrimSpace(listing.ItemNo))
-			if scopeID == "" || itemNo == "" {
-				continue
-			}
-			itemNosByScope[scopeID] = appendUniqueText(itemNosByScope[scopeID], itemNo)
-		}
-		stabilityByKey := make(map[string]catalog.ItemStability)
-		stabilities, stabilityErr := serviceContext.InventoryRepository.ListItemStabilities(request.Context(), itemNosByScope)
-		if stabilityErr != nil {
-			logx.Errorf("list marketplace stability: %v", stabilityErr)
-		} else {
-			for _, stability := range stabilities {
-				stabilityByKey[marketplaceStabilityKey(stability.ScopeID, stability.ItemNo)] = stability
-			}
-		}
-
-		responses := make([]types.MarketplaceListingResponse, 0, len(listings))
-		for _, listing := range listings {
-			stability, hasStability := stabilityByKey[marketplaceStabilityKey(listing.BrandProfileID, listing.ItemNo)]
-			responses = append(responses, marketplaceListingToResponse(listing, stability, hasStability))
-		}
+		responses := marketplaceListingResponses(request.Context(), serviceContext, listings)
 
 		lastSyncedAt := ""
 		if platform != "all" {
@@ -126,6 +103,42 @@ func listMarketplaceListingsHandler(serviceContext *svc.ServiceContext) http.Han
 			LastSyncedAt: lastSyncedAt,
 		})
 	}
+}
+
+// marketplaceListingResponses 为当前账号的在售快照补充本地稳定度和品牌名称。
+func marketplaceListingResponses(ctx context.Context, serviceContext *svc.ServiceContext, listings []model.MarketplaceListing) []types.MarketplaceListingResponse {
+	itemNosByScope := make(map[string][]string)
+	for _, listing := range listings {
+		scopeID := strings.TrimSpace(listing.BrandProfileID)
+		itemNo := strings.ToUpper(strings.TrimSpace(listing.ItemNo))
+		if scopeID == "" || itemNo == "" {
+			continue
+		}
+		itemNosByScope[scopeID] = appendUniqueText(itemNosByScope[scopeID], itemNo)
+	}
+	stabilityByKey := make(map[string]catalog.ItemStability)
+	stabilities, stabilityErr := serviceContext.InventoryRepository.ListItemStabilities(ctx, itemNosByScope)
+	if stabilityErr != nil {
+		logx.Errorf("list marketplace stability: %v", stabilityErr)
+	} else {
+		for _, stability := range stabilities {
+			stabilityByKey[marketplaceStabilityKey(stability.ScopeID, stability.ItemNo)] = stability
+		}
+	}
+
+	responses := make([]types.MarketplaceListingResponse, 0, len(listings))
+	for _, listing := range listings {
+		stability, hasStability := stabilityByKey[marketplaceStabilityKey(listing.BrandProfileID, listing.ItemNo)]
+		responses = append(responses, marketplaceListingToResponse(listing, stability, hasStability))
+	}
+	var loadAvailability marketplaceAvailabilityLoader
+	if serviceContext.SyncCenter != nil {
+		loadAvailability = serviceContext.SyncCenter.CurrentAvailability
+	}
+	overlayMarketplaceAvailability(ctx, responses, loadAvailability)
+
+	enrichMarketplaceListingBrands(ctx, serviceContext, responses)
+	return responses
 }
 
 // syncMarketplaceListingsHandler 手动同步指定渠道当前在售商品。
@@ -178,6 +191,7 @@ func marketplaceListingToResponse(listing model.MarketplaceListing, stability ca
 		Platform:       listing.Platform,
 		PlatformItemID: listing.PlatformItemID,
 		SourceItemID:   listing.SourceItemID,
+		BrandProfileID: listing.BrandProfileID,
 		ItemNo:         listing.ItemNo,
 		Title:          listing.Title,
 		PriceCents:     listing.PriceCents,
@@ -190,6 +204,25 @@ func marketplaceListingToResponse(listing model.MarketplaceListing, stability ca
 		response.Stability = marketplaceListingStabilityToResponse(stability)
 	}
 	return response
+}
+
+// enrichMarketplaceListingBrands 只读本地品牌档案，不为展示标签请求小程序或猜测标题品牌。
+func enrichMarketplaceListingBrands(ctx context.Context, serviceContext *svc.ServiceContext, responses []types.MarketplaceListingResponse) {
+	if len(responses) == 0 {
+		return
+	}
+	profiles, _, err := serviceContext.InventoryRepository.ListBrandProfiles(ctx)
+	if err != nil {
+		logx.Errorf("read marketplace brand names: %v", err)
+		return
+	}
+	names := make(map[string]string, len(profiles))
+	for _, profile := range profiles {
+		names[profile.ID] = profile.Name
+	}
+	for index := range responses {
+		responses[index].BrandProfileName = names[responses[index].BrandProfileID]
+	}
 }
 
 // marketplaceStabilityKey 生成品牌货号稳定度的内存索引键。

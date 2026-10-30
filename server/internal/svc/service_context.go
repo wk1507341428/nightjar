@@ -39,6 +39,7 @@ type ServiceContext struct {
 	SellerXianyuService     *xianyu.Service
 	PublishService          *publish.Service
 	CatalogService          *catalog.Service
+	SyncCenter              *catalog.SyncCenter
 	MarketplaceService      *marketplace.Service
 	FinanceRepository       *repository.FinanceRepository
 	FinanceService          *finance.Service
@@ -47,7 +48,8 @@ type ServiceContext struct {
 
 // NewServiceContext 初始化 MongoDB 和浏览器管理器。
 func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
-	databaseContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Initial registry migration shares the bootstrap budget with database indexes.
+	databaseContext, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
 	mongoClient, err := mongo.Connect(databaseContext, options.Client().ApplyURI(serviceConfig.Mongo.URI))
@@ -122,11 +124,12 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 		_ = mongoClient.Disconnect(context.Background())
 		return nil, fmt.Errorf("ensure catalog inventory indexes: %w", err)
 	}
-	if err := inventoryRepository.InitializeItemStabilityBaselines(databaseContext); err != nil {
-		_ = mongoClient.Disconnect(context.Background())
-		return nil, fmt.Errorf("initialize item stability baselines: %w", err)
-	}
+	// Daily availability is derived only from complete sync-center generations; preserve existing history.
 	catalogService := catalog.NewService(serviceConfig.Catalog, inventoryRepository, listingRepository, redisClient)
+	syncCenter, err := initializeSourceSyncCenter(databaseContext, mongoClient.Database(serviceConfig.Mongo.Database), catalogService)
+	if err != nil {
+		return nil, fmt.Errorf("initialize source sync center: %w", err)
+	}
 	marketplaceService := marketplace.NewService(listingRepository, publishRepository, xianyuAccountRepository, xianyuService, sellerXianyuService)
 
 	runtimeContext, runtimeCancel := context.WithCancel(context.Background())
@@ -159,6 +162,7 @@ func NewServiceContext(serviceConfig config.Config) (*ServiceContext, error) {
 		SellerXianyuService:     sellerXianyuService,
 		PublishService:          publishService,
 		CatalogService:          catalogService,
+		SyncCenter:              syncCenter,
 		MarketplaceService:      marketplaceService,
 		FinanceRepository:       financeRepository,
 		FinanceService:          financeService,
@@ -239,4 +243,16 @@ func (serviceContext *ServiceContext) Close() {
 	defer cancel()
 	_ = serviceContext.MongoClient.Disconnect(disconnectContext)
 	_ = serviceContext.RedisClient.Close()
+}
+
+// initializeSourceSyncCenter migrates existing source brands before any HTTP handlers accept mutations.
+func initializeSourceSyncCenter(ctx context.Context, database *mongo.Database, source *catalog.Service) (*catalog.SyncCenter, error) {
+	center := catalog.NewSyncCenter(database, source)
+	if err := center.EnsureIndexes(ctx); err != nil {
+		return nil, err
+	}
+	if err := center.InitializeRegistry(ctx); err != nil {
+		return nil, err
+	}
+	return center, nil
 }

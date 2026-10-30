@@ -24,7 +24,8 @@ func ManagedState(detail map[string]any) map[string]any {
 		props := []string{}
 		for _, p := range sliceValue(sku["propertyList"]) {
 			v := mapValue(p)
-			props = append(props, stringValue(v["propertyText"])+"="+stringValue(v["valueText"]))
+			axis, label := skuProtocolProperty(stringValue(v["propertyText"]), stringValue(v["valueText"]))
+			props = append(props, axis+"="+label)
 		}
 		sort.Strings(props)
 		rows = append(rows, strings.Join(props, "|")+":"+stringValue(sku["priceInCent"])+":"+stringValue(sku["quantity"]))
@@ -37,7 +38,8 @@ func ManagedState(detail map[string]any) map[string]any {
 		propertyName := stringValue(property["propertyText"])
 		propertyValue := stringValue(property["valueText"])
 		if propertyName != "" && propertyValue != "" && stringValue(image["url"]) != "" {
-			propertyImages = append(propertyImages, propertyName+"="+propertyValue)
+			axis, label := skuProtocolProperty(propertyName, propertyValue)
+			propertyImages = append(propertyImages, axis+"="+label)
 		}
 	}
 	sort.Strings(propertyImages)
@@ -49,7 +51,7 @@ func ManagedState(detail map[string]any) map[string]any {
 			break
 		}
 	}
-	return map[string]any{"title": stringValue(text["title"]), "description": stringValue(text["desc"]), "price": stringValue(price["priceInCent"]), "originalPrice": stringValue(price["origPriceInCent"]), "quantity": stringValue(detail["quantity"]), "skus": rows, "propertyImages": propertyImages, "condition": condition}
+	return map[string]any{"title": managedTextTitle(text), "description": stringValue(text["desc"]), "price": stringValue(price["priceInCent"]), "originalPrice": stringValue(price["origPriceInCent"]), "quantity": stringValue(detail["quantity"]), "skus": rows, "propertyImages": propertyImages, "condition": condition}
 }
 
 // SameManagedState 兼容 Mongo 数组类型和 JSON 数组类型。
@@ -198,7 +200,7 @@ func hydrateVariantImagesFromDetail(variants []PublishVariant, detail map[string
 	for _, rawImage := range sliceValue(detail["propertyImageList"]) {
 		image := mapValue(rawImage)
 		property := mapValue(image["property"])
-		key := stringValue(property["propertyText"]) + "\x00" + stringValue(property["valueText"])
+		key := skuProtocolPropertyKey(stringValue(property["propertyText"]), stringValue(property["valueText"]))
 		if key != "\x00" && stringValue(image["url"]) != "" {
 			propertyImages[key] = stringValue(image["url"])
 		}
@@ -209,7 +211,7 @@ func hydrateVariantImagesFromDetail(variants []PublishVariant, detail map[string
 			continue
 		}
 		for _, property := range result[variantIndex].Properties {
-			key := strings.TrimSpace(property.Name) + "\x00" + strings.TrimSpace(property.Value)
+			key := skuProtocolPropertyKey(property.Name, property.Value)
 			if propertyImages[key] != "" {
 				result[variantIndex].ImageURL = propertyImages[key]
 				break
@@ -233,7 +235,8 @@ func skuPropertyKey(sku map[string]any) string {
 	_ = json.Unmarshal(encoded, &props)
 	keys := []string{}
 	for _, p := range props {
-		keys = append(keys, stringValue(p["propertyText"])+"="+stringValue(p["valueText"]))
+		axis, label := skuProtocolProperty(stringValue(p["propertyText"]), stringValue(p["valueText"]))
+		keys = append(keys, axis+"="+label)
 	}
 	sort.Strings(keys)
 	return strings.Join(keys, "|")
@@ -241,6 +244,12 @@ func skuPropertyKey(sku map[string]any) string {
 
 // EditManagedItem 编辑前核对远端快照，成功后回读，重试时已达目标则不重复编辑。
 func (service *Service) EditManagedItem(ctx context.Context, itemID string, input PublishInput, before map[string]any) error {
+	if err := validateItemDescription(input.Title, input.Description); err != nil {
+		return err
+	}
+	if err := validateSKUProtocolProperties(input.Variants); err != nil {
+		return err
+	}
 	detail, err := service.GetSellerEditDetail(ctx, itemID)
 	if err != nil {
 		return err

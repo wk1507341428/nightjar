@@ -5,9 +5,11 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 	"net/http"
 	"sidejob-server/internal/model"
 	"sidejob-server/internal/svc"
@@ -15,6 +17,9 @@ import (
 	"strings"
 	"time"
 )
+
+var errPreviewUnavailable = errors.New("预览已过期或已提交，请重新生成")
+var errPreviewPolicyChanged = errors.New("发布与下架规则已更新，请重新生成预览")
 
 type previewJob struct {
 	ID        string                          `bson:"_id"`
@@ -51,12 +56,16 @@ func servePreviewJob(w http.ResponseWriter, r *http.Request, sc *svc.ServiceCont
 			return
 		}
 		var plan publishBatchPlan
-		if err := decodePreviewPlan(job.Plan, &plan); err != nil {
-			writeError(w, 500, "预览读取失败")
+		if err := decodeCurrentPreviewPlan(job.Plan, &plan); err != nil {
+			writePreviewPlanError(w, err)
 			return
 		}
-		writeJSON(w, 200, types.PublishBatchPreviewResponse{AccountID: plan.AccountID, PreviewID: job.ID, Candidates: publishBatchCandidateResponses(plan.Candidates), Relists: publishTaskResponses(plan.Relists), Updates: plan.Updates, Unchanged: plan.Unchanged, BrandStoreID: plan.BrandStoreID, BrandName: plan.BrandName, CategoryIDs: plan.CategoryIDs, CategoryNames: plan.CategoryNames, Total: plan.Total, Publishable: len(plan.Candidates) + len(plan.Relists), Selected: minInt(job.Request.Limit, len(plan.Candidates)+len(plan.Relists)), Skipped: publishBatchSkipResponses(plan.Skipped), OfflineCandidates: publishBatchOfflineCandidateResponses(plan.OfflineListings)})
+		filterPreviewPriceCeiling(&plan)
+		writeJSON(w, 200, types.PublishBatchPreviewResponse{AccountID: plan.AccountID, PreviewID: job.ID, Candidates: publishBatchCandidateResponses(plan.Candidates), Relists: publishTaskResponses(plan.Relists), Updates: plan.Updates, Unchanged: plan.Unchanged, BrandStoreID: plan.BrandStoreID, BrandName: plan.BrandName, CategoryIDs: plan.CategoryIDs, CategoryNames: plan.CategoryNames, Total: plan.Total, Publishable: len(plan.Candidates) + len(plan.Relists), Selected: minInt(job.Request.Limit, len(plan.Candidates)+len(plan.Relists)), Skipped: publishBatchSkipResponses(plan.Skipped), OfflineCandidates: publishBatchOfflineCandidateResponses(plan)})
 		return
+	}
+	if body.SourceSnapshotID == "" {
+		body.SourceSnapshotID = primitive.NewObjectID().Hex()
 	}
 	job := previewJob{ID: primitive.NewObjectID().Hex(), Status: "preparing", CreatedAt: time.Now(), Request: body}
 	if _, err := collection.InsertOne(r.Context(), job); err != nil {
@@ -66,7 +75,7 @@ func servePreviewJob(w http.ResponseWriter, r *http.Request, sc *svc.ServiceCont
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancel()
-		plan, err := buildPublishBatchPlan(ctx, sc, body)
+		plan, err := buildConfirmedPreviewPlan(ctx, sc, body)
 		update := bson.M{"status": "ready"}
 		if err != nil {
 			update = bson.M{"status": "failed", "error": err.Error()}
@@ -88,23 +97,54 @@ func servePreviewJob(w http.ResponseWriter, r *http.Request, sc *svc.ServiceCont
 	writeJSON(w, 202, map[string]any{"previewId": job.ID, "status": "preparing"})
 }
 
+// buildConfirmedPreviewPlan 在展示前应用与确认一致的去重保护，未知状态不能算作可恢复商品。
+func buildConfirmedPreviewPlan(ctx context.Context, sc *svc.ServiceContext, body types.CreatePublishBatchRequest) (publishBatchPlan, error) {
+	plan, err := buildPublishBatchPlan(ctx, sc, body)
+	if err != nil {
+		return plan, err
+	}
+	err = recheckPreviewActivations(ctx, sc, &plan)
+	return plan, err
+}
+
 // consumePreview 只允许提交用户已经看过的有效预览一次。
 func consumePreview(ctx context.Context, sc *svc.ServiceContext, body types.CreatePublishBatchRequest) (publishBatchPlan, error) {
 	var job previewJob
 	collection := sc.MongoClient.Database(sc.Config.Mongo.Database).Collection("publish_previews")
 	err := collection.FindOneAndUpdate(ctx, bson.M{"_id": body.PreviewID, "status": "ready", "request.accountId": body.AccountID, "createdAt": bson.M{"$gte": time.Now().Add(-30 * time.Minute)}}, bson.M{"$set": bson.M{"status": "submitted"}}).Decode(&job)
 	if err != nil {
-		return publishBatchPlan{}, fmt.Errorf("预览已过期或已提交，请重新生成")
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return publishBatchPlan{}, errPreviewUnavailable
+		}
+		return publishBatchPlan{}, fmt.Errorf("读取发布预览失败: %w", err)
 	}
 	var plan publishBatchPlan
-	err = decodePreviewPlan(job.Plan, &plan)
+	err = decodeCurrentPreviewPlan(job.Plan, &plan)
 	if err == nil {
-		plan.Relists = plan.Relists[:minInt(job.Request.Limit, len(plan.Relists))]
-		remainingLimit := max(0, job.Request.Limit-len(plan.Relists))
-		plan.Candidates = plan.Candidates[:minInt(remainingLimit, len(plan.Candidates))]
-		plan.OfflineListings = excludePreservedOfflineListings(plan.OfflineListings, body.PreservedOfflinePlatformItemIDs)
+		selectPreviewActions(&plan, job.Request.Limit, body.PreservedOfflinePlatformItemIDs)
+		plan.PreservedOfflineIDs = body.PreservedOfflinePlatformItemIDs
+		err = recheckPreviewActivations(ctx, sc, &plan)
 	}
 	return plan, err
+}
+
+// decodeCurrentPreviewPlan 读取与确认共用政策版本校验，旧预览不能展示或提交旧策略。
+func decodeCurrentPreviewPlan(data []byte, plan *publishBatchPlan) error {
+	if err := decodePreviewPlan(data, plan); err != nil {
+		return err
+	}
+	if plan.SourceSnapshotVersion != aggregateSnapshotVersion {
+		return errPreviewPolicyChanged
+	}
+	return nil
+}
+
+func writePreviewPlanError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errPreviewPolicyChanged) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "预览读取失败")
 }
 
 // excludePreservedOfflineListings 移除用户明确要求保留上架的闲鱼商品。

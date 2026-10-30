@@ -21,6 +21,10 @@ func sourceSKUAvailable(sku map[string]any) bool {
 
 // sourceAvailableStock 在有规格时按可售规格汇总，禁止退回包含下架尺码的商品总库存。
 func sourceAvailableStock(product map[string]any) int64 {
+	parentStatus := productString(product, "approve_status")
+	if parentStatus != "" && parentStatus != sourceStatusOnSale && parentStatus != sourceStatusOnlyShow {
+		return 0
+	}
 	if specs, ok := product["spec_items"].([]any); ok && len(specs) > 0 {
 		var stock int64
 		for _, raw := range specs {
@@ -30,6 +34,10 @@ func sourceAvailableStock(product map[string]any) int64 {
 			}
 		}
 		return stock
+	}
+	status := productString(product, "approve_status")
+	if status != "" && status != sourceStatusOnSale && status != sourceStatusOnlyShow {
+		return 0
 	}
 	return firstPositivePrice(productNumber(product, "item_total_store"), productNumber(product, "store"))
 }

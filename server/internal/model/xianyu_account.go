@@ -15,6 +15,8 @@ const (
 
 // XianyuAccount 保存一个闲鱼账号的公开信息和运行状态。
 type XianyuAccount struct {
+	QueueStopReason    string     `bson:"queueStopReason,omitempty" json:"queueStopReason,omitempty"`
+	QueueStoppedAt     *time.Time `bson:"queueStoppedAt,omitempty" json:"queueStoppedAt,omitempty"`
 	ID                 string     `bson:"_id" json:"id"`
 	Name               string     `bson:"name" json:"name"`
 	DisplayName        string     `bson:"displayName,omitempty" json:"displayName,omitempty"`
